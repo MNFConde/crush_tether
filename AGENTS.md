@@ -24,7 +24,7 @@ crush_tether —— Crush 命令级 bash 权限门（Rust 实现 crush-guard 独
 
 - 与用户交流一律使用中文。
 - 指令若与仓库文档（`doc/`）或既有约定不符，先指出冲突点、说明取舍，再执行。
-- 项目状态发生变化（如核心逻辑落地、workspace 建立、工具链变更）时，同步更新本文件对应状态描述，避免误导后续会话。
+- 项目状态发生变化（如核心逻辑落地、crate 结构建立、工具链变更）时，同步更新本文件对应状态描述，避免误导后续会话。
 - 提交格式规范见 `@.agents/rules/commit.md`，仅在准备 commit 时读取；提交相关经验/坑须登记于该文件「六」节。
 
 ## 质量门禁
@@ -35,9 +35,9 @@ crush_tether —— Crush 命令级 bash 权限门（Rust 实现 crush-guard 独
 ## 工具链钉版
 
 - `rust-toolchain.toml` 钉版（minimal profile）；本地 MSVC 钉版；勿随手升级。
-- 版本约束只钉在根 `[workspace.dependencies]` 一处；升级后必须 `cargo test` + `cargo audit`。
+- 版本约束只钉在根 `Cargo.toml` 一处；升级后必须 `cargo test` + `cargo audit`。
 
 ## 架构约定（改代码前先读 doc/design.md）
 
-- 目标结构：Cargo workspace = `crush-tether-core`（纯 Rust、平台无关）+ `crush-tether-cli`（可执行包装）。
+- 目标结构：**单 crate + `src/lib.rs` + `src/main.rs` 双入口**（库装 `model`/`engine`/`config`/`cmd_parse`/`channel` 分类逻辑，`main.rs` 仅做装配）；核心逻辑无第二消费方，故**不拆 workspace** 分 `core`/`cli` 两 crate。
 - 三档分类语义（allow / confirm / deny）与判定表（DESTRUCTIVE/READONLY/GIT_*/写 flag/路径逃逸/管道 sink）见 `doc/design.md`，是纯语义可平移的。
