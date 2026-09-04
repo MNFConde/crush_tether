@@ -1,0 +1,15 @@
+version: 0.1
+project:
+  name: "crush_tether"
+  summary: "Rust 实现的 Crush 命令级 bash 权限门（crush-guard 独立化/重写）；当前为规划期：src/ 仅 hello world，仓库主体为 doc/ 规划文档"
+cairn:
+  knowledge_dir: "cairn"
+  skill_spec_date: "2026-08-07"
+  git_policy: "track"
+  language: "zh"
+graduation:
+  provider: "obsidian"
+  target: "Cairn"
+  index: "Cairn/INDEX.md"
+history:
+  migration_mode: "start_fresh"
