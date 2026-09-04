@@ -50,19 +50,57 @@ crush_tether/
 ├── Cargo.toml            # 单 crate：同时提供 lib 与 bin 两种入口
 ├── src/
 │   ├── lib.rs            # 库入口：核心逻辑（model/engine/config/cmd_parse/channel），可被复用/单测
-│   ├── main.rs           # #bin：装配壳，parse 参数、加载配置、调管线、输出裁决
-│   ├── cli/              # 命令行入口/参数（--engine / --agent / --config）
-│   ├── channel/          # agent 适配层（Crush / ClaudeCode）
-│   ├── engine/           # 规则管线 + Rule trait + 内置规则 + 配置 merge
-│   ├── config/           # TOML 声明层 + DSL 脚本层加载
-│   ├── model/            # Cmd 特征对象 / Verdict / Decision 类型
-│   └── cmd_parse/        # tree-sitter-bash 解析 + flatten + 各 has_* 边界检测
+│   ├── main.rs           # bin：装配壳（check 模式已落地；serve 随 P4）
+│   ├── channel.rs        # agent 适配层（Crush / ClaudeCode 契约；stdin JSON/env → 裁决输出）
+│   ├── engine.rs         # 判定表（Python guard.py 1:1 平移）+ pipe sink + 组合裁决
+│   ├── config.rs         # TOML 声明层骨架（rules.toml 反序列化；merge 随 P2）
+│   ├── model.rs          # Decision / Verdict（combine 组合语义）/ unparseable 兜底
+│   └── cmd_parse.rs      # tree-sitter-bash 解析 + flatten + 写重定向/路径逃逸检测
+├── tests/
+│   └── guard_regression.rs  # test_guard.py 89 用例 1:1 平移 + 解析器边界单测
 ├── .cairn/               # Cairn 配置
 ├── cairn/                # Cairn 知识层
 └── doc/design.md         # 本文档
 ```
 
 > 说明：本工具为单一二进制 hook，核心逻辑（分类/配置/规则/适配）**无第二消费方**，故不拆 workspace（省去 resolver/共享依赖钉版/跨 crate 开销）。但为保留核心逻辑的可复用性与干净单测，采用**单 crate + `src/lib.rs` + `src/main.rs` 双入口**——库入口装 `model`/`engine`/`cmd_parse` 等分类逻辑，`main.rs` 仅做装配。逻辑模块间靠契约边界划分（`module-boundary-contract-design.md` 思想），不在目录上拆 crate。
+
+### 运行架构图（进程拓扑与模块分层）
+
+进程拓扑（正常路径）:
+
+```text
+Agent（Crush / ClaudeCode）
+  │ PreToolUse：每条 bash 命令 spawn 一次
+  ▼
+crush-tether hook（二进制本体 · 短命进程 · client 角色）
+  ① channel 解析（全系统唯一知道 agent 契约的入口）
+  ② connect 端点（µs）─ 成功 ─▶ 一行协议收发 ─▶ 按契约 emit 裁决 ─▶ exit
+  ③ 失败 ─▶ detached spawn serve + 有界等就绪 + 重试 connect（~200ms 预算）
+  ④ 仍失败 ─▶ 降级本进程全量管线（check 路径），绝不无裁决放行
+  │ 命名端点 crush-tether-<hash(项目根, engine)>（每项目一实例 · ACL 限当前用户）
+  ▼
+crush-tether serve（二进制本体 · detached 常驻 · server 角色）
+  · 启动第一动作 = 独占创建端点：成功 = 唯一服务；失败 = 已存在 → 静默退出
+  · 串行 accept：请求 → 匹配 Arc<RuleSet> 快照 → 应答
+  · last_activity 归零 + 空闲超 grace → exit（崩溃自愈：下一条命令由 hook 重拉）
+  · 三层配置 → merge → 编译不可变快照；notify + debounce → 整段重编译换指针
+  · DSL（Rhai/Lua）沙箱在本进程内执行，永不以 OS 进程形态存在
+
+check（兜底/冒烟）：同一二进制单发，不碰端点，本进程全量 Parse → … → Verdict
+```
+
+模块分层（依赖方向单向，编译期可见性强制）:
+
+```text
+装配层  main.rs + cli/        子命令分发（hook / serve / check），仅此层知道三种角色
+适配层  channel/  service/    agent 契约适配；端点监听与 connect-or-spawn 客户端、热重载、idle 退出
+核心层  engine/  cmd_parse/   规则管线与裁决组合；tree-sitter-bash 解析与特征提取
+        config/               三层加载 merge、TOML/DSL 编译进 Arc<RuleSet>
+类型层  model/                Cmd / Verdict / Decision
+
+依赖方向：model ← cmd_parse/engine/config ← channel/service ← cli
+```
 
 ### 分类器输入/输出契约（hook 协议）
 
@@ -89,6 +127,81 @@ crush_tether/
 ```
 
 用户级 `~/.config/crush-tether/`、全局（编译内置默认 + 系统路径）与项目同构。脚本层**同文件按优先级**：项目脚本最后执行，可作最终裁决。
+
+### 运行模式与配置热重载（定稿）
+
+#### 三种运行模式
+
+二进制本体承担三个子命令角色，agent 配置只写 `hook`：
+
+```text
+crush-tether hook [--agent crush --engine rhai]      # agent 配置入口：connect-or-spawn，失联降级单发（默认）
+crush-tether serve [--agent crush --engine rhai]     # 常驻：命名端点监听，由 hook 进程自动拉起，无手动场景
+crush-tether check [--agent crush --engine rhai]     # 单发：stdin JSON → stdout/exit code（现 hook 契约，兜底 + 冒烟测试）
+```
+
+| 模式 | 触发方 | 进程 | 配置解析次数 | 适用 |
+|---|---|---|---|---|
+| hook（默认） | agent 的 PreToolUse 配置直配二进制 | 每命令一次（短命 client） | serve 已加载则 0 次 | 正常使用 |
+| serve（常驻） | hook 进程 connect 失败时自动 detached 拉起 | 长驻后台 | 文件变化时重载 | 正常使用 |
+| check（单发） | hook 降级路径 / 手动 | 每命令一次 | 每次全量 | 兜底路径 / 冒烟测试 / 模式验收 |
+
+- **check 先行**：启动即以 check 模式直接挂 hook（最小正确路径，不引入后台进程风险），serve 稳定后切 hook 模式。
+- 三模式共用同一管线与裁决逻辑，可并启对照（`--benchmark` 同输入双跑，diff 即协议/管线 bug）。
+
+#### 生命周期：使用驱动（非 agent 进程耦合）【当前】
+
+> 「随 agent 启动/关闭」精确耦合不可行：Crush 无会话事件挂钩（仅 PreToolUse）；ClaudeCode SessionEnd 在 crash/kill 时不触发（孤儿进程），SessionStart 同步 spawn 拖慢会话启动；父子进程信号（PDEATHSIG/pidfd/Job Object）需按平台 API 探测 agent pid（OpenProcess + 启动时间校验防 PID 复用），复杂度远超收益。且「随某一 agent 关闭而关闭」在多会话共用 serve 时是错误语义。故生命周期绑定**使用**而非进程（sccache 模式）：
+
+- **connect-or-spawn**：hook 进程每次先连本机命名端点（µs 级）；连不上 → detached spawn serve + 有界等待（~200ms 预算）就绪重试；仍失败 → 本进程降级 check，绝不无裁决放行。首条命令即「随 agent 启动」。
+- **退出**：serve 的在途请求归零且空闲超 grace（`--idle-exit`，默认 30s）自动退出 ≈「随 agent 关闭」（延迟 ≤ grace）；hook 进程崩溃 = 内核关闭其全部句柄，serve 读循环即刻感知 EOF，无 pidfile、无陈旧状态清理逻辑。
+- **【备选】ClaudeCode SessionEnd 主动回收**：加速回收，但仅覆盖 ClaudeCode 且不覆盖 crash；serve 稳定后按需加，不做正确性依赖。
+- **【已否决】客户端壳 + bash 进程替换持 fd（初稿方案）**：Crush（Go 实现）子进程仅传 std 三件套（fd 全 CLOEXEC），shell 持有的 fd 传不进 hook；且每个 PreToolUse hook 都是全新 bash，跨调用共享 fd 前提不成立。由命名端点方案替换。
+
+#### serve 模式协议（命名端点，一项目一实例）
+
+- **传输**：**本机命名端点**（Windows named pipe / Unix domain socket），协议不绑定实现语言；不走 localhost TCP（连接膨胀、端口管理、安全面大）。非 Windows 平台优先 abstract namespace socket（进程死即消失，无残留文件），退选文件系统 socket（需处理崩溃残留 unlink + rebind 有界重试）。
+- **端点名**：`crush-tether-<hash(canonical(project_dir), engine标签)>`（engine 取自 CLI 参数）。**一项目一 serve**：配置/热重载/裁决域天然按项目隔离，进程内无需多项目缓存与逐出；同项目**所有 agent/会话**共用同一 serve（裁决与 agent 无关，Channel 适配留在一次性 hook 进程）。
+- **单实例**：serve 启动第一动作 = **独占创建端点**（bind / 第一管道实例创建），同一 syscall 同步裁定唯一性与角色：成功 = 本项目唯一服务；失败 = 已存在 → 本进程静默退出（输者转 connect 重试，非报错退出）。同项目多会话并发冷启动的惊群由此消解，无锁无 pidfile。崩溃残留：Windows 管道与 abstract socket 活在内核命名空间，进程死即消失，天然免疫；文件系统 socket 需「bind 失败但 connect ECONNREFUSED → unlink + rebind」有界重试。
+- **协议**：复用 hook 的 JSON envelope 作行单元：请求 `{id, op:"check", command}` / `{id, op:"ping"}`；响应 `{id, verdict:{decision, reason}}`。`id` 客户端生成单调递增，严格逐请求应答，无乱序。连接生命周期 = 一次请求（短命 hook 进程），无长连接池、无会话态。
+- 依赖钉版：tree-sitter 0.25 / tree-sitter-bash 0.25 / serde 1 / serde_json 1 / toml 0.9；`rhai`/`mlua`/`notify` 待 P3/P4 引入，避免未用依赖拖累编译。
+- **连接感知**：全靠内核事件，建立 = `accept()` 返回 / `ConnectNamedPipe` 完成，断开 = read 得 EOF（`0`）/ `ERROR_BROKEN_PIPE`；本机端点不存在 TCP 式半开连接（同机进程死 = 内核关 fd = 对端立即 EOF），无需心跳。
+- **Windows 忙实例**：第二客户端 `CreateFile` 得 `ERROR_PIPE_BUSY` → `WaitNamedPipe` 重试后重连（客户端标准模式）。
+- **安全**：端点 ACL 限当前用户（Windows 管道默认 DACL / unix socket 0600）。同用户其他进程可伪造请求，但裁决只输出 allow/confirm/deny 且 deny/confirm 均为安全侧，伪造最多把危险命令转人工确认，无可放大面。
+- **v1 串行 accept**：`accept → 读 → 判 → 写` 单循环，「连接计数」退化为 `last_activity` 时间戳（poll timeout = 距退出 deadline 的剩余时间，到点醒一次退出，其余零唤醒）；并发 hook 请求排队，每请求 <1ms 可忽略；慢请求 per-request deadline（~5s）兜底。【备选】epoll/IOCP + atomic 计数的并发版，升级只换连接处理、协议不变（开闭原则落点）。
+
+#### 软件与项目内脚本分工（定稿）
+
+> 项目内**不存在任何可执行脚本**：agent 配置写的命令就是二进制本体；connect / 独占 bind / 沙箱执行全部在二进制内；`rules.rhai|lua` 是**数据文件**，在二进制内的 DSL 沙箱执行，永不以 OS 进程形态存在。跨仓库分发 = 分发一个 `.exe` + 可选规则数据。
+
+| 资产 | 形态 | 所在位置 | 职责 | 不做什么 |
+|---|---|---|---|---|
+| `crush-tether`（二进制本体） | Rust 静态单 `.exe` | cargo 安装路径（`~/.cargo/bin/` 等） | 三角色运行时：hook client（channel 适配 + connect-or-spawn + 降级）/ serve（独占 bind + 端点监听 + 热重载 + idle 退出）/ check（单发全量管线）；独占 bind 的 syscall 在此 | 不存项目状态；不感知 agent 契约以外的环境 |
+| agent 配置条目 | 配置文本 | `.crushrc` / ClaudeCode settings | 一行命令直指二进制（`crush-tether hook --agent crush`） | 无包装脚本、无内联 shell 逻辑 |
+| `.crush-tether/rules.toml` | 声明层数据 | 项目内 | 数据/默认值/命令集合/简单 when→decision 规则 | 不是代码，不被执行 |
+| `.crush-tether/rules.rhai|.lua` | 脚本层数据 | 项目内 | 跨命令逻辑/自定义谓词/fn 规则 | 不独立执行，仅在二进制内沙箱运行（max_operations 限流） |
+| 用户/全局配置 | 声明+脚本数据 | `~/.config/crush-tether/` 等系统路径 | 与项目同构的三层配置 | 同上 |
+
+#### 配置加载与热重载
+
+- **冷启动全量、热更新整段重编译**：启动读 全局 → 用户 → 项目 三层，按上文优先级 merge 后编译成不可变快照 `Arc<RuleSet>`；任一文件变化则**整段重建**再原子换指针（O(1)），在途请求继续用旧快照，新请求用新快照，无锁争用。
+- **声明层**（`rules.toml`）：`serde` 反序列化 → 规则序表（μs 级，可随时整表重建）。
+- **脚本层**（`rules.rhai|lua`）：`Engine` 全局只建一次（编译 AST 缓存）；文件变化才重新编译；编译失败**保留旧快照** + stderr 告警，绝不半更新。
+- **监听**：`notify`（inotify / ReadDirectoryChangesW）+ **600ms debounce**（编辑器写临时文件再 rename 会连发事件）；规则文件 KB 级，整文件重读远比增量 patch 简单可靠。
+- **容错**：监听失败/事件丢失降级为**每请求 stat mtime**（一次 syscall 级开销），正确性不受影响；mtime + size + hash 三重校验防误判。
+
+#### 资源与低配友好性
+
+- **内存**：Rhai `Engine` ~1-2MB、脚本 AST 几十 KB、规则表 + `Cmd` 缓冲池化复用，整体常驻 <5MB。
+- **零 busy-loop**：文件监听由 OS 事件驱动，空闲零 CPU。
+- **每次命令成本**：常驻 = 一次端点收发 + 已编译规则匹配（tree-sitter 解析 + 判定 <1ms）；兜底 = 冷启动 ~2ms（Rust 静态二进制）+ 全量加载。
+- **budget**：P95 < 5ms（serve）/ < 10ms（check），内存 < 10MB；CI 加 `--benchmark` 门槛防退化。
+
+#### 扩展点（开闭原则落点）
+
+- 新 agent = 新 `Channel` 实现（不动 core）；新分类规则 = 新 `Rule` 或一条 `[[rules]]`（不动管线）；新 DSL 引擎 = 新 `RuleEngine` 实现（不动调用方）。
+- **依赖方向**：`model ← cmd_parse/engine/config ← channel/service`，`model`/`engine` 不反向依赖 channel/service（编译期由模块可见性保证）。
+- **服务化不侵入核心**：`engine`/`config` 不感知「谁在调用、调用几次」，热重载只是换 `Arc<RuleSet>` 指针。
 
 ### DSL 引擎（定稿）
 
@@ -171,11 +284,11 @@ pub trait Channel {
 
 ## 待定决策（见 cairn/ROADMAP.md）
 
-> 已有较多项在本轮定稿（配置引擎 / DSL / Channel），移至上方「规则引擎与配置（定稿）」节；此处仅保留**仍未定**的项。
+> 原有三项（抽取方式 / 是否重写 / fail-safe 时机）已于 2026-09-04 定稿，见 [CAIRN-MOVED]；当前无未定项。P2+ 实现里程碑见 `cairn/ROADMAP.md` 推进计划。
 
-1. **抽取方式**：子模块（保留 `crush-guard/` 路径、`.crushrc` 少改） vs 纯全局工具（mdor 删目录、所有仓库共用、需迁移 cairn/LOG）。**仍未定。**
-2. **是否重写**：现在就 Rust 重写，还是先保持 Python（依赖 `uv sync` + venv）、重写留作独立里程碑。**仍未定。**
-3. **fail-safe**（三层 guard 内部兜底 / wrapper 兜底 / `.crushrc` 指向 wrapper）：方向已定（见下「实现时的安全目标」），具体落地时机待定。
+- **抽取方式**：【当前】纯全局工具（本仓库为唯一实现，mdor 不再保留 crush-guard；Python 版随回归用例平移后退役）。
+- **是否重写**：【当前】Rust 重写已落地（P0+P1 完成，`src/{model,cmd_parse,engine,channel}` + check 模式 + 回归测试 9/9 绿）。
+- **fail-safe**：guard 任何环节崩了都保守降级为确认（输出 none）而非放行；解析失败（含 heredoc 无终止符）走 `unparseable` → confirm。
 
 ## 实现时的安全目标（fail-safe）
 
