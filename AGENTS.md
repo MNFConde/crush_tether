@@ -41,3 +41,4 @@ crush_tether —— Crush 命令级 bash 权限门（Rust 实现 crush-guard 独
 
 - 目标结构：**单 crate + `src/lib.rs` + `src/main.rs` 双入口**（库装 `model`/`engine`/`config`/`cmd_parse`/`channel` 分类逻辑，`main.rs` 仅做装配）；核心逻辑无第二消费方，故**不拆 workspace** 分 `core`/`cli` 两 crate。
 - 三档分类语义（allow / confirm / deny）与判定表（DESTRUCTIVE/READONLY/GIT_*/写 flag/路径逃逸/管道 sink）见 `doc/design.md`，是纯语义可平移的。
+- **零内置策略（2026-09-04 定稿）**：二进制为纯引擎，不内嵌任何规则数据；默认策略由生成到项目侧的外部 `rules.toml` + `rules.rhai` 提供（三层皆缺才生成），见 `doc/design.md`「零内置策略与默认配置生成（定稿）」。

@@ -4,7 +4,7 @@
 
 ## 目标
 
-把 `mdor` 仓库内的 `crush-guard/`（Python + bashlex）独立化并（可选）用 Rust 重写，作为可复用、可配置的 bash 权限门，供本仓库和/或其他仓库（及多 agent）共用。除三档分类外，另含**可配置规则引擎**（TOML 声明层 + Rhai/Lua 脚本层）与**多 Agent 适配层**（Crush / ClaudeCode 首发），见 [规则引擎与配置（定稿）](#规则引擎与配置定稿)。
+把 `mdor` 仓库内的 `crush-guard/`（Python + bashlex）独立化并（可选）用 Rust 重写，作为可复用、可配置的 bash 权限门，供本仓库和/或其他仓库（及多 agent）共用。除三档分类外，另含**可配置规则引擎**（TOML 声明层 + Rhai/Lua 脚本层）与**多 Agent 适配层**（Crush / ClaudeCode 首发）。**二进制为纯引擎、零内置策略**：一切规则（含默认规则）均来自外部配置文件与脚本，见 [规则引擎与配置（定稿）](#规则引擎与配置定稿)、[零内置策略与默认配置生成（定稿）](#零内置策略与默认配置生成定稿)。
 
 ## 背景与关键约束
 
@@ -26,6 +26,8 @@
 > 核心洞见：**用 AST/语义而非正则前缀匹配**。专堵两个已知洞——`echo hi && rm -rf /` 与 `git show --output=.git/config HEAD`。
 
 ## 判定表（纯语义，可 1:1 平移）
+
+> 落点变更（2026-09-04 定稿）：本节判定表从「编译进 engine.rs 的代码常量」改为**默认规则数据**（默认 `rules.toml` + `rules.rhai`，由二进制生成到项目侧）。语义本身不变；1:1 平移的验收载体是回归测试 + 生成出的默认配置。
 
 - `DESTRUCTIVE`（sudo/rm/mkfs/...）→ deny；`GIT_DESTRUCTIVE`（reset/clean/rebase/push/pull/...）→ deny。
 - `GIT_READONLY`（status/log/diff/show/...）→ allow，但若带 write flag（`--output`/`--pretty`/`-c` 等）转 confirm。
@@ -52,8 +54,8 @@ crush_tether/
 │   ├── lib.rs            # 库入口：核心逻辑（model/engine/config/cmd_parse/channel），可被复用/单测
 │   ├── main.rs           # bin：装配壳（check 模式已落地；serve 随 P4）
 │   ├── channel.rs        # agent 适配层（Crush / ClaudeCode 契约；stdin JSON/env → 裁决输出）
-│   ├── engine.rs         # 判定表（Python guard.py 1:1 平移）+ pipe sink + 组合裁决
-│   ├── config.rs         # TOML 声明层骨架（rules.toml 反序列化；merge 随 P2）
+│   ├── engine.rs         # 规则管线 + 安全原语/特征 + pipe sink + 组合裁决（零内置策略）
+│   ├── config.rs         # 三层加载/merge + 默认配置生成（rules.toml 反序列化；随 P2）
 │   ├── model.rs          # Decision / Verdict（combine 组合语义）/ unparseable 兜底
 │   └── cmd_parse.rs      # tree-sitter-bash 解析 + flatten + 写重定向/路径逃逸检测
 ├── tests/
@@ -113,7 +115,7 @@ check（兜底/冒烟）：同一二进制单发，不碰端点，本进程全�
 
 ### 配置分层与优先级（定稿）
 
-- 解析优先级：**项目 > 用户 > 全局**（高层覆盖低层，不粘性）。`deny` 不被全局粘性锁定，均可被高层覆盖，属门卫而非沙箱。
+- 解析优先级：**项目 > 用户 > 全局**（高层覆盖低层，不粘性）。`deny` 不被全局粘性锁定，均可被高层覆盖，属门卫而非沙箱。**三层同时存在时，效力顺序仍是 项目 > 用户 > 全局**；「三层皆缺」才触发项目侧默认配置生成（见 [零内置策略与默认配置生成（定稿）](#零内置策略与默认配置生成定稿)）。
 - 显式覆盖：`--config <path>` 或环境变量 `CRUSH_TETHER_CONFIG`，优先级高于所有层。
 - 项目配置最可靠来源为 `CRUSH_PROJECT_DIR`（Crush 对 hook 注入，且为路径逃逸检查基准）；缺失时从 cwd 逐级上溯最近 `.git` 或 `.crush-tether/`。
 - merge 语义：标量覆盖；命令集合用并集（只增不减，`exclude` 表可显式剔除）；`[[rules]]` 在高层**前插**（first-match-wins）。
@@ -126,7 +128,20 @@ check（兜底/冒烟）：同一二进制单发，不碰端点，本进程全�
 └── rules.rhai 或 rules.lua    # 脚本层：跨命令逻辑/自定义谓词/fn 规则（按 --engine 选后缀）
 ```
 
-用户级 `~/.config/crush-tether/`、全局（编译内置默认 + 系统路径）与项目同构。脚本层**同文件按优先级**：项目脚本最后执行，可作最终裁决。
+用户级 `~/.config/crush-tether/`、全局（系统路径；其默认文件由命令生成，后期设计）与项目同构。脚本层**同文件按优先级**：项目脚本最后执行，可作最终裁决。
+
+### 零内置策略与默认配置生成（定稿）
+
+> 定稿（2026-09-04）：**软件本身不提供任何规则**——二进制只实现引擎能力（解析/flatten/特征提取/安全原语/管线/组合裁决），不含一行策略数据。默认策略也由**外部配置文件 + 脚本**提供，以项目侧生成的形态落地。
+
+- **默认策略 = 外部数据**：默认 `rules.toml`（能声明表达的：命令集合、flag 前缀、位置参数数、特征布尔等）+ 默认 `rules.rhai`（声明层表达不了的跨参数逻辑：`find` 突变检测、`git config` ≥2 位置参数写判定等）以**模板内嵌于二进制**——模板只是生成源数据，不参与判定，不构成内置策略。
+- **生成触发**：按层寻找配置（全局 → 用户 → 项目，含 `--config`/`CRUSH_TETHER_CONFIG` 显式指定）后**三层合并仍得不到任何有效配置**时，才在项目 `.crush-tether/` 写出默认 `rules.toml` + `rules.rhai`；**任一层存在有效配置即尊重现状，不生成**（避免将来全局/用户自定义被项目层默认值遮蔽）。
+- **损坏 ≠ 缺失**：配置文件存在但解析失败时，先把原文件改名留档（`rules.toml.bak-<时间戳>`）再生成默认，并 stderr 告警——满足「损坏也重生成默认」，但绝不覆盖销毁用户手改内容。
+- **全局/用户层生成延后**：v1 只做项目层生成；全局/用户层默认文件由命令提供（如 `crush-tether init --global`，后期设计）。
+- **引导豁免**：生成动作本身是管线引导步骤，不经规则链判定；只写 `.crush-tether/` 下固定文件名，不触碰其他路径。
+- **幂等与原子**：模板内容恒定 → 重复生成结果一致（幂等）；落盘 temp + rename 原子替换，多 hook 并发发现缺失时天然收敛到同一结果。
+- **fail-safe 衔接**：生成完成前 / 生成失败时按既有 fail-safe 处理（unparseable → confirm），绝不放行。
+- **测试落点**：89 条回归用例改为「引擎 + 默认规则 fixture」驱动——默认配置文件本身成为验收对象（生成出的默认包必须完整复现原判定表语义）。
 
 ### 运行模式与配置热重载（定稿）
 
@@ -184,7 +199,7 @@ crush-tether check [--agent crush --engine rhai]     # 单发：stdin JSON → s
 
 #### 配置加载与热重载
 
-- **冷启动全量、热更新整段重编译**：启动读 全局 → 用户 → 项目 三层，按上文优先级 merge 后编译成不可变快照 `Arc<RuleSet>`；任一文件变化则**整段重建**再原子换指针（O(1)），在途请求继续用旧快照，新请求用新快照，无锁争用。
+- **冷启动全量、热更新整段重编译**：启动读 全局 → 用户 → 项目 三层（三层皆无有效配置则先执行项目侧默认生成，见 [零内置策略与默认配置生成（定稿）](#零内置策略与默认配置生成定稿)），按上文优先级 merge 后编译成不可变快照 `Arc<RuleSet>`；任一文件变化则**整段重建**再原子换指针（O(1)），在途请求继续用旧快照，新请求用新快照，无锁争用。
 - **声明层**（`rules.toml`）：`serde` 反序列化 → 规则序表（μs 级，可随时整表重建）。
 - **脚本层**（`rules.rhai|lua`）：`Engine` 全局只建一次（编译 AST 缓存）；文件变化才重新编译；编译失败**保留旧快照** + stderr 告警，绝不半更新。
 - **监听**：`notify`（inotify / ReadDirectoryChangesW）+ **600ms debounce**（编辑器写临时文件再 rename 会连发事件）；规则文件 KB 级，整文件重读远比增量 patch 简单可靠。
@@ -244,7 +259,7 @@ pub trait Rule {
 }
 ```
 
-内置规则以 `static RULES: &[&dyn Rule]` 编译期组装；配置中的 `[[rules]]` 实例化为 `DataRule` 塞入同一 Match 链。状态机在编译期拼好，无反射/无运行时注入。
+规则链完全由配置实例化（`[[rules]]` → `DataRule`，脚本层 → DSL 规则），**无编译期内置策略**；二进制编译期组装的只有管线与安全原语，无反射/无运行时注入。
 
 ### Agent 适配层（定稿）
 
@@ -289,6 +304,7 @@ pub trait Channel {
 - **抽取方式**：【当前】纯全局工具（本仓库为唯一实现，mdor 不再保留 crush-guard；Python 版随回归用例平移后退役）。
 - **是否重写**：【当前】Rust 重写已落地（P0+P1 完成，`src/{model,cmd_parse,engine,channel}` + check 模式 + 回归测试 9/9 绿）。
 - **fail-safe**：guard 任何环节崩了都保守降级为确认（输出 none）而非放行；解析失败（含 heredoc 无终止符）走 `unparseable` → confirm。
+- **规则来源**：【当前】零内置策略（2026-09-04 定稿）——二进制为纯引擎，默认策略由项目侧生成的外部 `rules.toml` + `rules.rhai` 提供；三层皆缺才生成，损坏留档（`.bak-<时间戳>`）后重新生成；全局/用户层生成由命令提供（后期设计）。见 [零内置策略与默认配置生成（定稿）](#零内置策略与默认配置生成定稿)。
 
 ## 实现时的安全目标（fail-safe）
 

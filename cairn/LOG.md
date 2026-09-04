@@ -2,6 +2,13 @@
 
 This file records substantive progress in reverse-chronological order — newest entry at the top, right below this line. Keep each entry short — summary and pointer only; conclusions settle into `cairn/<topic>.md`.
 
+## 2026-09-04 · 定稿零内置策略与默认配置生成（设计变更）
+
+- 定案：**二进制纯引擎、零内置策略**——原「判定表编译进 engine.rs / 全局层=编译内置默认」设定被推翻；默认策略由项目侧生成的外部 `rules.toml` + `rules.rhai` 提供，内嵌的只是生成模板（不参与判定）。
+- 细节钉死：三层皆缺有效配置才生成（任一层有效即尊重，效力顺序恒为 项目 > 用户 > 全局）；损坏先留档 `.bak-<时间戳>` 再生成；生成动作不经规则链（引导豁免）；temp+rename 原子幂等；生成前/失败按 fail-safe confirm；全局/用户层生成由命令提供（后期设计）。
+- 计划影响：P2 加生成 v1（项目层）验收项；P3 默认 `rules.rhai` 承载跨参数语义后删除 engine.rs 内置表残留，89 回归用例迁移为「引擎 + 默认规则 fixture」驱动。
+- Details: 见 `doc/design.md`「零内置策略与默认配置生成（定稿）」、`cairn/zero-builtin-policy-seeding.md`。
+
 ## 2026-09-04 · Rust 重写 P0+P1 落地（check 模式 + 回归用例全绿）
 
 - P0：rust-toolchain.toml 钉 1.97.1；Cargo.toml 加 `[lib]`+`[[bin]]` + tree-sitter(0.25)/serde/serde_json/toml；五模块骨架。
