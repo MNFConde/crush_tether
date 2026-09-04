@@ -3,4 +3,23 @@ name = "crush_tether"
 version = "0.1.0"
 edition = "2024"
 
+[lib]
+name = "crush_tether"
+path = "src/lib.rs"
+
+[[bin]]
+name = "crush-tether"
+path = "src/main.rs"
+
 [dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.9"
+tree-sitter = "0.25"
+tree-sitter-bash = "0.25"
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true
+panic = "abort"
