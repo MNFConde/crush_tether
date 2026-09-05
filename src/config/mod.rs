@@ -9,6 +9,7 @@
 pub mod discover;
 pub mod merge;
 pub mod schema;
+pub mod seed;
 
 use std::fmt;
 use std::path::{Path, PathBuf};

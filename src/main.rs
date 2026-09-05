@@ -66,6 +66,30 @@ fn main() -> ExitCode {
     // （等价命令按字面查表落 default），判定不受影响。
     let home = config::home_dir();
     let found = config::discover_layers(Some(&project), home.as_deref());
+    // 三层皆缺 → 引导生成默认包（生成动作是管线引导步骤，不经规则链，
+    // design.md「零内置策略与默认配置生成」）。任一层损坏（found 为 Err）
+    // 时不生成：损坏 ≠ 缺失（D-03），fail-safe confirm、原文件不动。
+    let found = match found {
+        Ok(l) if l.all_absent() && config::explicit_path(config_arg.as_deref()).is_none() => {
+            match config::seed::seed_defaults_if_absent(&project) {
+                Ok(_) => {
+                    eprintln!(
+                        "crush-tether: no config found; seeded defaults in {}",
+                        project.join(".crush-tether").display()
+                    );
+                    config::discover_layers(Some(&project), home.as_deref())
+                }
+                Err(e) => {
+                    eprintln!(
+                        "crush-tether: seeding default config failed: {e}; continuing \
+                         without config (fail-safe confirm)"
+                    );
+                    Ok(l)
+                }
+            }
+        }
+        other => other,
+    };
     let kb = found.as_ref().ok().and_then(|l| l.knowledge.as_ref());
     let lookup = if let Some(path) = config::explicit_path(config_arg.as_deref()) {
         match config::load_file(&path) {

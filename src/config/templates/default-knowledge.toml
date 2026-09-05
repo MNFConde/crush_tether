@@ -1,0 +1,28 @@
+# knowledge.toml（main，随默认配置生成机制落盘）
+version = 1
+
+[npx]
+may_write = true                 # 属性：下载并执行任意包
+
+[npm]
+sub.exec = { alias_of = "npx" }  # 联系：等价命令（运行时归一）
+sub.x    = { alias_of = "npx" }
+
+[pip3]
+alias_of = "pip"
+
+[curl]
+may_write   = true
+write_flags = ["-o", "--output"] # 属性：带这些 flag 会写文件
+
+[git]
+sub.branch     = { write_tokens = ["-d", "-D", "-m", "-M", "--delete", "--move", "--create"] }
+sub.config     = { write_arg_count = 2 }   # 位置参数 ≥2 即写形态
+flag."--force" = { same_flag = "-f" }      # 联系：flag 等价
+flag."--hard"  = { irreversible = true }   # 属性：破坏性参数
+
+[make]
+delegates = "Makefile"            # 联系：委托执行项目内文件中的任意命令
+
+[sudo]
+wraps = "*"                       # 联系：包装壳（v1 仅登记）
