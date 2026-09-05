@@ -13,7 +13,9 @@ pub mod schema;
 use std::fmt;
 use std::path::{Path, PathBuf};
 
-pub use discover::{FoundLayers, discover_layers, find_project_root, find_project_root_from};
+pub use discover::{
+    FoundLayers, discover_layers, find_project_root, find_project_root_from, home_dir,
+};
 pub use merge::{DEFAULT_PRECEDENCE, Dims, Layers, MergedCommand, MergedRules, MergedScope, merge};
 pub use schema::{
     BucketSpec, CommandSection, ConfigError, ListField, RulesFile, SUPPORTED_VERSION, ScopeBuckets,

@@ -8,6 +8,7 @@
 
 use std::collections::BTreeMap;
 
+use crate::config::discover::FoundLayers;
 use crate::config::schema::{
     BucketSpec, CommandSection, ListField, RulesFile, ScopeBuckets, ScopeTable,
 };
@@ -22,6 +23,17 @@ pub struct Layers<'a> {
     pub global: Option<&'a RulesFile>,
     pub user: Option<&'a RulesFile>,
     pub project: Option<&'a RulesFile>,
+}
+
+impl<'a> Layers<'a> {
+    /// 从发现结果构造三层。
+    pub fn from_found(found: &'a FoundLayers) -> Self {
+        Layers {
+            global: found.global.as_ref(),
+            user: found.user.as_ref(),
+            project: found.project.as_ref(),
+        }
+    }
 }
 
 /// 合并后的生效规则：列表值已解出具体词条集（Delta 已消解），查表（M2.3）

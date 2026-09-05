@@ -382,6 +382,16 @@ pub fn decide(command: &str) -> Verdict {
 
 /// 测试辅助：以指定仓库根判定（单测不依赖环境变量）。
 pub fn decide_in(command: &str, project: &Path) -> Verdict {
+    decide_with(command, project, &classify)
+}
+
+/// 规则注入式顶层判定：管线原语（解析拉平、管道 sink、组合裁决）固定，
+/// 单命令分类器由调用方注入（内置判定表或 `rules.toml` 查表）。
+pub fn decide_with(
+    command: &str,
+    project: &Path,
+    classify: &dyn Fn(&SimpleCommand, &Path) -> Verdict,
+) -> Verdict {
     let commands = match crate::cmd_parse::flatten_commands(command) {
         Ok(c) => c,
         Err(e) => return crate::model::unparseable(e.to_string()),
