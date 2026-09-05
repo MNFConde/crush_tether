@@ -2,6 +2,13 @@
 
 This file records substantive progress in reverse-chronological order — newest entry at the top, right below this line. Keep each entry short — summary and pointer only; conclusions settle into `cairn/<topic>.md`.
 
+## 2026-09-06 · M2.5 落地：双层配置 lint
+
+- `lint.rs`：lint_file(file, kb) 只告警不拒载。结构类 3 条（同 token 多桶 + 生效桶告警、precedence 死词条逐条点名、裸列表与命令节并存）；语义类 4 条（allow may_write 建议、别名等价冗余、same_flag 跨桶冲突、子命令拼写提示）。
+- 实现期钉死解释：**拼写提示 = 配置内互查 + 知识库已知 sub 比对**——10 槽位封闭集没有「合法子命令清单」槽位（D-06），「git stauts → status」只能靠作者自己的其他词条或 kb sub 条目近似匹配（编辑距离 ≤2）。
+- lint 对象是单份文件（「同文件」语义）；precedence 取文件自身键。无 kb 自动降级纯结构。11 例正反用例全绿。commit a3365c4。
+- Details: `src/lint.rs`、`cairn/ROADMAP.md` M2.5 条。
+
 ## 2026-09-06 · M2.4 落地：知识库 main + 别名归一
 
 - `knowledge.rs`：10 槽位封闭集解析（严格模式）+ 加载期防环。语义发现：**子命令别名吸收 sub 槽位、命令别名保留 sub → 归一状态中 sub 只减不增，任何环必退化为纯命令别名环**（防环校验只需覆盖命令链 + same_flag 链，已注释钉死）。
