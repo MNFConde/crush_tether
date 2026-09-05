@@ -2,6 +2,12 @@
 
 This file records substantive progress in reverse-chronological order — newest entry at the top, right below this line. Keep each entry short — summary and pointer only; conclusions settle into `cairn/<topic>.md`.
 
+## 2026-09-06 · M2.6 落地：默认配置生成 v1
+
+- `config/seed.rs`：模板内嵌仅为生成源数据（零内置策略不变）；模板自 design.md 示例块逐行提取，测试钉死「模板=文档」。触发 = 发现层 Ok + 三层皆缺 + 无显式覆盖；损坏不生成不动原文件（D-03）；任一层有效尊重现状；temp+rename 原子幂等，8 线程并发收敛同字节。
+- check 模式接入引导：首跑生成后立即按默认包裁决。**挂账**：生成包 v1 仅 rules.toml + knowledge.toml，rules.rhai 待 M3.2 默认脚本就位后并入生成包；窗口期默认包缺 find 突变 / git config 双位置参数 / 管道 sink / 写特征升级四类脚本判定（M3.2 补齐）。
+- commit 57c30d7。Details: `src/config/seed.rs`、`tests/seed_defaults.rs`、`cairn/ROADMAP.md` M2.6 条。
+
 ## 2026-09-06 · M2.5 落地：双层配置 lint
 
 - `lint.rs`：lint_file(file, kb) 只告警不拒载。结构类 3 条（同 token 多桶 + 生效桶告警、precedence 死词条逐条点名、裸列表与命令节并存）；语义类 4 条（allow may_write 建议、别名等价冗余、same_flag 跨桶冲突、子命令拼写提示）。
