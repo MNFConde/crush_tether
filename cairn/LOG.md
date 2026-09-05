@@ -2,6 +2,14 @@
 
 This file records substantive progress in reverse-chronological order — newest entry at the top, right below this line. Keep each entry short — summary and pointer only; conclusions settle into `cairn/<topic>.md`.
 
+## 2026-09-06 · M2.3 落地：双表三桶查表 + 多命中合成，check 主路径翻转
+
+- `lookup.rs`：查表顺序按草案钉死——`[global].allow` 整命令豁免（两表皆现 global 优先）＞ 同层命令节遮蔽裸列表 ＞ 头部裸列表按 precedence；节内多维度命中按 precedence 有序合成（`git show --output=x`→confirm、`git reset --hard` 双命中取 deny）；`[local]` allow 命中一律带逃逸检查；default 链 = 节内 → 顶层 → confirm 恒链尾。
+- `engine::decide_with` 规则注入式顶层；check 模式主路径翻转：显式覆盖或三层发现 → 合并 → 查表。内置判定表仅存库内供回归测试（M3.3 删）。
+- flag 匹配支持 `--flag=value` 剥值；`-oX` 粘连形态留给 M2.4 takes_value。
+- 新增 13 例（12 单测 + 端到端）全绿。commit e19252f。
+- Details: `src/lookup.rs`、`tests/check_mode_rules.rs`、`cairn/ROADMAP.md` M2.3 条。
+
 ## 2026-09-06 · M2.2 落地：三层字段级继承合并 + 分层发现
 
 - `merge.rs`（D-02）：未定义即继承/定义即覆盖（项目>用户>全局，不粘性）；数组=覆盖、`{add,remove}`=增删（flag 桶可剔除）；标量高层写值即覆盖；命令节字段级合并 + 跨层并集；precedence 缺省回落默认序。合并产物 `MergedRules`（Delta 已消解为词条集），M2.3 查表直接消费。
