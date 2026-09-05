@@ -2,6 +2,13 @@
 
 This file records substantive progress in reverse-chronological order — newest entry at the top, right below this line. Keep each entry short — summary and pointer only; conclusions settle into `cairn/<topic>.md`.
 
+## 2026-09-06 · P2–P6 里程碑细化（逐项验收标准入 ROADMAP）
+
+- ROADMAP 推进计划细化：P2 7 项（M2.1–M2.7）/ P3 3 项 / P4 3 项 / P5 2 项 / P6 3 项，每项带验收标准；原阶段级验收并入对应子项。
+- 节奏钉死：P2→P5 共 15 项可一口气连续推进（无外部用户决策点）；P6 的 M6.3（mdor 退役）需用户确认不并入；三个实现期定点（`-h` 确认剔除 / 脚本 allow 契约语法 / 日志默认开关）登记于「推进节奏」节。
+- 启动实施待用户授权；建议串行 M2.1 → M6.2，每项过质量门禁、每阶段末 Cairn 登记与提交。
+- Details: `cairn/ROADMAP.md`「推进计划」「推进节奏」节。
+
 ## 2026-09-06 · 设计评审 + 命令知识库/继承模型增补（草案 v1 扩充 + ADR 机制建立）
 
 - 评审发现默认包偏差（npm exec ≡ npx 等价绕过洞、git reset 双桶死词条、cargo/go 整命令过宽）与规格空洞（查表顺序/裸列表跨层合并/节内 default/version），逐条钉死进草案 v1。

@@ -1,25 +1,67 @@
 # crush_tether Roadmap
 
-**Current focus**: P0+P1 已落地（Rust 重写 + 回归用例全绿）；配置格式草案 v1 已纸面定稿（`[local]`/`[global]` 双表三桶查表 + **字段级继承合并** + 条件判断下沉脚本层）；命令知识库框架（bucket / 10 槽位 / 别名归一 / lint 双层）与单命令建模已增补进草案（2026-09-06，见 design.md「配置格式与脚本边界（草案 v1）」，决策论证见 `doc/decisions.md` D-01~D-06）；下一步 P2 按草案 v1 实现配置声明层 + 知识库 main，或按需先做 P4 serve。
+**Current focus**: P0+P1 已落地（Rust 重写 + 回归用例全绿）；配置格式草案 v1 + 命令知识库框架已纸面定稿（决策论证 `doc/decisions.md` D-01~D-06）。P2–P6 已细化为逐项带验收标准的里程碑（2026-09-06，见「推进计划」M 编号条目）：**P2→P5 共 15 项可一口气连续推进、无外部决策点**（三个实现期定点见「推进节奏」节）；P6 的 mdor 退役需用户确认。**下一步 = P2（M2.1 起），启动待用户授权。**
 
 ## 推进计划（P0–P6）
 
 > 依赖关系：P0 → P1 → P2（最小可用闭环）→ P3/P4 可并行 → P5 → P6。每个阶段有可验收产物，不跨阶段欠账。
+> 2026-09-06 细化：P2–P6 拆为 M 编号子里程碑（每项带验收标准），依据草案 v1（design.md「配置格式与脚本边界」）与 `doc/decisions.md` D-01~D-06；推进节奏与实现期定点见「推进节奏」节。
 
 - [x] **P0 骨架**：rust-toolchain.toml 钉 1.97.1；`[lib]`+`[[bin]]` + serde/serde_json/toml/tree-sitter(-bash) 依赖；`src/{model,cmd_parse,engine,channel,config}.rs` 就位。
   - 验收：`cargo clippy -D warnings` 零告警。
 - [x] **P1 分类核心（check 模式最小闭环）**：`cmd_parse`（tree-sitter-bash flatten + 写重定向/fd dup/路径逃逸检测）+ 判定表平移 + `Verdict::combine`；`channel` Crush/ClaudeCode 契约输出；`check` 模式（stdin JSON → allow JSON/静默/exit 2）。
   - 验收：`tests/guard_regression.rs` 89 用例全绿（test_guard.py 1:1 平移）；release 单次冷启动 ~9ms（budget <10ms 达标）；冒烟四形态（allow/deny/管道 sink/写 flag confirm）正确。
-- [ ] **P2 配置声明层 + 知识库 main**：`rules.toml` 三层 merge（项目 > 用户 > 全局，效力同序）按**草案 v1 字段级继承**（未定义即继承；数组 = 覆盖 / inline table `add`/`remove` = 继承增删）+ `[local]`/`[global]` 双表三桶查表 + `version`/`precedence` 裸键（详见 design.md「配置格式与脚本边界（草案 v1）」）；**命令知识库 main**（`knowledge.toml`：10 槽位 / 紧凑条目文法，随默认配置生成机制一并落盘）+ **别名归一**（查表前按 `alias_of`/`same_flag`/`takes_value` 改写规范形，防环校验）+ **lint 双层**（结构类内置：同 token 多桶 / 裸列表与节并存 / 死词条；语义类读知识库）；`--config`/`CRUSH_TETHER_CONFIG` 覆盖；**默认配置生成 v1（项目层）**：三层皆缺有效配置 → 项目 `.crush-tether/` 生成默认 `rules.toml` + `rules.rhai` + `knowledge.toml`（损坏 → 告警 + fail-safe confirm 兜底、原文件不动；temp+rename 原子，生成动作不经规则链）。
-  - 验收：字段级继承（覆盖/继承/增删）、效力顺序单测全绿；别名归一（`npm exec → npx`）与 `same_flag` 闭包单测全绿；lint 规则集单测全绿；生成触发（三层皆缺 vs 任一层有效）、损坏不生成、幂等重新生成单测全绿；样例仓库自定义规则改变裁决生效。**验收通过后草案 v1 升格定稿。**
-- [ ] **P3 脚本层（Rhai 默认）**：`RuleEngine` trait + Rhai 引擎（`max_operations` 限流）+ `rules.rhai` 进管线；`--engine` 切换；脚本层按草案 v1 承载**全部条件判断**（两态子命令——数据读知识库 `write_tokens`/`write_arg_count`、`find` 突变、管道 sink、`curl|sh`、写特征升级类），脚本 allow 契约限显式枚举、禁无条件兜底；**随后删除 engine.rs 中内置判定表残留，完成零内置策略迁移**。
-  - 验收：脚本可组合安全原语但不可绕过；死循环被限流兜底；`tests/guard_regression.rs` 89 用例改为「引擎 + 默认规则 fixture」驱动后全绿（断言与定稿草案冲突时以草案为准更新用例并留变更记录——guard.py 是参考对象非验收标准，见 `doc/decisions.md` D-05）。
-- [ ] **P4 常驻服务 + 热重载**：`hook`/`serve` 模式（命名端点 + connect-or-spawn + 独占 bind 单实例 + `--idle-exit`）；`notify` + debounce + `Arc<RuleSet>` 原子换快照；裁决日志落盘（JSONL：`kb` 字段 + `type:"load"` 事件行，默认开关本阶段定）。
-  - 验收：改规则文件不重启即生效；并发冷启动不重复起 serve；常驻内存 <10MB、P95 < 5ms。
-  - 后置专项（不阻塞主线）：多 bucket 管理（增删/多源合并/优先级）与配置编写时提示。
-- [ ] **P5 ClaudeCode adapter 完整化**：`hookSpecificOutput` 信封 + `CLAUDE_PROJECT_DIR`/cwd 基准 + `updated_input` 全替换语义。
-  - 验收：ClaudeCode 三档行为与 Crush 等价；双 adapter 契约测试共用用例集。
-- [ ] **P6 收尾**：Lua（mlua）`--engine lua`；`cargo audit` 干净；README + 使用文档；mdor 侧 crush-guard 退役（删目录/回滚 `[project.scripts]`）。
+- [ ] **P2 配置声明层 + 知识库 main**（M2.1–M2.7；格式细则见 design.md「配置格式与脚本边界（草案 v1）」；**验收全过后草案 v1 升格定稿**）：
+  - **M2.1 rules.toml 解析模型**：裸键区（`version`/`default`/`precedence`）+ `[local]`/`[global]` 双表 + 命令节三桶 + `sub`/`flag` 子键 + 列表双形态（数组 / inline table）反序列化；`--config`/`CRUSH_TETHER_CONFIG` 显式覆盖入口。
+    - 验收：design.md 示例文件整体解析通过；非法键报错可定位；解析失败 → stderr 告警 + fail-safe confirm（不 panic、不误放行）。
+  - **M2.2 三层发现与字段级继承合并**：全局 → 用户 → 项目三层发现（`CRUSH_PROJECT_DIR` 优先，缺失逐级上溯）；未定义即继承 / 定义即覆盖；数组 = 覆盖、inline table `add`/`remove` = 增删、标量写值即覆盖；`version` 过旧明确报错，不静默误解析。
+    - 验收：覆盖 / 继承 / 增删三类合并单测全绿（含 flag 桶剔除、节内 `default` 继承链）；效力顺序（项目 > 用户 > 全局，不粘性）单测全绿。
+  - **M2.3 双表三桶查表 + 多命中合成**：命令节优先、裸列表为语法糖被同层节遮蔽；`[global].allow` 命中整命令豁免；`[local]` allow 带路径逃逸检查；`precedence`（deny > confirm > allow、default 恒链尾）做多命中有序合成。
+    - 验收：节 vs 裸列表遮蔽用例；`git show --output=x` 型多维度命中合成 confirm；路径逃逸转 confirm 与 global 豁免用例；复合命令组合裁决不退化。
+  - **M2.4 知识库 main + 别名归一**：`knowledge.toml` 解析（10 槽位、`sub`/`flag` 保留结构键，随默认配置生成机制一并落盘）；`alias_of`/`same_flag`/`takes_value` 归一（链式到不动点、加载期防环、`--output=x`/`-o x`/`-oX` 值边界分解）；归一只改名不做语义变换；日志记归一链。
+    - 验收：`npm exec/x → npx`、`pip3 → pip`、`pnpm dlx → npx` 归一单测；`same_flag` 闭包单边配置双边生效；`a→b→a` 环检测报错；知识库删光后判定不受影响且日志 `kb:[]`。
+  - **M2.5 lint 双层**：结构类（同 token 多桶 / 同 bin 裸列表与节并存 / precedence 死词条）+ 语义类（allow may_write 建议 / 等价冗余死词条 / same_flag 跨桶冲突 / 未知子命令拼写提示）；只告警不拒绝加载。
+    - 验收：每条规则正反用例单测全绿；无知识库时降级纯结构检查不报错；告警进 `type:"load"` 事件行。
+  - **M2.6 默认配置生成 v1（项目层）**：三层皆缺有效配置才在项目 `.crush-tether/` 生成默认 `rules.toml` + `rules.rhai` + `knowledge.toml`；损坏（存在但解析失败）→ 告警 + confirm 兜底、原文件不动；temp+rename 原子幂等；生成动作不经规则链。
+    - 验收：触发 / 不触发（任一层有效）、损坏不生成、幂等重生成、并发生成收敛单测全绿；重复生成字节一致。
+  - **M2.7 样例仓库端到端 + 草案升格**：临时样例仓库自定义规则改变裁决全链路；三个「可改回」项按草案推荐值生效展示（`go run` 落 confirm、`git reset` 取 confirm 档、`-h` 保留 confirm.flag）；验收通过后 design.md 草案 v1 升格定稿。
+    - 验收：自定义规则（覆盖 / 增删两种写法）改变裁决生效；升格文档动作完成、更正登记同步。
+- [ ] **P3 脚本层（Rhai 默认）**（M3.1–M3.3；完成后零内置策略迁移收口）：
+  - **M3.1 RuleEngine trait + Rhai 接入**：trait 抽象 + `rhai` 钉版引入；Engine 单例 + AST 缓存；`max_operations` 等限流；不可绕过的安全原语注册；`--engine` 参数。
+    - 验收：死循环脚本被限流兜底（有界时间返回 confirm）；沙箱内越权 API 不可达、原语可组合不可绕过。
+  - **M3.2 默认 rules.rhai 承载全部条件判断**：四类谓词（两态子命令——数据读知识库 `write_tokens`/`write_arg_count`、`find` 突变、`curl|sh` 参数内容、管道 sink / 写特征升级）；脚本 allow 契约就此定稿（限显式枚举、禁无条件兜底——方向已定，仅钉语法细节）。
+    - 验收：四类谓词用例全绿；无条件 allow 兜底被契约拒绝；知识库删光 → 脚本查不到数据 → confirm 兜底。
+  - **M3.3 删内置表 + 89 用例迁移**：删除 engine.rs 内置判定表残留；`tests/guard_regression.rs` 89 用例改「引擎 + 默认规则 fixture」驱动；断言冲突以草案为准更新用例留变更记录（guard.py 是参考对象非验收标准，D-05）。
+    - 验收：89 用例全绿；内置表删除后质量门禁全过；变更记录逐条登记。
+- [ ] **P4 常驻服务 + 热重载**（M4.1–M4.3；多 bucket 管理与配置编写提示为后置专项，不阻塞主线）：
+  - **M4.1 命名端点 serve + hook connect-or-spawn**：端点名 hash(项目根, engine)；独占 bind 单实例裁定（输者静默转 connect）；spawn + ~200ms 有界等就绪重试 → 仍失败降级本进程 check；`--idle-exit`（默认 30s）；v1 串行 accept + per-request deadline；端点 ACL 限当前用户。
+    - 验收：并发冷启动惊群收敛单实例；连接归零 idle 退出；降级路径仍出裁决绝不放行；`--benchmark` 双跑 diff 为空。
+  - **M4.2 热重载**：notify + 600ms debounce；三层整段重编译 + `Arc<RuleSet>` 原子换指针；编译失败保留旧快照 + stderr 告警；监听失效降级 stat（mtime+size+hash 三重校验）。
+    - 验收：改规则文件不重启即生效（端到端）；坏文件期间新旧请求分别用新旧快照、无半更新；降级路径正确性不损。
+  - **M4.3 裁决日志落盘 + 资源预算达标**：JSONL 字段全集（含 `kb`/`normalized`/`script`）；serve 单点写 + hook 降级自写；`type:"load"` 事件行含 lint 告警；日志默认开关就此定并登记 ADR（建议默认开——P4 内唯一实现期定点）。
+    - 验收：日志字段与 design.md 示例一致；load 事件冷热路径都留痕；常驻 <10MB、P95 <5ms、零 busy-loop，CI benchmark 门槛防退化。
+- [ ] **P5 ClaudeCode adapter 完整化**（M5.1–M5.2）：
+  - **M5.1 契约适配**：`hookSpecificOutput` 信封（permissionDecision allow/ask/deny）；输入键名与 `CLAUDE_PROJECT_DIR` 适配；权限基准 cwd 优先、回退 env；`updated_input` 全替换语义（区别于 Crush 浅合并）。
+    - 验收：三档行为与 Crush 等价；exit 2 覆盖 JSON 的规则正确。
+  - **M5.2 双 adapter 共用用例集**：契约测试参数化，同一用例集驱动 Crush / ClaudeCode 两 adapter。
+    - 验收：共用用例集双跑全绿。
+- [ ] **P6 收尾**（M6.1–M6.3；**M6.3 含用户确认点，不与 P2–P5 连续推进**）：
+  - **M6.1 Lua 引擎**：mlua `--engine lua`。
+    - 验收：与 Rhai 同一 RuleEngine trait；默认规则 lua 版行为等价；限流同等。
+  - **M6.2 质量收口 + 文档**：`cargo audit` 干净；README + 使用文档。
+    - 验收：audit 零告警；README 覆盖安装 / 配置 / 三运行模式。
+  - **M6.3 mdor 侧退役**（Open Questions 1，待用户确认节奏）：删 crush-guard 目录、回滚 `[project.scripts]`。
+    - 验收：mdor 侧无 crush-guard 残留；本仓库为唯一实现。
+
+## 推进节奏（2026-09-06 细化时钉死）
+
+- **P2→P5（M2.1–M5.2，15 项）可一口气连续推进**，无外部用户决策点；P6 的 M6.3（mdor 退役）需用户确认，不并入。
+- 三个实现期定点（方向已定，执行时就地钉死并登记，不构成阻塞）：
+  1. `-h` 笔误：实现期确认后剔除并登记（design.md 更正登记第 5 条）；`go run` / `git reset` 档位按草案推荐值执行、随 M2.7 验收展示。
+  2. P3 脚本 allow 契约语法细节：显式枚举、禁无条件兜底已定，仅钉表达形式。
+  3. P4 日志默认开关：M4.3 内定并登记 ADR（建议默认开）。
+- 单人串行节奏：按 M2.1 → M6.2 顺序推进（P3/P4 理论可并行，串行更稳）；每项过质量门禁（fmt → clippy → test → audit），每阶段末 Cairn 登记与提交。
+- **启动实施（含 P2 第一项）待用户明确授权**——项目推进一贯由用户拍板，agent 不自行启动新阶段。
 
 ## Milestones（已达成）
 
@@ -31,6 +73,7 @@
 - [x] 定稿**零内置策略 + 默认配置生成**（二进制纯引擎；默认策略 = 项目侧生成的外部 `rules.toml` + `rules.rhai`；三层皆缺才生成、任一层有效即尊重；损坏留档后重新生成；全局/用户层生成由命令提供后期设计；效力顺序项目 > 用户 > 全局）
 - [x] 纸面定稿**配置格式草案 v1**（2026-09-05：`[local]`/`[global]` 双表 + 每命令 allow/confirm/deny 三桶查表 + 头部裸列表/precedence/default 标量；声明层零条件判断，两态子命令/find 突变/管道 sink 等全部下沉脚本层；token 级 merge；JSONL 裁决日志格式先行；见 design.md「配置格式与脚本边界（草案 v1）」——待 P2/P3 验收后升格定稿）
 - [x] 设计评审 + 草案 v1 增补（2026-09-06：**命令知识库框架**（bucket、10 槽位封闭、别名归一参与运行时、属性仅 lint/脚本、删光=不做语义检查）+ **层间合并改字段级继承**（数组覆盖 / inline table `add`/`remove` 增删）+ **单命令建模**完备性标准（槽位跟着消费机制走）+ 损坏重生成收窄 + guard.py 重定位为参考对象；新建 `doc/decisions.md` 轻量 ADR（首批 D-01~D-06）与 `script/` 目录约定（三次法则 + 台账）——见 design.md 草案 v1 增补节、`doc/decisions.md`）
+- [x] 细化 P2–P6 推进计划为逐项里程碑（2026-09-06：P2 7 项 / P3 3 项 / P4 3 项 / P5 2 项 / P6 3 项，每项带验收标准；P2→P5 共 15 项一口气可推进、无外部决策点；P6 含 mdor 退役用户确认点；节奏与三个实现期定点见「推进节奏」节）
 
 ## Open Questions
 
