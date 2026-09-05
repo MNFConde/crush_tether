@@ -44,6 +44,17 @@ pub struct CheckRun {
 /// USERPROFILE/HOME=project、无 CRUSH_TETHER_CONFIG），`extra_args` 附加
 /// CLI 参数（如 `["--config", path]`），stdin 送 hook JSON。
 pub fn run_check_with(project: &Path, extra_args: &[&str], command: &str) -> CheckRun {
+    run_check_env(project, extra_args, command, &[])
+}
+
+/// 同 [`run_check_with`]，额外覆盖环境变量（在隔离缺省之后应用，
+/// 如把 HOME 指到另一临时目录模拟用户层）。
+pub fn run_check_env(
+    project: &Path,
+    extra_args: &[&str],
+    command: &str,
+    envs: &[(&str, &str)],
+) -> CheckRun {
     let mut child = Command::new(BIN)
         .args(["check", "--agent", "crush"])
         .args(extra_args)
@@ -51,6 +62,7 @@ pub fn run_check_with(project: &Path, extra_args: &[&str], command: &str) -> Che
         .env("USERPROFILE", project)
         .env("HOME", project)
         .env_remove("CRUSH_TETHER_CONFIG")
+        .envs(envs.iter().copied())
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
