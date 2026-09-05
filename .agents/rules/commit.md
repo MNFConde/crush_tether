@@ -98,6 +98,11 @@
 - **坑②**：钩子脚本依赖 `uv run`，环境无 uv 时提交直接失败（`uv: not found`，报错在钩子行不直观）→ `nix profile install nixpkgs#uv`。
 - **详情**：cairn/LOG.md 2026-08-30 条目（ubuntu-dev VM 首次提交实测）。
 
+### 6.4 `git config core.hooksPath --unset` 语法反了 = 把值设成字面 `--unset`
+
+- **坑**：撤销 hooksPath 时误写 `git config core.hooksPath --unset`（把选项放到了值的位置），git 把 `--unset` 当普通字符串写入 config——此后 `git config core.hooksPath` 显示 `--unset` 且 exit 0，看似「已 unset」实则配置了指向不存在目录的路径，钩子静默跳过且极具误导性（2026-09-06 于 crush_tether 实证，`git config --show-origin --get core.hooksPath` 定位到 `file:.git/config` 值为字面 `--unset`）。
+- **对策**：撤销语法是 `git config --unset core.hooksPath`（选项在前）；重新启用/覆盖单值配置直接 `git config core.hooksPath .githooks` 原位替换即可，无需先 unset。排查配置时用 `--show-origin --get` 同时看值与来源。
+
 ## 七、钩子安装
 
 一次性执行（本地配置，不入库，不自动推送）：

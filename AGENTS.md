@@ -1,6 +1,6 @@
 # AGENTS.md
 
-crush_tether —— Crush 命令级 bash 权限门（Rust 实现 crush-guard 独立化/重写）。当前状态：**规划期**——`src/` 仅 hello world，仓库主体为 `doc/` 规划文档；crush-guard 抽取/重写方案见 [doc/design.md](doc/design.md)，待定项见 [cairn/ROADMAP.md](cairn/ROADMAP.md)。
+crush_tether —— Crush 命令级 bash 权限门（Rust 实现 crush-guard 独立化/重写）。当前状态：**P0+P1 已落地**（Rust 分类核心 + check 模式 + 89 条回归用例全绿），配置格式草案 v1 与命令知识库框架已纸面定稿（见 [doc/design.md](doc/design.md)），决策论证见 [doc/decisions.md](doc/decisions.md)，待定项见 [cairn/ROADMAP.md](cairn/ROADMAP.md)。
 
 > 本项目使用 Project Cairn 组织项目知识：Cairn 全套规则（初始化配置/阅读顺序/文档职责/冲突仲裁/知识库消费反射/知识沉淀规则）见 `cairn/AGENTS.md`。
 > 本机装有 project-cairn skill 且仓库存在 `cairn/` 时生效；否则视为不适用，跳过。
@@ -26,6 +26,7 @@ crush_tether —— Crush 命令级 bash 权限门（Rust 实现 crush-guard 独
 - 指令若与仓库文档（`doc/`）或既有约定不符，先指出冲突点、说明取舍，再执行。
 - 项目状态发生变化（如核心逻辑落地、crate 结构建立、工具链变更）时，同步更新本文件对应状态描述，避免误导后续会话。
 - 提交格式规范见 `@.agents/rules/commit.md`，仅在准备 commit 时读取；提交相关经验/坑须登记于该文件「六」节。
+- 目录级专属约束见 `doc/AGENTS.md`（doc/ 写作约定 + 决策记录规则）与 `script/AGENTS.md`（script/ 目录约定 + 临时脚本三次法则），读取对应目录下文件时自动生效。
 
 ## 质量门禁
 

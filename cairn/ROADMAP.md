@@ -1,6 +1,6 @@
 # crush_tether Roadmap
 
-**Current focus**: P0+P1 已落地（Rust 重写 + 回归用例全绿）；配置格式草案 v1 已纸面定稿（`[local]`/`[global]` 双表三桶查表 + 条件判断下沉脚本层，见 design.md「配置格式与脚本边界（草案 v1）」，待 P2/P3 验收后升格定稿）；下一步 P2 按草案 v1 实现配置声明层，或按需先做 P4 serve。
+**Current focus**: P0+P1 已落地（Rust 重写 + 回归用例全绿）；配置格式草案 v1 已纸面定稿（`[local]`/`[global]` 双表三桶查表 + **字段级继承合并** + 条件判断下沉脚本层）；命令知识库框架（bucket / 10 槽位 / 别名归一 / lint 双层）与单命令建模已增补进草案（2026-09-06，见 design.md「配置格式与脚本边界（草案 v1）」，决策论证见 `doc/decisions.md` D-01~D-06）；下一步 P2 按草案 v1 实现配置声明层 + 知识库 main，或按需先做 P4 serve。
 
 ## 推进计划（P0–P6）
 
@@ -10,12 +10,13 @@
   - 验收：`cargo clippy -D warnings` 零告警。
 - [x] **P1 分类核心（check 模式最小闭环）**：`cmd_parse`（tree-sitter-bash flatten + 写重定向/fd dup/路径逃逸检测）+ 判定表平移 + `Verdict::combine`；`channel` Crush/ClaudeCode 契约输出；`check` 模式（stdin JSON → allow JSON/静默/exit 2）。
   - 验收：`tests/guard_regression.rs` 89 用例全绿（test_guard.py 1:1 平移）；release 单次冷启动 ~9ms（budget <10ms 达标）；冒烟四形态（allow/deny/管道 sink/写 flag confirm）正确。
-- [ ] **P2 配置声明层**：`rules.toml` 三层 merge（项目 > 用户 > 全局，效力同序）按**草案 v1 token 级合并**（高层胜出、低层补缺）+ `[local]`/`[global]` 双表三桶查表（详见 design.md「配置格式与脚本边界（草案 v1）」）；`--config`/`CRUSH_TETHER_CONFIG` 覆盖；**默认配置生成 v1（项目层）**：三层皆缺有效配置 → 项目 `.crush-tether/` 生成默认 `rules.toml` + `rules.rhai`（损坏先留档 `.bak-<时间戳>` 再生成，temp+rename 原子，生成动作不经规则链）。
-  - 验收：三层 token 级覆盖/补缺/效力顺序单测全绿；样例仓库自定义规则改变裁决生效；生成触发（三层皆缺 vs 任一层有效）、损坏留档、幂等重新生成单测全绿；生成出的默认 `rules.toml` 按草案 v1 结构完整承载判定表中无条件查表可表达的部分（其余下沉 P3 脚本层）。**验收通过后草案 v1 升格定稿。**
-- [ ] **P3 脚本层（Rhai 默认）**：`RuleEngine` trait + Rhai 引擎（`max_operations` 限流）+ `rules.rhai` 进管线；`--engine` 切换；脚本层按草案 v1 承载**全部条件判断**（两态子命令、`find` 突变、`git config` ≥2 位置参数写判定、管道 sink、`curl|sh`、写特征升级类），脚本 allow 契约限显式枚举、禁无条件兜底；**随后删除 engine.rs 中内置判定表残留，完成零内置策略迁移**。
-  - 验收：脚本可组合安全原语但不可绕过；死循环被限流兜底；`tests/guard_regression.rs` 89 用例改为「引擎 + 默认规则 fixture」驱动后仍全绿（默认配置包成为验收对象）。
-- [ ] **P4 常驻服务 + 热重载**：`hook`/`serve` 模式（命名端点 + connect-or-spawn + 独占 bind 单实例 + `--idle-exit`）；`notify` + debounce + `Arc<RuleSet>` 原子换快照。
+- [ ] **P2 配置声明层 + 知识库 main**：`rules.toml` 三层 merge（项目 > 用户 > 全局，效力同序）按**草案 v1 字段级继承**（未定义即继承；数组 = 覆盖 / inline table `add`/`remove` = 继承增删）+ `[local]`/`[global]` 双表三桶查表 + `version`/`precedence` 裸键（详见 design.md「配置格式与脚本边界（草案 v1）」）；**命令知识库 main**（`knowledge.toml`：10 槽位 / 紧凑条目文法，随默认配置生成机制一并落盘）+ **别名归一**（查表前按 `alias_of`/`same_flag`/`takes_value` 改写规范形，防环校验）+ **lint 双层**（结构类内置：同 token 多桶 / 裸列表与节并存 / 死词条；语义类读知识库）；`--config`/`CRUSH_TETHER_CONFIG` 覆盖；**默认配置生成 v1（项目层）**：三层皆缺有效配置 → 项目 `.crush-tether/` 生成默认 `rules.toml` + `rules.rhai` + `knowledge.toml`（损坏 → 告警 + fail-safe confirm 兜底、原文件不动；temp+rename 原子，生成动作不经规则链）。
+  - 验收：字段级继承（覆盖/继承/增删）、效力顺序单测全绿；别名归一（`npm exec → npx`）与 `same_flag` 闭包单测全绿；lint 规则集单测全绿；生成触发（三层皆缺 vs 任一层有效）、损坏不生成、幂等重新生成单测全绿；样例仓库自定义规则改变裁决生效。**验收通过后草案 v1 升格定稿。**
+- [ ] **P3 脚本层（Rhai 默认）**：`RuleEngine` trait + Rhai 引擎（`max_operations` 限流）+ `rules.rhai` 进管线；`--engine` 切换；脚本层按草案 v1 承载**全部条件判断**（两态子命令——数据读知识库 `write_tokens`/`write_arg_count`、`find` 突变、管道 sink、`curl|sh`、写特征升级类），脚本 allow 契约限显式枚举、禁无条件兜底；**随后删除 engine.rs 中内置判定表残留，完成零内置策略迁移**。
+  - 验收：脚本可组合安全原语但不可绕过；死循环被限流兜底；`tests/guard_regression.rs` 89 用例改为「引擎 + 默认规则 fixture」驱动后全绿（断言与定稿草案冲突时以草案为准更新用例并留变更记录——guard.py 是参考对象非验收标准，见 `doc/decisions.md` D-05）。
+- [ ] **P4 常驻服务 + 热重载**：`hook`/`serve` 模式（命名端点 + connect-or-spawn + 独占 bind 单实例 + `--idle-exit`）；`notify` + debounce + `Arc<RuleSet>` 原子换快照；裁决日志落盘（JSONL：`kb` 字段 + `type:"load"` 事件行，默认开关本阶段定）。
   - 验收：改规则文件不重启即生效；并发冷启动不重复起 serve；常驻内存 <10MB、P95 < 5ms。
+  - 后置专项（不阻塞主线）：多 bucket 管理（增删/多源合并/优先级）与配置编写时提示。
 - [ ] **P5 ClaudeCode adapter 完整化**：`hookSpecificOutput` 信封 + `CLAUDE_PROJECT_DIR`/cwd 基准 + `updated_input` 全替换语义。
   - 验收：ClaudeCode 三档行为与 Crush 等价；双 adapter 契约测试共用用例集。
 - [ ] **P6 收尾**：Lua（mlua）`--engine lua`；`cargo audit` 干净；README + 使用文档；mdor 侧 crush-guard 退役（删目录/回滚 `[project.scripts]`）。
@@ -29,6 +30,7 @@
 - [x] Rust 重写 P0+P1（check 模式 + 回归用例 9/9 组全绿 + 质量门禁全过）
 - [x] 定稿**零内置策略 + 默认配置生成**（二进制纯引擎；默认策略 = 项目侧生成的外部 `rules.toml` + `rules.rhai`；三层皆缺才生成、任一层有效即尊重；损坏留档后重新生成；全局/用户层生成由命令提供后期设计；效力顺序项目 > 用户 > 全局）
 - [x] 纸面定稿**配置格式草案 v1**（2026-09-05：`[local]`/`[global]` 双表 + 每命令 allow/confirm/deny 三桶查表 + 头部裸列表/precedence/default 标量；声明层零条件判断，两态子命令/find 突变/管道 sink 等全部下沉脚本层；token 级 merge；JSONL 裁决日志格式先行；见 design.md「配置格式与脚本边界（草案 v1）」——待 P2/P3 验收后升格定稿）
+- [x] 设计评审 + 草案 v1 增补（2026-09-06：**命令知识库框架**（bucket、10 槽位封闭、别名归一参与运行时、属性仅 lint/脚本、删光=不做语义检查）+ **层间合并改字段级继承**（数组覆盖 / inline table `add`/`remove` 增删）+ **单命令建模**完备性标准（槽位跟着消费机制走）+ 损坏重生成收窄 + guard.py 重定位为参考对象；新建 `doc/decisions.md` 轻量 ADR（首批 D-01~D-06）与 `script/` 目录约定（三次法则 + 台账）——见 design.md 草案 v1 增补节、`doc/decisions.md`）
 
 ## Open Questions
 

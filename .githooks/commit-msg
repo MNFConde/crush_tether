@@ -1,0 +1,6 @@
+#!/bin/sh
+# commit-msg 钩子：校验提交信息格式（Conventional Commits，见 .agents/rules/commit.md）
+# 仅本地提交前校验，绝不自动推送
+root=$(git rev-parse --show-toplevel)
+msg_file=$(realpath "$1")
+uv run --directory "$root/script" check-commit-msg.py "$msg_file"

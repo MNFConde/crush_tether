@@ -2,6 +2,14 @@
 
 This file records substantive progress in reverse-chronological order — newest entry at the top, right below this line. Keep each entry short — summary and pointer only; conclusions settle into `cairn/<topic>.md`.
 
+## 2026-09-06 · 设计评审 + 命令知识库/继承模型增补（草案 v1 扩充 + ADR 机制建立）
+
+- 评审发现默认包偏差（npm exec ≡ npx 等价绕过洞、git reset 双桶死词条、cargo/go 整命令过宽）与规格空洞（查表顺序/裸列表跨层合并/节内 default/version），逐条钉死进草案 v1。
+- 定案：**命令知识库**（bucket：事实/策略分离、10 槽位封闭、别名归一参与运行时、属性仅 lint/脚本、删光=不做语义检查）+ **层间合并 = 字段级继承**（数组覆盖 / inline table `add`/`remove` 增删）+ **单命令建模**完备性标准（槽位跟着消费机制走）+ 损坏重生成收窄（仅缺失才生成）+ guard.py 重定位为参考对象非验收标准。
+- 文档基建（借鉴 mdor）：新建 `doc/decisions.md`（轻量 ADR，首批 D-01~D-06）；`script/AGENTS.md` 目录约定 + 临时脚本三次法则 + `scripts.md` 台账；doc/AGENTS.md 补单源三判定与标记排版细则。
+- 沉淀：新建 `cairn/command-knowledge-base.md`（可复用模式）；`zero-builtin-policy-seeding.md` 损坏收窄更正 + 知识库边界辨析。
+- Details: `doc/design.md`「配置格式与脚本边界（草案 v1）」（含命令知识库/单命令建模/层间合并节）、`doc/decisions.md`、`cairn/command-knowledge-base.md`。
+
 ## 2026-09-05 · 配置格式草案 v1 纸面定稿（双表三桶查表 + 条件判断下沉脚本层）
 
 - 定案（草案，待 P2/P3 验收后升格）：`rules.toml` 顶层 `[local]`/`[global]` 双表——local 内 allow 带路径逃逸检查、global allow 豁免（团队统一放行出口）；每命令 allow/confirm/deny 三桶 + sub/flag 子键，flag 长写/简写显式并排（弃前缀匹配）；头部 `allow`/`confirm`/`deny` 裸列表 + `precedence`（桶间优先级可调）+ `default` 标量。
