@@ -86,3 +86,62 @@ fn discovered_rules_drive_check_mode_end_to_end() {
     assert_eq!(code, 0);
     assert!(stdout.trim().is_empty());
 }
+
+#[test]
+fn knowledge_alias_normalization_end_to_end() {
+    // 规则 allow pip；知识库 pip3 → pip；`pip3 --version` 经归一命中 allow。
+    let proj = TempProject::new(
+        "kb",
+        concat!(
+            "version = 1\n",
+            "default = \"confirm\"\n",
+            "[local]\n",
+            "allow = [\"pip\"]\n",
+        ),
+    );
+    std::fs::write(
+        proj.path().join(".crush-tether").join("knowledge.toml"),
+        "version = 1\n[pip3]\nalias_of = \"pip\"\n",
+    )
+    .expect("write knowledge.toml");
+
+    let (stdout, code) = run_check(proj.path(), "pip3 --version");
+    assert_eq!(code, 0);
+    assert_eq!(
+        stdout.trim(),
+        "{\"decision\":\"allow\"}",
+        "别名归一后命中 allow"
+    );
+
+    // 无归一即不可命中的对照：npm 不在 allow → default confirm。
+    let (stdout, code) = run_check(proj.path(), "npm --version");
+    assert_eq!(code, 0);
+    assert!(stdout.trim().is_empty(), "未命中走 default confirm（静默）");
+}
+
+#[test]
+fn broken_knowledge_degrades_to_literal_lookup_not_fail_safe() {
+    // 知识库损坏 ≠ 规则损坏：判定不受影响（按字面查表），仅 stderr 告警。
+    let proj = TempProject::new(
+        "kb-broken",
+        concat!(
+            "version = 1\n",
+            "default = \"confirm\"\n",
+            "[local]\n",
+            "allow = [\"pip3\"]\n",
+        ),
+    );
+    std::fs::write(
+        proj.path().join(".crush-tether").join("knowledge.toml"),
+        "version = 1\n[pip3]\nalist_of = \"pip\"\n",
+    )
+    .expect("write broken knowledge.toml");
+
+    let (stdout, code) = run_check(proj.path(), "pip3 --version");
+    assert_eq!(code, 0);
+    assert_eq!(
+        stdout.trim(),
+        "{\"decision\":\"allow\"}",
+        "知识库损坏只降级归一能力，裁决仍按字面配置生效"
+    );
+}

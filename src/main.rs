@@ -61,25 +61,37 @@ fn main() -> ExitCode {
     // 配置：显式覆盖（--config > CRUSH_TETHER_CONFIG）优先，否则分层发现
     // （项目 > 用户 > 全局）；任一存在层损坏 → stderr 告警 + fail-safe
     // confirm，绝不静默回落其他层（design.md「损坏 ≠ 缺失」，D-03）。
-    let merged = match config::explicit_path(config_arg.as_deref()) {
-        Some(path) => config::load_file(&path).map(|f| {
-            config::merge(Layers {
-                global: None,
-                user: None,
-                project: Some(&f),
-            })
-        }),
-        None => {
-            let home = config::home_dir();
-            config::discover_layers(Some(&project), home.as_deref())
-                .map(|l| config::merge(Layers::from_found(&l)))
+    // 知识库 main（项目层单文件，与 --config 无关）单独降级：损坏按
+    // 「缺失 + 告警」处理——知识库只记事实不产生裁决，删光/损坏后归一失效
+    // （等价命令按字面查表落 default），判定不受影响。
+    let home = config::home_dir();
+    let found = config::discover_layers(Some(&project), home.as_deref());
+    let kb = found.as_ref().ok().and_then(|l| l.knowledge.as_ref());
+    let lookup = if let Some(path) = config::explicit_path(config_arg.as_deref()) {
+        match config::load_file(&path) {
+            Ok(f) => RuleLookup::new(
+                config::merge(Layers {
+                    global: None,
+                    user: None,
+                    project: Some(&f),
+                }),
+                kb,
+            ),
+            Err(e) => {
+                eprintln!(
+                    "crush-tether: explicit config {} failed to load: {e}; fail-safe confirm",
+                    path.display()
+                );
+                return fail_safe_confirm(agent);
+            }
         }
-    };
-    let lookup = match merged {
-        Ok(m) => RuleLookup::new(m),
-        Err(e) => {
-            eprintln!("crush-tether: config failed to load: {e}; fail-safe confirm");
-            return fail_safe_confirm(agent);
+    } else {
+        match &found {
+            Ok(l) => RuleLookup::new(config::merge(Layers::from_found(l)), kb),
+            Err(e) => {
+                eprintln!("crush-tether: config failed to load: {e}; fail-safe confirm");
+                return fail_safe_confirm(agent);
+            }
         }
     };
 

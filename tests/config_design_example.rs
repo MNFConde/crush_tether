@@ -22,6 +22,18 @@ fn extract_rules_example(md: &str) -> String {
     rest[..end].to_string()
 }
 
+/// 提取「命令知识库（bucket 框架，草案）」小节的第一个 ```toml 代码块。
+fn extract_knowledge_example(md: &str) -> String {
+    let section = md
+        .split("### 命令知识库（bucket 框架，草案）")
+        .nth(1)
+        .expect("design.md contains the knowledge base section");
+    let start = section.find("```toml").expect("section opens a toml block") + "```toml".len();
+    let rest = &section[start..];
+    let end = rest.find("```").expect("toml block is closed");
+    rest[..end].to_string()
+}
+
 fn sub_list(bucket: Option<&crush_tether::config::BucketSpec>, dim: SubFlag) -> &[String] {
     let b = bucket.unwrap_or_else(|| panic!("bucket missing"));
     let field = match dim {
@@ -110,4 +122,31 @@ fn design_md_rules_example_parses() {
         f.global.commands.is_empty(),
         "global has no command sections"
     );
+}
+
+#[test]
+fn design_md_knowledge_example_parses() {
+    use crush_tether::knowledge::KnowledgeBase;
+
+    let md = std::fs::read_to_string(Path::new(DESIGN_MD)).expect("read design.md");
+    let src = extract_knowledge_example(&md);
+    let kb = KnowledgeBase::parse_toml(&src)
+        .unwrap_or_else(|e| panic!("design.md knowledge example must parse: {e}\n{src}"));
+
+    // 10 槽位封闭集在示例中的体现（D-06：槽位跟着消费机制走）。
+    assert_eq!(kb.version, 1);
+    assert_eq!(kb.bins["npx"].may_write, Some(true));
+    assert_eq!(kb.bins["npm"].subs["exec"].alias_of.as_deref(), Some("npx"));
+    assert_eq!(kb.bins["pip3"].alias_of.as_deref(), Some("pip"));
+    assert_eq!(
+        kb.bins["curl"].write_flags,
+        Some(vec!["-o".to_string(), "--output".to_string()])
+    );
+    let git = &kb.bins["git"];
+    assert!(git.subs["branch"].write_tokens.is_some());
+    assert_eq!(git.subs["config"].write_arg_count, Some(2));
+    assert_eq!(git.flags["--force"].same_flag.as_deref(), Some("-f"));
+    assert_eq!(git.flags["--hard"].irreversible, Some(true));
+    assert_eq!(kb.bins["make"].delegates.as_deref(), Some("Makefile"));
+    assert_eq!(kb.bins["sudo"].wraps.as_deref(), Some("*"));
 }

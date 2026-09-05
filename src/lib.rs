@@ -7,5 +7,6 @@ pub mod channel;
 pub mod cmd_parse;
 pub mod config;
 pub mod engine;
+pub mod knowledge;
 pub mod lookup;
 pub mod model;

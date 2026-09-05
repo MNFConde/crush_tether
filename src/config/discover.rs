@@ -12,6 +12,7 @@
 use std::path::{Path, PathBuf};
 
 use crate::config::{LoadError, RulesFile};
+use crate::knowledge::KnowledgeBase;
 
 /// 发现到的三层配置（`None` = 该层无配置文件）。
 #[derive(Debug)]
@@ -20,6 +21,9 @@ pub struct FoundLayers {
     pub global: Option<RulesFile>,
     pub user: Option<RulesFile>,
     pub project: Option<RulesFile>,
+    /// 知识库 main：项目层 `.crush-tether/knowledge.toml`（v1 单文件，随默认
+    /// 配置生成落盘）。
+    pub knowledge: Option<KnowledgeBase>,
 }
 
 impl FoundLayers {
@@ -39,6 +43,10 @@ pub fn discover_layers(
         Some(h) => load_optional(&h.join(".config").join("crush-tether").join("rules.toml"))?,
         None => None,
     };
+    let knowledge = match project_root {
+        Some(p) => load_knowledge(&p.join(".crush-tether").join("knowledge.toml")),
+        None => None,
+    };
     let project = match project_root {
         Some(p) => load_optional(&p.join(".crush-tether").join("rules.toml"))?,
         None => None,
@@ -47,6 +55,7 @@ pub fn discover_layers(
         global: None,
         user,
         project,
+        knowledge,
     })
 }
 
@@ -56,6 +65,33 @@ fn load_optional(path: &Path) -> Result<Option<RulesFile>, LoadError> {
         Ok(f) => Ok(Some(f)),
         Err(LoadError::Io(e)) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(e) => Err(e),
+    }
+}
+
+/// 加载知识库 main。与规则文件不同：**损坏按「缺失 + stderr 告警」处理**，
+/// 不触发 fail-safe confirm——知识库只记录事实、不产生裁决，删光/损坏的
+/// 后果是归一与语义检查失效（等价命令按字面查表，落 default 兜底），判定
+/// 完全不受影响（design.md「删光 = 不做语义检查」）。
+fn load_knowledge(path: &Path) -> Option<KnowledgeBase> {
+    match std::fs::read_to_string(path) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+        Err(e) => {
+            eprintln!(
+                "crush-tether: knowledge file {} unreadable: {e}; treating as absent",
+                path.display()
+            );
+            None
+        }
+        Ok(text) => match KnowledgeBase::parse_toml(&text) {
+            Ok(kb) => Some(kb),
+            Err(e) => {
+                eprintln!(
+                    "crush-tether: knowledge file {} invalid: {e}; treating as absent",
+                    path.display()
+                );
+                None
+            }
+        },
     }
 }
 
