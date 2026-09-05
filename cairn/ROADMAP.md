@@ -1,6 +1,6 @@
 # crush_tether Roadmap
 
-**Current focus**: P0+P1 已落地（Rust 重写 + 回归用例全绿）；配置格式草案 v1 + 命令知识库框架已纸面定稿（决策论证 `doc/decisions.md` D-01~D-06）。P2–P6 已细化为逐项带验收标准的里程碑（2026-09-06，见「推进计划」M 编号条目）：**P2→P5 共 15 项可一口气连续推进、无外部决策点**（三个实现期定点见「推进节奏」节）；P6 的 mdor 退役需用户确认。**下一步 = P2（M2.1 起），启动待用户授权。**
+**Current focus**: P0+P1 已落地（Rust 重写 + 回归用例全绿）；配置格式草案 v1 + 命令知识库框架已纸面定稿（决策论证 `doc/decisions.md` D-01~D-06）。P2–P6 已细化为逐项带验收标准的里程碑（2026-09-06，见「推进计划」M 编号条目）：**P2→P5 共 15 项可一口气连续推进、无外部决策点**（三个实现期定点见「推进节奏」节）；P6 的 mdor 退役需用户确认。**下一步 = P2（M2.1 起），启动待用户授权。** → **执行中（2026-09-06 用户下令开启完全访问模式）：M2.1 已完成（373df67），当前推进 M2.2；授权终点 = P3 收尾（M3.3），每里程碑 ≥1 commit。**
 
 ## 推进计划（P0–P6）
 
@@ -12,7 +12,7 @@
 - [x] **P1 分类核心（check 模式最小闭环）**：`cmd_parse`（tree-sitter-bash flatten + 写重定向/fd dup/路径逃逸检测）+ 判定表平移 + `Verdict::combine`；`channel` Crush/ClaudeCode 契约输出；`check` 模式（stdin JSON → allow JSON/静默/exit 2）。
   - 验收：`tests/guard_regression.rs` 89 用例全绿（test_guard.py 1:1 平移）；release 单次冷启动 ~9ms（budget <10ms 达标）；冒烟四形态（allow/deny/管道 sink/写 flag confirm）正确。
 - [ ] **P2 配置声明层 + 知识库 main**（M2.1–M2.7；格式细则见 design.md「配置格式与脚本边界（草案 v1）」；**验收全过后草案 v1 升格定稿**）：
-  - **M2.1 rules.toml 解析模型**：裸键区（`version`/`default`/`precedence`）+ `[local]`/`[global]` 双表 + 命令节三桶 + `sub`/`flag` 子键 + 列表双形态（数组 / inline table）反序列化；`--config`/`CRUSH_TETHER_CONFIG` 显式覆盖入口。
+  - **M2.1 rules.toml 解析模型**✅（2026-09-06，373df67）：裸键区（`version`/`default`/`precedence`）+ `[local]`/`[global]` 双表 + 命令节三桶 + `sub`/`flag` 子键 + 列表双形态（数组 / inline table）反序列化；`--config`/`CRUSH_TETHER_CONFIG` 显式覆盖入口（加载失败 → stderr 告警 + fail-safe confirm 已接线 check 模式）。
     - 验收：design.md 示例文件整体解析通过；非法键报错可定位；解析失败 → stderr 告警 + fail-safe confirm（不 panic、不误放行）。
   - **M2.2 三层发现与字段级继承合并**：全局 → 用户 → 项目三层发现（`CRUSH_PROJECT_DIR` 优先，缺失逐级上溯）；未定义即继承 / 定义即覆盖；数组 = 覆盖、inline table `add`/`remove` = 增删、标量写值即覆盖；`version` 过旧明确报错，不静默误解析。
     - 验收：覆盖 / 继承 / 增删三类合并单测全绿（含 flag 桶剔除、节内 `default` 继承链）；效力顺序（项目 > 用户 > 全局，不粘性）单测全绿。

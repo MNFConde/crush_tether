@@ -2,6 +2,14 @@
 
 This file records substantive progress in reverse-chronological order — newest entry at the top, right below this line. Keep each entry short — summary and pointer only; conclusions settle into `cairn/<topic>.md`.
 
+## 2026-09-06 · M2.1 落地：rules.toml 草案 v1 解析模型 + 显式覆盖 fail-safe
+
+- `src/config/{mod,schema}.rs` 替换旧 `[[rule]]` 占位骨架：双表三桶 / `sub`·`flag` / 列表双形态（数组=覆盖、`{add,remove}`=增删）；`version` 必填且须 =1，`precedence` 须三桶排列。
+- 未知键报错可定位：手写 Visitor 反序列化（不用 untagged enum）——防 serde 私有类型名泄漏进报错文本；ScopeTable 固定桶键白名单化，拼错桶键不静默成新命令节。
+- `--config`/`CRUSH_TETHER_CONFIG` 接线 check 模式：加载失败 → stderr 告警 + fail-safe confirm，不静默回落；design.md 示例现场提取解析（tests/config_design_example.rs）防文档漂移。
+- 质量门禁全过（fmt / clippy -D / test 37 例 / audit），既有回归不受影响。commit 373df67。
+- Details: `src/config/schema.rs`、`tests/explicit_config_failsafe.rs`、`cairn/ROADMAP.md` M2.1 条。
+
 ## 2026-09-06 · skill 使用约定单列（实现前参照 + 提交前审查）
 
 - 根 AGENTS.md 新增「项目特化约束（skill 使用）」节：实现 Rust 代码前按需参照 rust 系 skill（rust-best-practices / rust-testing / rust-async-patterns）写成惯例形态；提交前 skill 审查条目自质量门禁移入本节，集中维护。
