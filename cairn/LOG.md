@@ -2,6 +2,13 @@
 
 This file records substantive progress in reverse-chronological order — newest entry at the top, right below this line. Keep each entry short — summary and pointer only; conclusions settle into `cairn/<topic>.md`.
 
+## 2026-09-06 · M2.2 落地：三层字段级继承合并 + 分层发现
+
+- `merge.rs`（D-02）：未定义即继承/定义即覆盖（项目>用户>全局，不粘性）；数组=覆盖、`{add,remove}`=增删（flag 桶可剔除）；标量高层写值即覆盖；命令节字段级合并 + 跨层并集；precedence 缺省回落默认序。合并产物 `MergedRules`（Delta 已消解为词条集），M2.3 查表直接消费。
+- `discover.rs`：项目层 `.crush-tether/rules.toml`（项目根 `CRUSH_PROJECT_DIR` 优先/缺失逐级上溯 `.git`、`.crush-tether/`）+ 用户层 `~/.config/crush-tether/rules.toml`；全局层 v1 留位。损坏≠缺失（D-03）：任一层存在但解析失败整体 Err → 调用方 fail-safe confirm。
+- 新增 23 例单测全绿。commit ce5148e。
+- Details: `src/config/merge.rs`、`src/config/discover.rs`、`cairn/ROADMAP.md` M2.2 条。
+
 ## 2026-09-06 · M2.1 落地：rules.toml 草案 v1 解析模型 + 显式覆盖 fail-safe
 
 - `src/config/{mod,schema}.rs` 替换旧 `[[rule]]` 占位骨架：双表三桶 / `sub`·`flag` / 列表双形态（数组=覆盖、`{add,remove}`=增删）；`version` 必填且须 =1，`precedence` 须三桶排列。
