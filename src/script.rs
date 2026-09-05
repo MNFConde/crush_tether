@@ -50,11 +50,13 @@ impl std::error::Error for ScriptError {}
 /// 脚本引擎抽象（引擎开闭落点；Rhai 为 v1 默认实现）。
 pub trait RuleEngine {
     /// 单命令评估：`Ok(None)` = 脚本无意见（保留查表裁决）。
+    /// `pipe_to_shell` 为管线原语计算的管道拓扑特征（整条命令行级）。
     fn evaluate(
         &self,
         cmd: &SimpleCommand,
         verdict: Decision,
         project: &Path,
+        pipe_to_shell: bool,
     ) -> Result<Option<Decision>, ScriptError>;
 }
 
@@ -94,9 +96,10 @@ impl RuleEngine for RhaiEngine {
         cmd: &SimpleCommand,
         verdict: Decision,
         project: &Path,
+        pipe_to_shell: bool,
     ) -> Result<Option<Decision>, ScriptError> {
         let mut scope = rhai::Scope::new();
-        let ctx = build_context(cmd, verdict, project);
+        let ctx = build_context(cmd, verdict, project, pipe_to_shell);
         let result: Dynamic = self
             .engine
             .call_fn(&mut scope, &self.ast, "check", (ctx,))
@@ -106,11 +109,18 @@ impl RuleEngine for RhaiEngine {
             .map_err(|_| ScriptError::Contract("check() must return a string".into()))?;
         match s.as_str() {
             "" => Ok(None),
-            "allow" => Ok(Some(Decision::Allow)),
+            // allow 契约（M3.2 定稿）：脚本 v1 无放行权——放行语义完全由
+            // rules.toml 承载；返回 allow（含无条件兜底）被结构性拒绝，
+            // 由调用方映射为 fail-safe confirm。
+            "allow" => Err(ScriptError::Contract(
+                "scripts cannot return `allow` (v1 allow contract: allow belongs to \
+                 rules.toml only; scripts may only raise to confirm/deny)"
+                    .into(),
+            )),
             "confirm" => Ok(Some(Decision::Confirm)),
             "deny" => Ok(Some(Decision::Deny)),
             other => Err(ScriptError::Contract(format!(
-                "check() returned `{other}`; expected one of \"\", allow, confirm, deny"
+                "check() returned `{other}`; expected one of \"\", confirm, deny"
             ))),
         }
     }
@@ -118,7 +128,12 @@ impl RuleEngine for RhaiEngine {
 
 /// 构造脚本可见的命令上下文（只读特征；原始词元，归一不在此层）。
 /// rhai 的 Dynamic 对字符串取 owned 拷贝，不与命令借用纠缠。
-fn build_context(cmd: &SimpleCommand, verdict: Decision, project: &Path) -> rhai::Map {
+fn build_context(
+    cmd: &SimpleCommand,
+    verdict: Decision,
+    project: &Path,
+    pipe_to_shell: bool,
+) -> rhai::Map {
     let mut m = rhai::Map::new();
     let words: Vec<Dynamic> = cmd.words.iter().map(|w| Dynamic::from(w.clone())).collect();
     let args: Vec<Dynamic> = cmd
@@ -141,6 +156,7 @@ fn build_context(cmd: &SimpleCommand, verdict: Decision, project: &Path) -> rhai
     m.insert("args".into(), args.into());
     m.insert("verdict".into(), Dynamic::from(verdict.to_string()));
     m.insert("writes_redirect".into(), Dynamic::from(cmd.writes_redirect));
+    m.insert("pipe_to_shell".into(), Dynamic::from(pipe_to_shell));
     m.insert(
         "project".into(),
         Dynamic::from(project.to_string_lossy().to_string()),
@@ -191,7 +207,13 @@ fn register_primitives(engine: &mut Engine, project: PathBuf, kb: Option<Arc<Kno
             .and_then(|e| e.may_write)
             .unwrap_or(false)
     });
-    let kb_flag = kb;
+    // bin 级知识存在性：供自定义脚本做覆盖判断。
+    let kb_known = kb.clone();
+    engine.register_fn("kb_known", move |bin: &str| -> bool {
+        kb_known.as_ref().is_some_and(|k| k.bins.contains_key(bin))
+    });
+    // 知识库整体在位性：默认脚本的两态谓词兜底条件（删光 → confirm）。
+    let kb_flag = kb.clone();
     engine.register_fn("kb_irreversible", move |bin: &str, flag: &str| -> bool {
         kb_flag
             .as_ref()
@@ -200,6 +222,9 @@ fn register_primitives(engine: &mut Engine, project: PathBuf, kb: Option<Arc<Kno
             .and_then(|f| f.irreversible)
             .unwrap_or(false)
     });
+    // 知识库整体在位性：默认脚本的两态谓词兜底条件（删光 → confirm）。
+    let kb_present = kb;
+    engine.register_fn("kb_present", move || -> bool { kb_present.is_some() });
 }
 
 /// 加载项目层脚本 `.crush-tether/rules.rhai`（缺失 = 无脚本层，TOML 自足）。
@@ -250,17 +275,17 @@ mod tests {
             "}"
         ));
         assert_eq!(
-            e.evaluate(&cmd("sudo x"), Decision::Allow, Path::new(PROJ))
+            e.evaluate(&cmd("sudo x"), Decision::Allow, Path::new(PROJ), false)
                 .unwrap(),
             Some(Decision::Deny)
         );
         assert_eq!(
-            e.evaluate(&cmd("rm x"), Decision::Allow, Path::new(PROJ))
+            e.evaluate(&cmd("rm x"), Decision::Allow, Path::new(PROJ), false)
                 .unwrap(),
             Some(Decision::Confirm)
         );
         assert_eq!(
-            e.evaluate(&cmd("ls"), Decision::Allow, Path::new(PROJ))
+            e.evaluate(&cmd("ls"), Decision::Allow, Path::new(PROJ), false)
                 .unwrap(),
             None
         );
@@ -276,7 +301,7 @@ mod tests {
             "}"
         ));
         assert_eq!(
-            e.evaluate(&cmd("git push"), Decision::Allow, Path::new(PROJ))
+            e.evaluate(&cmd("git push"), Decision::Allow, Path::new(PROJ), false)
                 .unwrap(),
             Some(Decision::Deny)
         );
@@ -286,7 +311,7 @@ mod tests {
     fn infinite_loop_is_bounded_by_operation_limit() {
         let e = compile("fn check(ctx) { while true {} }");
         let t0 = std::time::Instant::now();
-        let r = e.evaluate(&cmd("ls"), Decision::Allow, Path::new(PROJ));
+        let r = e.evaluate(&cmd("ls"), Decision::Allow, Path::new(PROJ), false);
         assert!(r.is_err(), "限流必须把死循环变成 Err → 上层 confirm");
         assert!(
             t0.elapsed() < std::time::Duration::from_secs(2),
@@ -298,7 +323,7 @@ mod tests {
     fn deep_recursion_is_bounded() {
         let e = compile("fn f(x) { f(x) } fn check(ctx) { f(1) }");
         assert!(
-            e.evaluate(&cmd("ls"), Decision::Allow, Path::new(PROJ))
+            e.evaluate(&cmd("ls"), Decision::Allow, Path::new(PROJ), false)
                 .is_err()
         );
     }
@@ -308,7 +333,7 @@ mod tests {
         // 未注册的「越权 API」在运行时不可达 → Err → 上层 confirm。
         let e = compile("fn check(ctx) { open(\"/etc/passwd\"); \"allow\" }");
         assert!(matches!(
-            e.evaluate(&cmd("ls"), Decision::Allow, Path::new(PROJ)),
+            e.evaluate(&cmd("ls"), Decision::Allow, Path::new(PROJ), false),
             Err(ScriptError::Runtime(_))
         ));
         // 语法错误在编译期暴露。
@@ -323,7 +348,7 @@ mod tests {
     fn contract_violation_on_non_decision_string() {
         let e = compile("fn check(ctx) { \"maybe\" }");
         assert!(matches!(
-            e.evaluate(&cmd("ls"), Decision::Allow, Path::new(PROJ)),
+            e.evaluate(&cmd("ls"), Decision::Allow, Path::new(PROJ), false),
             Err(ScriptError::Contract(_))
         ));
     }
@@ -359,38 +384,63 @@ mod tests {
         )
         .expect("compiles");
         assert_eq!(
-            e.evaluate(&cmd("git branch -d x"), Decision::Allow, Path::new(PROJ))
-                .unwrap(),
+            e.evaluate(
+                &cmd("git branch -d x"),
+                Decision::Allow,
+                Path::new(PROJ),
+                false
+            )
+            .unwrap(),
             Some(Decision::Confirm)
         );
         assert_eq!(
-            e.evaluate(&cmd("git branch"), Decision::Allow, Path::new(PROJ))
+            e.evaluate(&cmd("git branch"), Decision::Allow, Path::new(PROJ), false)
                 .unwrap(),
             None
         );
         assert_eq!(
-            e.evaluate(&cmd("git config a b"), Decision::Allow, Path::new(PROJ))
-                .unwrap(),
+            e.evaluate(
+                &cmd("git config a b"),
+                Decision::Allow,
+                Path::new(PROJ),
+                false
+            )
+            .unwrap(),
             Some(Decision::Confirm)
         );
         assert_eq!(
-            e.evaluate(&cmd("git config --list"), Decision::Allow, Path::new(PROJ))
-                .unwrap(),
+            e.evaluate(
+                &cmd("git config --list"),
+                Decision::Allow,
+                Path::new(PROJ),
+                false
+            )
+            .unwrap(),
             None
         );
         assert_eq!(
-            e.evaluate(&cmd("git reset --hard"), Decision::Allow, Path::new(PROJ))
-                .unwrap(),
+            e.evaluate(
+                &cmd("git reset --hard"),
+                Decision::Allow,
+                Path::new(PROJ),
+                false
+            )
+            .unwrap(),
             Some(Decision::Deny)
         );
         assert_eq!(
-            e.evaluate(&cmd("npx foo"), Decision::Allow, Path::new(PROJ))
+            e.evaluate(&cmd("npx foo"), Decision::Allow, Path::new(PROJ), false)
                 .unwrap(),
             Some(Decision::Confirm)
         );
         assert_eq!(
-            e.evaluate(&cmd("cat ../outside"), Decision::Allow, Path::new(PROJ))
-                .unwrap(),
+            e.evaluate(
+                &cmd("cat ../outside"),
+                Decision::Allow,
+                Path::new(PROJ),
+                false
+            )
+            .unwrap(),
             Some(Decision::Confirm)
         );
         // 知识库删光：查不到数据 → 各兜底分支不触发 → 无意见。
@@ -402,7 +452,12 @@ mod tests {
         .expect("compiles");
         assert_eq!(
             e_empty
-                .evaluate(&cmd("git branch -d x"), Decision::Allow, Path::new(PROJ))
+                .evaluate(
+                    &cmd("git branch -d x"),
+                    Decision::Allow,
+                    Path::new(PROJ),
+                    false
+                )
                 .unwrap(),
             None
         );
@@ -412,5 +467,51 @@ mod tests {
     fn missing_script_file_is_none_not_error() {
         let r = load_project_script(Path::new("D:/code/tmp/definitely-absent"), None).unwrap();
         assert!(r.is_none(), "TOML 自足：脚本缺失不是错误");
+    }
+
+    #[test]
+    fn allow_contract_rejects_script_allow() {
+        // v1 脚本无放行权：返回 allow = 契约违约（无条件兜底被结构性拒绝）。
+        let e = compile("fn check(ctx) { \"allow\" }");
+        assert!(matches!(
+            e.evaluate(&cmd("ls"), Decision::Allow, Path::new(PROJ), false),
+            Err(ScriptError::Contract(_))
+        ));
+        // 升级权仍在：confirm / deny 合法。
+        let e = compile(concat!(
+            "fn check(ctx) {",
+            "  if ctx.verdict == \"deny\" { \"deny\" } else { \"confirm\" }",
+            "}"
+        ));
+        assert_eq!(
+            e.evaluate(&cmd("ls"), Decision::Allow, Path::new(PROJ), false)
+                .unwrap(),
+            Some(Decision::Confirm)
+        );
+        assert_eq!(
+            e.evaluate(&cmd("sudo x"), Decision::Deny, Path::new(PROJ), false)
+                .unwrap(),
+            Some(Decision::Deny)
+        );
+    }
+
+    #[test]
+    fn pipe_to_shell_flag_reaches_script() {
+        // 管道拓扑由引擎原语计算，脚本只承载策略（谓词 3）。
+        let e = compile(concat!(
+            "fn check(ctx) {",
+            "  if ctx.pipe_to_shell { \"deny\" } else { \"\" }",
+            "}"
+        ));
+        assert_eq!(
+            e.evaluate(&cmd("sh"), Decision::Allow, Path::new(PROJ), true)
+                .unwrap(),
+            Some(Decision::Deny)
+        );
+        assert_eq!(
+            e.evaluate(&cmd("sh"), Decision::Allow, Path::new(PROJ), false)
+                .unwrap(),
+            None
+        );
     }
 }

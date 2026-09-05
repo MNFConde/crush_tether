@@ -382,15 +382,16 @@ pub fn decide(command: &str) -> Verdict {
 
 /// 测试辅助：以指定仓库根判定（单测不依赖环境变量）。
 pub fn decide_in(command: &str, project: &Path) -> Verdict {
-    decide_with(command, project, &classify)
+    decide_with(command, project, &|cmd, project, _| classify(cmd, project))
 }
 
 /// 规则注入式顶层判定：管线原语（解析拉平、管道 sink、组合裁决）固定，
-/// 单命令分类器由调用方注入（内置判定表或 `rules.toml` 查表）。
+/// 单命令分类器由调用方注入（内置判定表或 `rules.toml` 查表 + 脚本层）。
+/// 管道拓扑特征（整条命令行级）作为第三参传入分类器，供脚本谓词消费。
 pub fn decide_with(
     command: &str,
     project: &Path,
-    classify: &dyn Fn(&SimpleCommand, &Path) -> Verdict,
+    classify: &dyn Fn(&SimpleCommand, &Path, bool) -> Verdict,
 ) -> Verdict {
     let commands = match crate::cmd_parse::flatten_commands(command) {
         Ok(c) => c,
@@ -399,8 +400,9 @@ pub fn decide_with(
     if commands.is_empty() {
         return Verdict::confirm("empty command");
     }
-    if pipe_to_shell(command, &commands) {
+    let pipe = pipe_to_shell(command, &commands);
+    if pipe {
         return Verdict::deny("pipe to shell blocked");
     }
-    Verdict::combine(commands.iter().map(|c| classify(c, project)))
+    Verdict::combine(commands.iter().map(|c| classify(c, project, pipe)))
 }

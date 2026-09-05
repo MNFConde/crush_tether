@@ -19,11 +19,14 @@ use std::path::Path;
 pub const DEFAULT_RULES_TOML: &str = include_str!("templates/default-rules.toml");
 /// 默认 `knowledge.toml` 模板（= design.md「命令知识库」示例块）。
 pub const DEFAULT_KNOWLEDGE_TOML: &str = include_str!("templates/default-knowledge.toml");
+/// 默认 `rules.rhai` 模板（四类谓词；allow 契约见文件头，M3.2 定稿）。
+pub const DEFAULT_RULES_RHAI: &str = include_str!("templates/default-rules.rhai");
 
 /// 默认包文件清单（文件名 → 内容）。
 pub const DEFAULT_FILES: &[(&str, &str)] = &[
     ("rules.toml", DEFAULT_RULES_TOML),
     ("knowledge.toml", DEFAULT_KNOWLEDGE_TOML),
+    ("rules.rhai", DEFAULT_RULES_RHAI),
 ];
 
 /// 在 `<project_root>/.crush-tether/` 生成默认包；已存在的文件一律不动
@@ -79,6 +82,7 @@ mod tests {
     use crate::config::RulesFile;
     use crate::knowledge::KnowledgeBase;
     use crate::model::Decision;
+    use crate::script::RuleEngine;
     use std::path::PathBuf;
 
     struct TempDir(PathBuf);
@@ -114,15 +118,56 @@ mod tests {
     }
 
     #[test]
-    fn seeds_both_files_then_is_idempotent() {
+    fn seeds_all_pack_files_then_is_idempotent() {
         let proj = TempDir::new("seed");
-        assert_eq!(seed_defaults_if_absent(proj.path()).unwrap(), 2);
+        assert_eq!(seed_defaults_if_absent(proj.path()).unwrap(), 3);
         let rules_path = proj.path().join(".crush-tether").join("rules.toml");
         let before = std::fs::read_to_string(&rules_path).unwrap();
         assert_eq!(before, DEFAULT_RULES_TOML, "重复生成字节一致");
         // 已存在 → 不再写（written=0，内容不变）。
         assert_eq!(seed_defaults_if_absent(proj.path()).unwrap(), 0);
         assert_eq!(std::fs::read_to_string(&rules_path).unwrap(), before);
+    }
+
+    #[test]
+    fn default_rhai_compiles_and_carries_predicates() {
+        // 默认脚本必须能编译，且四类谓词在沙箱内行为正确（find 突变 / 管道
+        // deny / 写重定向升级；两态数据读知识库的完整链路在 e2e 覆盖）。
+        let e = crate::script::RhaiEngine::compile(
+            DEFAULT_RULES_RHAI,
+            std::path::PathBuf::from("D:/code/tmp/proj"),
+            None,
+        )
+        .expect("default rules.rhai compiles");
+        let c = |s: &str| {
+            crate::cmd_parse::flatten_commands(s)
+                .unwrap()
+                .into_iter()
+                .next()
+                .unwrap()
+        };
+        let p = std::path::Path::new("D:/code/tmp/proj");
+        // 2) find 突变
+        assert_eq!(
+            e.evaluate(&c("find . -delete"), Decision::Allow, p, false)
+                .unwrap(),
+            Some(Decision::Confirm)
+        );
+        // 3) 管道 sink → deny
+        assert_eq!(
+            e.evaluate(&c("sh"), Decision::Allow, p, true).unwrap(),
+            Some(Decision::Deny)
+        );
+        // 4) 写特征升级：allow + 写重定向 → confirm；无写特征不升级
+        assert_eq!(
+            e.evaluate(&c("ls"), Decision::Allow, p, false).unwrap(),
+            None
+        );
+        assert_eq!(
+            e.evaluate(&c("ls > out.txt"), Decision::Allow, p, false)
+                .unwrap(),
+            Some(Decision::Confirm)
+        );
     }
 
     #[test]
@@ -137,8 +182,8 @@ mod tests {
         .unwrap();
         assert_eq!(
             seed_defaults_if_absent(proj.path()).unwrap(),
-            1,
-            "只补缺的 knowledge.toml"
+            2,
+            "只补缺的 knowledge.toml 与 rules.rhai"
         );
         assert_eq!(
             std::fs::read_to_string(dir.join("rules.toml")).unwrap(),

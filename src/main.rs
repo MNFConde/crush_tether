@@ -152,10 +152,10 @@ fn main() -> ExitCode {
         }
     };
 
-    let verdict = engine::decide_with(&input.command, &project, &|cmd, project| {
+    let verdict = engine::decide_with(&input.command, &project, &|cmd, project, pipe_to_shell| {
         let mut v = lookup.classify(cmd, project);
         if let Some(script) = &script {
-            match script.evaluate(cmd, v.decision, project) {
+            match script.evaluate(cmd, v.decision, project, pipe_to_shell) {
                 Ok(Some(d)) => {
                     if d != v.decision {
                         v = Verdict {

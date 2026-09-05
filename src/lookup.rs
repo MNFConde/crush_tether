@@ -581,9 +581,10 @@ mod tests {
             }),
             None,
         );
-        let v = crate::engine::decide_with("ls && sudo rm x", &project, &|c, p| l.classify(c, p));
+        let v =
+            crate::engine::decide_with("ls && sudo rm x", &project, &|c, p, _| l.classify(c, p));
         assert!(v.decision == Decision::Deny, "任一 deny → 组合 deny");
-        let v = crate::engine::decide_with("ls && curl example.com", &project, &|c, p| {
+        let v = crate::engine::decide_with("ls && curl example.com", &project, &|c, p, _| {
             l.classify(c, p)
         });
         assert!(
