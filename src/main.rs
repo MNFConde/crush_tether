@@ -9,17 +9,20 @@
 
 use std::path::PathBuf;
 use std::process::ExitCode;
+use std::sync::Arc;
 
 use crush_tether::channel::{self, Agent};
 use crush_tether::config::{self, Layers};
 use crush_tether::engine;
 use crush_tether::lookup::RuleLookup;
 use crush_tether::model::Verdict;
+use crush_tether::script::RuleEngine;
 
 fn main() -> ExitCode {
     let mut agent = Agent::Crush;
     let mut mode = String::from("check");
     let mut config_arg: Option<String> = None;
+    let mut engine_arg: Option<String> = None;
 
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
@@ -37,8 +40,24 @@ fn main() -> ExitCode {
                     return fail_safe_confirm(agent);
                 }
             },
+            "--engine" => match args.next() {
+                Some(e) => engine_arg = Some(e),
+                None => {
+                    eprintln!("crush-tether: --engine requires an engine name");
+                    return fail_safe_confirm(agent);
+                }
+            },
             _ => {}
         }
+    }
+
+    // 脚本引擎选型（design.md「DSL 引擎（定稿）」）：v1 仅 rhai；未知引擎
+    // 属配置错误 → 告警 + fail-safe confirm，不静默退回默认引擎。
+    if let Some(e) = &engine_arg
+        && !crush_tether::script::engine_supported(e)
+    {
+        eprintln!("crush-tether: unsupported engine `{e}` (supported: rhai); fail-safe confirm");
+        return fail_safe_confirm(agent);
     }
 
     if mode == "serve" {
@@ -119,8 +138,40 @@ fn main() -> ExitCode {
         }
     };
 
+    // 脚本层：项目 rules.rhai（缺失 = 无脚本层，TOML 自足）。脚本承载条件
+    // 判断并可产生裁决，故编译/加载失败必须告警 + fail-safe confirm，不能
+    // 静默跳过（与知识库的降级策略相反）。
+    let script = match crush_tether::script::load_project_script(
+        &project,
+        kb.map(|k| Arc::new(k.clone())),
+    ) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("crush-tether: rules.rhai failed to load: {e}; fail-safe confirm");
+            return fail_safe_confirm(agent);
+        }
+    };
+
     let verdict = engine::decide_with(&input.command, &project, &|cmd, project| {
-        lookup.classify(cmd, project)
+        let mut v = lookup.classify(cmd, project);
+        if let Some(script) = &script {
+            match script.evaluate(cmd, v.decision, project) {
+                Ok(Some(d)) => {
+                    if d != v.decision {
+                        v = Verdict {
+                            decision: d,
+                            reason: Some("adjusted by rules.rhai".into()),
+                        };
+                    }
+                }
+                Ok(None) => {}
+                Err(e) => {
+                    eprintln!("crush-tether: script evaluation failed: {e}; fail-safe confirm");
+                    v = Verdict::confirm("script evaluation failed; fail-safe");
+                }
+            }
+        }
+        v
     });
 
     ExitCode::from(channel::emit(&verdict, agent) as u8)
