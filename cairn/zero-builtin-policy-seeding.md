@@ -1,11 +1,11 @@
 ---
 type: project_topic
 status: active
-summary: 零内置策略定稿：二进制纯引擎不内嵌规则，默认策略由项目侧生成的外部 rules.toml + rules.rhai 提供；生成触发、损坏留档、效力顺序等细节。
+summary: 零内置策略定稿：二进制纯引擎不内嵌规则，默认策略由项目侧生成的外部 rules.toml + rules.rhai 提供；生成触发、损坏留档、效力顺序等细节。默认包内容界定已被配置格式草案 v1 收窄（纯查表进 TOML，条件判断下沉脚本层）。
 tags: [crush_tether, architecture, rules-engine]
 contains: [decision, lesson]
 created: 2026-09-04
-updated: 2026-09-04
+updated: 2026-09-05
 related: [doc/design.md, cairn/rust-rewrite-notes.md]
 authoring_mode: ai_generated
 ---
@@ -18,7 +18,8 @@ P1 落地后判定表（READONLY/DESTRUCTIVE/GIT_* 等）以 Rust 常量写死�
 ## 当前结论
 
 - **二进制 = 纯引擎，零策略数据**：只实现解析/flatten/特征提取（`writes_file`/`path_escapes`/`pipe_to_shell` 等）/安全原语/管线/组合裁决；一行策略数据都不内嵌。
-- **默认策略 = 外部文件**：默认 `rules.toml`（可声明表达的：命令集合、flag 前缀、位置参数数、特征布尔）+ 默认 `rules.rhai`（跨参数逻辑：`find -delete/-exec` 突变、`git config` ≥2 位置参数写判定）。二进制内嵌的只是**生成模板**——生成源数据，不参与判定。
+- **默认策略 = 外部文件**：默认 `rules.toml` + 默认 `rules.rhai`（跨参数逻辑：`find -delete/-exec` 突变、`git config` ≥2 位置参数写判定）。二进制内嵌的只是**生成模板**——生成源数据，不参与判定。
+  - **更正（2026-09-05，随配置格式草案 v1）**：默认 `rules.toml` 的内容界定收窄为「无条件的纯查表」（`[local]`/`[global]` 双表三桶），原「flag 前缀、位置参数数、特征布尔」等声明层字段随条件判断下沉脚本层而取消；默认包结构以 `doc/design.md`「配置格式与脚本边界（草案 v1）」为准，待 P2/P3 验收后升格定稿。生成触发/留档/效力顺序等机制不受影响。
 - **生成触发**：按层寻找（全局 → 用户 → 项目 + `--config`/`CRUSH_TETHER_CONFIG`）后**三层合并仍无任何有效配置**才在项目 `.crush-tether/` 生成；任一层有效即尊重现状（避免将来全局/用户自定义被项目层默认值遮蔽）。
 - **效力顺序（用户明确）**：三层都有时，项目 > 用户 > 全局；不存在「全局默认粘性」。
 - **损坏 ≠ 缺失**：文件存在但解析失败 → 先改名留档 `rules.toml.bak-<时间戳>` 再生成默认 + stderr 告警；绝不覆盖销毁用户手改内容。

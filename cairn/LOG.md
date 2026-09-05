@@ -2,6 +2,15 @@
 
 This file records substantive progress in reverse-chronological order — newest entry at the top, right below this line. Keep each entry short — summary and pointer only; conclusions settle into `cairn/<topic>.md`.
 
+## 2026-09-05 · 配置格式草案 v1 纸面定稿（双表三桶查表 + 条件判断下沉脚本层）
+
+- 定案（草案，待 P2/P3 验收后升格）：`rules.toml` 顶层 `[local]`/`[global]` 双表——local 内 allow 带路径逃逸检查、global allow 豁免（团队统一放行出口）；每命令 allow/confirm/deny 三桶 + sub/flag 子键，flag 长写/简写显式并排（弃前缀匹配）；头部 `allow`/`confirm`/`deny` 裸列表 + `precedence`（桶间优先级可调）+ `default` 标量。
+- 分界原则收窄：**声明层零条件判断**（纯查表），两态子命令（branch/remote/tag/config）、`find` 突变、`git config` ≥2 位置参数、管道 sink、`curl|sh` 全部下沉脚本层；脚本 allow 契约限显式枚举、禁无条件兜底。
+- 配套：merge 改 token 级（高层胜出、低层补缺，弃集合并集/`[[rules]]` 前插）；新增 JSONL 裁决日志格式（command/decision/source.layer/source.entry/script.rule，默认开关 P4 定）。
+- 流程验证：多轮草案迭代（用户逐条拍板：简洁优先、条件判断归脚本、作用域即结构、配置自足），全部确认后才写入文档；未推进任何 P2 实现。
+- 更正登记：design.md 旧定稿处（merge 语义/零内置策略默认包界定/命令建模规则链）已加【已替换】指针，不静默覆盖。
+- Details: 见 `doc/design.md`「配置格式与脚本边界（草案 v1）」（含更正登记节）。
+
 ## 2026-09-04 · 定稿零内置策略与默认配置生成（设计变更）
 
 - 定案：**二进制纯引擎、零内置策略**——原「判定表编译进 engine.rs / 全局层=编译内置默认」设定被推翻；默认策略由项目侧生成的外部 `rules.toml` + `rules.rhai` 提供，内嵌的只是生成模板（不参与判定）。

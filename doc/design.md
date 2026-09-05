@@ -119,6 +119,7 @@ check（兜底/冒烟）：同一二进制单发，不碰端点，本进程全�
 - 显式覆盖：`--config <path>` 或环境变量 `CRUSH_TETHER_CONFIG`，优先级高于所有层。
 - 项目配置最可靠来源为 `CRUSH_PROJECT_DIR`（Crush 对 hook 注入，且为路径逃逸检查基准）；缺失时从 cwd 逐级上溯最近 `.git` 或 `.crush-tether/`。
 - merge 语义：标量覆盖；命令集合用并集（只增不减，`exclude` 表可显式剔除）；`[[rules]]` 在高层**前插**（first-match-wins）。
+  - **【已替换】（2026-09-05 草案更正）**：merge 语义与规则链已被[配置格式与脚本边界（草案 v1）](#配置格式与脚本边界草案-v1)替换——命令集合并集 → token 级高层胜出低层补缺；`[[rules]]` 规则链 → `[local]`/`[global]` 双表三桶查表。待 P2 实现验收后升格定稿。
 
 ### 配置拆分（定稿）
 
@@ -135,6 +136,7 @@ check（兜底/冒烟）：同一二进制单发，不碰端点，本进程全�
 > 定稿（2026-09-04）：**软件本身不提供任何规则**——二进制只实现引擎能力（解析/flatten/特征提取/安全原语/管线/组合裁决），不含一行策略数据。默认策略也由**外部配置文件 + 脚本**提供，以项目侧生成的形态落地。
 
 - **默认策略 = 外部数据**：默认 `rules.toml`（能声明表达的：命令集合、flag 前缀、位置参数数、特征布尔等）+ 默认 `rules.rhai`（声明层表达不了的跨参数逻辑：`find` 突变检测、`git config` ≥2 位置参数写判定等）以**模板内嵌于二进制**——模板只是生成源数据，不参与判定，不构成内置策略。
+  - **【已替换】（2026-09-05 草案更正）**：默认 `rules.toml` 的内容界定已由[配置格式与脚本边界（草案 v1）](#配置格式与脚本边界草案-v1)收窄——无条件的纯查表进 TOML（不再有「flag 前缀」「位置参数数」这类声明层字段），一切条件判断下沉脚本层；默认包的具体结构以草案 v1 为准，待 P2/P3 验收后升格。
 - **生成触发**：按层寻找配置（全局 → 用户 → 项目，含 `--config`/`CRUSH_TETHER_CONFIG` 显式指定）后**三层合并仍得不到任何有效配置**时，才在项目 `.crush-tether/` 写出默认 `rules.toml` + `rules.rhai`；**任一层存在有效配置即尊重现状，不生成**（避免将来全局/用户自定义被项目层默认值遮蔽）。
 - **损坏 ≠ 缺失**：配置文件存在但解析失败时，先把原文件改名留档（`rules.toml.bak-<时间戳>`）再生成默认，并 stderr 告警——满足「损坏也重生成默认」，但绝不覆盖销毁用户手改内容。
 - **全局/用户层生成延后**：v1 只做项目层生成；全局/用户层默认文件由命令提供（如 `crush-tether init --global`，后期设计）。
@@ -245,6 +247,8 @@ struct Cmd {
 
 规则 = 匹配器(`when`) → 决策(`then`)，有序链、first-match-wins。同一命令的多态（如 `git config` 读写两态）用多条规则按序评估。复合命令（`echo hi && rm -rf /`）经 flatten 逐节点分类后再组合裁决（任一 deny→deny；全 allow→allow；否则 confirm）。
 
+> **【已替换】（2026-09-05 草案更正）**：`when→then` 规则链与 first-match-wins 已被[配置格式与脚本边界（草案 v1）](#配置格式与脚本边界草案-v1)的三桶查表替换——声明层为纯查表（`[[rules]]`/`DataRule` 不再从配置实例化，改为查表结构），条件判断（两态子命令、参数检查）改由脚本层承载；组合裁决语义（任一 deny→deny 等）不变。`Cmd` 特征对象与 `Rule` trait 的管线位置不变，具体形态随 P2/P3 实现修订。
+
 ### 筛查管线与编译期组装（定稿）
 
 ```
@@ -296,6 +300,108 @@ pub trait Channel {
   - deny → exit 2 + stderr，**或** JSON `permissionDecision:"deny"` exit 0
 - 规则：`deny > defer > ask > allow`；exit 2 会覆盖 JSON。
 - **Crush 兼容**：Crush 接受 Claude 的 `hookSpecificOutput` 信封，仅 `updated_input` 语义不同（Crush 浅合并 vs Claude 全替换）。ClaudeCode adapter 可复用 Crush 大部分输出逻辑，仅改 env/输入键名与 `updated_input` 语义。
+
+## 配置格式与脚本边界（草案 v1）
+
+> [!IMPORTANT]
+> **状态：草案，非定稿（2026-09-05）**。本节在 P2 实现前先纸面钉一版格式，作为 P2/P3 的实现基准；实现期发现表达力不足时就地修订本节并留更正记录，89 条回归用例以「引擎 + 默认配置 fixture」全绿后升格定稿。与既有定稿的冲突见本节末尾[更正登记](#更正登记对既有定稿)。
+
+### 设计原则（草案定调）
+
+- **声明层零条件判断**：`rules.toml` 只做「命令归属查表」（无一处 if/参数检查）；一切带条件判断的分类（两态子命令、参数内容检查、跨命令检查）全部下沉脚本层。这是对定稿「能声明表达的进 TOML」的收窄，见[更正登记](#更正登记对既有定稿)。
+- **命令中心**：配置按「命令 → 子命令/flag 分桶」组织，不设命名命令集合与规则链（替代定稿的 `[[rules]]` + first-match-wins）。
+- **作用域即结构**：文件顶层分 `[local]` / `[global]` 两表——`[local]` = 效果不出项目（其内 allow 一律带路径逃逸检查）；`[global]` = 允许影响项目外（其内 allow 豁免逃逸检查，如团队统一放行的 docker）。
+
+### `rules.toml` 结构（草案）
+
+```toml
+# 裸键区（所有表头之前）
+default    = "confirm"                      # 未命中任何配置的命令
+precedence = ["deny", "confirm", "allow"]   # 桶间优先级,可调;跨层 merge 时整表覆盖
+
+# ═══ [local]:效果不出项目 —— 此表内所有 allow 默认带路径逃逸检查 ═══
+[local]
+allow   = ["ls", "cat", "grep", "rg", "find", "head", "tail", "wc", "pwd", "echo",
+  "printf", "which", "file", "stat", "sort", "uniq", "comm", "diff", "md5sum",
+  "sha1sum", "sha256sum", "sha512sum", "date", "env", "du", "nl", "less", "more",
+  "tree", "ls-files", "rev-parse",
+  "cargo", "go", "gofmt", "black", "ruff", "dprint", "make", "just", "pytest",
+  "touch", "mkdir"]
+confirm = ["rm", "pip", "pip3", "npx", "curl", "wget"]
+
+[local.git]
+allow.sub   = ["status", "log", "diff", "show", "branch", "--version", "remote",
+  "ls-files", "config", "rev-parse", "blame", "shortlog", "tag", "help", "describe",
+  "check-ignore", "show-ref", "for-each-ref", "cat-file", "ls-tree", "diff-tree",
+  "name-rev", "merge-base", "rev-list", "diff-index", "diff-files", "check-ref-format",
+  "add", "commit", "checkout", "switch", "mv"]
+confirm.sub = ["rm", "restore", "reset"]
+deny.sub    = ["push", "pull", "reset", "clean", "rebase", "revert", "cherry-pick",
+  "fetch", "gc", "prune", "filter-branch", "reflog"]
+deny.flag   = ["--output", "-o", "--pretty", "--format", "--config", "-c",
+  "--force", "-f", "--hard", "--in-place", "-w", "-h"]
+
+[local.npm]
+confirm.sub = ["install", "i", "ci", "add", "uninstall", "remove", "update", "publish"]
+default     = "allow"     # 节内 default 覆盖顶层 default(npm run 等其余子命令放行)
+
+[local.pnpm]
+confirm.sub = ["install", "add", "remove", "upgrade", "update", "publish"]
+default     = "allow"
+
+# ═══ [global]:允许影响项目外 —— 此表内 allow 豁免逃逸检查 ═══
+[global]
+allow = []    # 默认配置为空;项目特例/团队统一放行(如 docker)写这里,随项目提交
+```
+
+- **三桶**：每命令一节（或头部裸列表），`allow` / `confirm` / `deny` 三桶 + `sub`（子命令）/ `flag`（flag）两个子键；flag 长写与简写**并排显式枚举**，不做前缀推断。
+- **deny/confirm 单份**：deny/confirm 是安全侧，与作用域无关（`git push` 在项目内同样该拒），全部写在 `[local]` 下；`[global]` 表实际只承载 allow。
+- **查表语义**：命令先定位表（命中 `[global].allow` 的命令整命令豁免，同命令两表皆现时 `[global]` 优先——全局放行是更强的承诺）；同表内按 `precedence` 顺序查桶，先命中先裁决。
+- **兜底**：未命中任何配置 → 顶层 `default`；各节可用节内 `default` 覆盖。
+
+### 脚本层职责边界（草案）
+
+一切条件判断进脚本（`rules.rhai`），分四类：
+
+1. **两态子命令**：`git branch/remote/tag/config` 的 action-token 命中 → confirm（纯读保持 TOML allow）；`git config` ≥2 位置参数 = 写 → confirm。
+2. **参数内容检查**：`find` 带 `-delete/-exec/-execdir/-ok/-okdir` → confirm；`curl/wget` 参数含 `|` → deny（纯拉取维持 confirm）。
+3. **跨命令检查**：管道 sink（管道下一段为 bash/sh/zsh/python/python3/perl/php/ruby）→ 整体 deny。
+4. **原语组合升级**：readonly/allow 命中但带写 flag 或写重定向 → confirm；`[local]` allow 命中但路径逃逸 → confirm。
+
+- **引擎保留原语**（脚本可组合、不可绕过）：写重定向检测（丢弃式 `/dev/null` 与 fd dup/close 豁免）、写 flag 检测（读 TOML flag 桶）、路径逃逸检查（`[local]`/`[global]` 表的豁免语义在引擎实现）、unparseable → confirm 兜底、复合命令组合裁决（任一 deny→deny / 全 allow→allow / 否则 confirm）。
+- **脚本 allow 契约（新增待定稿）**：允许脚本对**显式枚举的命令**返回 allow（支撑项目侧 global 放行特例）；**禁止无条件 allow 兜底**（防一行脚本架空门禁）。
+
+### 日志（格式先行，开关位置 P4 定）
+
+JSONL 一行一条裁决，字段覆盖：命令原文、结果、触发层级、触发条件：
+
+```json
+{"ts":"2026-09-05T14:03:22+08:00","mode":"serve","agent":"crush",
+ "command":"git push --force origin main",
+ "decision":"deny","reason":"git.deny.sub: push",
+ "source":{"layer":"project","file":".crush-tether/rules.toml",
+           "entry":"git.deny.sub","match":"push"},
+ "script":{"file":null,"rule":null}}
+```
+
+- `source.layer` ∈ global/user/project/explicit/script/default；脚本裁决填 `script.file`/`script.rule`。
+- serve 模式由 serve 单点写（复用行协议已有字段），hook 降级路径自写一行；人读视图由后续 `crush-tether log` 子命令渲染 JSONL（人看视图、程序读原文）。默认开/关在 P4 落地 serve 时定。
+
+### merge 语义（新定义，token 级）
+
+- 优先级不变：项目 > 用户 > 全局（见 [配置分层与优先级（定稿）](#配置分层与优先级定稿)）。
+- 同 `bin` 下**逐 token 合并**：每个 sub/flag token 以**最高层所在桶为准**，高层未提及的 token 由低层补齐；`default`/`precedence` 与头部裸列表为标量，整表高层覆盖。例：用户层 allow `git log`、项目层 deny `git log --output` 可同时成立。
+
+## 更正登记（对既有定稿）
+
+> 以下为对本文档已定稿措辞的更正（草案阶段调整，非推翻方向），原定稿表述处已加更正指针，不静默覆盖：
+
+1. 「能声明表达的进 `rules.toml`」→ 收窄为「**无条件的纯查表**进 `rules.toml`，一切条件判断进脚本」。
+2. 「`[[rules]]` 规则链 + first-match-wins」→ **删除**，替换为「`[local]`/`[global]` 双表 + 每命令三桶查表 + 可调桶间优先级 `precedence`」。
+3. 「命令集合并集（只增不减，`exclude` 表剔除）」→ 替换为 **token 级高层胜出、低层补缺**；无需 `exclude` 表（高层把 token 挪桶即等效剔除）。
+4. guard.py `WRITE_FLAG_PREFIXES` 前缀匹配（`--output=` 等）→ 放弃，flag 长写/简写显式并排枚举。
+5. guard.py `WRITE_FLAGS` 中的 `-h` 疑似笔误（`git -h` 可改写行为的判定依据待查），草案 1:1 保留，实现期确认后剔除并在此登记。
+6. 作用域由「每命令 scope 属性」方案（曾讨论）收敛为 `[local]`/`[global]` 顶层双表。
 
 ## 待定决策（见 cairn/ROADMAP.md）
 

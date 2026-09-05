@@ -1,6 +1,6 @@
 # crush_tether Roadmap
 
-**Current focus**: P0+P1 已落地（Rust 重写 + 回归用例全绿）；设计变更定稿「零内置策略 + 默认配置生成」（见 design.md 同名节）；下一步 P2 配置声明层（含生成），或按需先做 P4 serve。
+**Current focus**: P0+P1 已落地（Rust 重写 + 回归用例全绿）；配置格式草案 v1 已纸面定稿（`[local]`/`[global]` 双表三桶查表 + 条件判断下沉脚本层，见 design.md「配置格式与脚本边界（草案 v1）」，待 P2/P3 验收后升格定稿）；下一步 P2 按草案 v1 实现配置声明层，或按需先做 P4 serve。
 
 ## 推进计划（P0–P6）
 
@@ -10,9 +10,9 @@
   - 验收：`cargo clippy -D warnings` 零告警。
 - [x] **P1 分类核心（check 模式最小闭环）**：`cmd_parse`（tree-sitter-bash flatten + 写重定向/fd dup/路径逃逸检测）+ 判定表平移 + `Verdict::combine`；`channel` Crush/ClaudeCode 契约输出；`check` 模式（stdin JSON → allow JSON/静默/exit 2）。
   - 验收：`tests/guard_regression.rs` 89 用例全绿（test_guard.py 1:1 平移）；release 单次冷启动 ~9ms（budget <10ms 达标）；冒烟四形态（allow/deny/管道 sink/写 flag confirm）正确。
-- [ ] **P2 配置声明层**：`rules.toml` 三层 merge（项目 > 用户 > 全局，效力同序）+ `[[rules]]` 实例化进 Match 链；`--config`/`CRUSH_TETHER_CONFIG` 覆盖；**默认配置生成 v1（项目层）**：三层皆缺有效配置 → 项目 `.crush-tether/` 生成默认 `rules.toml` + `rules.rhai`（损坏先留档 `.bak-<时间戳>` 再生成，temp+rename 原子，生成动作不经规则链）。
-  - 验收：三层覆盖/并集/前插/效力顺序单测全绿；样例仓库自定义规则改变裁决生效；生成触发（三层皆缺 vs 任一层有效）、损坏留档、幂等重新生成单测全绿；生成出的默认 `rules.toml` 能完整承载现有判定表中可声明表达的部分。
-- [ ] **P3 脚本层（Rhai 默认）**：`RuleEngine` trait + Rhai 引擎（`max_operations` 限流）+ `rules.rhai` 进管线；`--engine` 切换；默认 `rules.rhai` 承载声明层表达不了的语义（`find` 突变检测、`git config` ≥2 位置参数写判定等），**随后删除 engine.rs 中内置判定表残留，完成零内置策略迁移**。
+- [ ] **P2 配置声明层**：`rules.toml` 三层 merge（项目 > 用户 > 全局，效力同序）按**草案 v1 token 级合并**（高层胜出、低层补缺）+ `[local]`/`[global]` 双表三桶查表（详见 design.md「配置格式与脚本边界（草案 v1）」）；`--config`/`CRUSH_TETHER_CONFIG` 覆盖；**默认配置生成 v1（项目层）**：三层皆缺有效配置 → 项目 `.crush-tether/` 生成默认 `rules.toml` + `rules.rhai`（损坏先留档 `.bak-<时间戳>` 再生成，temp+rename 原子，生成动作不经规则链）。
+  - 验收：三层 token 级覆盖/补缺/效力顺序单测全绿；样例仓库自定义规则改变裁决生效；生成触发（三层皆缺 vs 任一层有效）、损坏留档、幂等重新生成单测全绿；生成出的默认 `rules.toml` 按草案 v1 结构完整承载判定表中无条件查表可表达的部分（其余下沉 P3 脚本层）。**验收通过后草案 v1 升格定稿。**
+- [ ] **P3 脚本层（Rhai 默认）**：`RuleEngine` trait + Rhai 引擎（`max_operations` 限流）+ `rules.rhai` 进管线；`--engine` 切换；脚本层按草案 v1 承载**全部条件判断**（两态子命令、`find` 突变、`git config` ≥2 位置参数写判定、管道 sink、`curl|sh`、写特征升级类），脚本 allow 契约限显式枚举、禁无条件兜底；**随后删除 engine.rs 中内置判定表残留，完成零内置策略迁移**。
   - 验收：脚本可组合安全原语但不可绕过；死循环被限流兜底；`tests/guard_regression.rs` 89 用例改为「引擎 + 默认规则 fixture」驱动后仍全绿（默认配置包成为验收对象）。
 - [ ] **P4 常驻服务 + 热重载**：`hook`/`serve` 模式（命名端点 + connect-or-spawn + 独占 bind 单实例 + `--idle-exit`）；`notify` + debounce + `Arc<RuleSet>` 原子换快照。
   - 验收：改规则文件不重启即生效；并发冷启动不重复起 serve；常驻内存 <10MB、P95 < 5ms。
@@ -28,6 +28,7 @@
 - [x] 定稿运行模式与热重载方案（命名端点 + Arc 快照热重载，见 design.md「运行模式与配置热重载」）
 - [x] Rust 重写 P0+P1（check 模式 + 回归用例 9/9 组全绿 + 质量门禁全过）
 - [x] 定稿**零内置策略 + 默认配置生成**（二进制纯引擎；默认策略 = 项目侧生成的外部 `rules.toml` + `rules.rhai`；三层皆缺才生成、任一层有效即尊重；损坏留档后重新生成；全局/用户层生成由命令提供后期设计；效力顺序项目 > 用户 > 全局）
+- [x] 纸面定稿**配置格式草案 v1**（2026-09-05：`[local]`/`[global]` 双表 + 每命令 allow/confirm/deny 三桶查表 + 头部裸列表/precedence/default 标量；声明层零条件判断，两态子命令/find 突变/管道 sink 等全部下沉脚本层；token 级 merge；JSONL 裁决日志格式先行；见 design.md「配置格式与脚本边界（草案 v1）」——待 P2/P3 验收后升格定稿）
 
 ## Open Questions
 
