@@ -1,15 +1,20 @@
-//! 配置层：显式覆盖入口、单文件加载与解析校验。
+//! 配置层：显式覆盖入口、三层发现、字段级继承合并与单文件解析。
 //!
-//! 分层语义（项目 > 用户 > 全局、字段级继承合并）在 M2.2 落地；本模块当前
-//! 提供 `--config` / `CRUSH_TETHER_CONFIG` 显式覆盖解析（优先级高于所有层）
-//! 与单文件解析。结构与语义单一事实源：`doc/design.md`「配置格式与脚本
-//! 边界（草案 v1）」。
+//! 结构与语义单一事实源：`doc/design.md`「配置格式与脚本边界（草案 v1）」。
+//! - `schema`：rules.toml 数据模型与严格解析（未知键报错可定位）。
+//! - `discover`：项目 > 用户 > 全局三层发现（损坏 ≠ 缺失，D-03）。
+//! - `merge`：字段级继承合并（未定义即继承 / 定义即覆盖 / 增删，D-02）。
+//! - `--config` / `CRUSH_TETHER_CONFIG` 显式覆盖优先于所有层。
 
+pub mod discover;
+pub mod merge;
 pub mod schema;
 
 use std::fmt;
 use std::path::{Path, PathBuf};
 
+pub use discover::{FoundLayers, discover_layers, find_project_root, find_project_root_from};
+pub use merge::{DEFAULT_PRECEDENCE, Dims, Layers, MergedCommand, MergedRules, MergedScope, merge};
 pub use schema::{
     BucketSpec, CommandSection, ConfigError, ListField, RulesFile, SUPPORTED_VERSION, ScopeBuckets,
     ScopeTable,
