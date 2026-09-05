@@ -2,6 +2,13 @@
 
 This file records substantive progress in reverse-chronological order — newest entry at the top, right below this line. Keep each entry short — summary and pointer only; conclusions settle into `cairn/<topic>.md`.
 
+## 2026-09-06 · M3.2 落地：默认 rules.rhai 四类谓词 + allow 契约定稿
+
+- 默认包并入 rules.rhai（M2.6 挂账闭环）：四类谓词 = 两态子命令（数据读知识库）/ find 突变 / 管道 sink（引擎算拓扑 ctx.pipe_to_shell + 脚本承载策略 + curl/wget 参数含 |）/ 写特征升级（allow + 写重定向 → confirm）。
+- **allow 契约定稿（更正登记 10，与原方向偏离）**：脚本 v1 无放行权——返回 allow 即契约违约 → fail-safe confirm。理由：图灵完备脚本上「禁无条件兜底」无法机械校验（`if true` 平凡绕过），结构性禁止才有可保证性质；[global] 放行特例由 TOML 承载；条件 allow 为后续扩展（须配机械校验）。
+- **知识库删光语义**：两态谓词 kb_present 失效 → 有子命令的 allow 一律 confirm（M3.2 验收）；查表层 literal 命中不受影响（M2.4 语义）——两层各自成立。
+- 128 测试全绿。commit 8443e23。Details: `src/config/templates/default-rules.rhai`、`src/script.rs`、`tests/script_engine.rs`。
+
 ## 2026-09-06 · M3.1 落地：Rhai 脚本层引擎 + RuleEngine trait
 
 - `script.rs`：trait 开闭落点（v1 RhaiEngine）；限流按定稿（max_operations 100k / call_levels 64 / expr_depths / string+array 上限）；原语 = path_escapes / inside_repo + 知识库数据源 kb_*（删光 → 空数据脚本自兜底）；沙箱无 IO API。
