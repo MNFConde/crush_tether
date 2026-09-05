@@ -2,6 +2,14 @@
 
 This file records substantive progress in reverse-chronological order — newest entry at the top, right below this line. Keep each entry short — summary and pointer only; conclusions settle into `cairn/<topic>.md`.
 
+## 2026-09-06 · M3.1 落地：Rhai 脚本层引擎 + RuleEngine trait
+
+- `script.rs`：trait 开闭落点（v1 RhaiEngine）；限流按定稿（max_operations 100k / call_levels 64 / expr_depths / string+array 上限）；原语 = path_escapes / inside_repo + 知识库数据源 kb_*（删光 → 空数据脚本自兜底）；沙箱无 IO API。
+- 契约：`fn check(ctx) -> ""|allow|confirm|deny`；ctx = bin/sub/words/args/verdict/writes_redirect/project。AST 编译一次缓存（serve 复用 P4）。
+- 策略方向对比：**脚本损坏 → fail-safe confirm**（脚本产生裁决，不能跳过）；**知识库损坏 → 降级字面查表**（不产生裁决）——两类数据文件损坏语义相反，已在代码注释与测试钉死。
+- `--engine` 接入：未知引擎告警 + confirm 不静默回退。13 例验收全绿（含 e2e 死循环限流/越权不可达/脚本改判）。122 测试全绿。commit 93e38a8。
+- Details: `src/script.rs`、`tests/script_engine.rs`、`cairn/ROADMAP.md` M3.1 条。
+
 ## 2026-09-06 · M2.7 落地：样例端到端验收 + 草案 v1 升格定稿（P2 收口）
 
 - `tests/sample_repo_e2e.rs`：全链路（发现→合并→归一→查表→组合）在真实二进制上验收——默认包推荐值展示（`-h` 保留 confirm、`git reset` confirm、`--hard` 双命中合成 deny、`go run` 落 confirm）、覆盖写法改判、增删写法跨层改判（用户层 -h confirm 被项目层 remove 剔除后 status -h 变 allow）。
