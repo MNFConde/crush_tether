@@ -2,6 +2,13 @@
 
 This file records substantive progress in reverse-chronological order — newest entry at the top, right below this line. Keep each entry short — summary and pointer only; conclusions settle into `cairn/<topic>.md`.
 
+## 2026-09-06 · M3.3 落地：删内置判定表 + 89 用例迁移（P3 收口，本次授权完成）
+
+- `engine.rs` 收缩为纯管线原语（解析拉平 / 管道拓扑 / decide_with 注入式 / 组合裁决）；guard.py 判定表平移全部删除，零内置策略收口。「管道 → deny」策略移至默认 rules.rhai 谓词 3。
+- `tests/guard_regression.rs` 改「引擎 + 默认规则 fixture」驱动（tests/fixture：默认包三模板 → 合并 → 查表 → 脚本 → 组合，与二进制管线一致）；断言冲突按 D-05 以草案为准逐条登记变更记录（文件头部表）：remote/tag 写形态与 ls --format=json 落 allow（默认知识库缺口，补数据须先修订 design.md 示例）、git reset 降 confirm（草案推荐值）、mkfs/dd/shutdown/sudo 降 confirm（DESTRUCTIVE 表不入二进制）。
+- **挂账**：默认知识库缺 remote/tag write_tokens、默认桶缺 sudo/破坏性工具 deny 条目——均须先修订 design.md 定稿示例再动模板（留待用户/后续授权）。
+- 128 测试全绿 + 全门禁过。commit 82cf80e。授权范围（M2.1–M3.3）完成。
+
 ## 2026-09-06 · M3.2 落地：默认 rules.rhai 四类谓词 + allow 契约定稿
 
 - 默认包并入 rules.rhai（M2.6 挂账闭环）：四类谓词 = 两态子命令（数据读知识库）/ find 突变 / 管道 sink（引擎算拓扑 ctx.pipe_to_shell + 脚本承载策略 + curl/wget 参数含 |）/ 写特征升级（allow + 写重定向 → confirm）。

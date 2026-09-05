@@ -1,6 +1,6 @@
 # AGENTS.md
 
-crush_tether —— Crush 命令级 bash 权限门（Rust 实现 crush-guard 独立化/重写）。当前状态：**P0–P2 已落地**（分类核心 + check 模式 + 89 条回归用例全绿；配置 v1 定稿：解析 / 三层字段级继承合并 / 双表三桶查表 / 知识库归一 / 双层 lint / 默认包生成 + 样例端到端），P3 脚本层（Rhai）进行中；格式规范见 [doc/design.md](doc/design.md)，决策论证见 [doc/decisions.md](doc/decisions.md)，里程碑见 [cairn/ROADMAP.md](cairn/ROADMAP.md)。
+crush_tether —— Crush 命令级 bash 权限门（Rust 实现 crush-guard 独立化/重写）。当前状态：**P0–P3 已落地**（分类核心 + 配置 v1 定稿：解析 / 三层合并 / 查表 / 知识库归一 / lint / 默认包生成；Rhai 脚本层 + 默认 rules.rhai 四类谓词；内置判定表已删除，89 条回归用例改默认包 fixture 驱动全绿），P4+（serve 生命周期等）见 [cairn/ROADMAP.md](cairn/ROADMAP.md)；格式规范见 [doc/design.md](doc/design.md)，决策论证见 [doc/decisions.md](doc/decisions.md)。
 
 > 本项目使用 Project Cairn 组织项目知识：Cairn 全套规则（初始化配置/阅读顺序/文档职责/冲突仲裁/知识库消费反射/知识沉淀规则）见 `cairn/AGENTS.md`。
 > 本机装有 project-cairn skill 且仓库存在 `cairn/` 时生效；否则视为不适用，跳过。
