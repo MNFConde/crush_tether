@@ -2,6 +2,14 @@
 
 This file records substantive progress in reverse-chronological order — newest entry at the top, right below this line. Keep each entry short — summary and pointer only; conclusions settle into `cairn/<topic>.md`.
 
+## 2026-09-06 · M2.4 落地：知识库 main + 别名归一
+
+- `knowledge.rs`：10 槽位封闭集解析（严格模式）+ 加载期防环。语义发现：**子命令别名吸收 sub 槽位、命令别名保留 sub → 归一状态中 sub 只减不增，任何环必退化为纯命令别名环**（防环校验只需覆盖命令链 + same_flag 链，已注释钉死）。
+- 归一接入查表：pip3→pip、npm exec/x / pnpm dlx → npx、same_flag 等价类两侧规范形化（单边配置双边生效）、takes_value 剥值三形态（`--output=x`/`-o x`/`-oX`）；归一只改名字，逃逸检查用原始参数；`classify_traced` 输出归一链（P4 日志 kb 字段）。
+- 知识库损坏 ≠ 规则损坏：按「缺失 + 告警」降级为字面查表，不触发 fail-safe（知识库不产生裁决）。KB 顶层是「version + 任意 [bin] 表头」，须 ScopeTable 式 visit_map 而非固定字段（同 M2.1 教训）。
+- 新增 17 例全绿（含 design.md knowledge 示例提取解析 + 端到端 2 例）。commit a616f02。
+- Details: `src/knowledge.rs`、`src/lookup.rs`、`cairn/ROADMAP.md` M2.4 条。
+
 ## 2026-09-06 · M2.3 落地：双表三桶查表 + 多命中合成，check 主路径翻转
 
 - `lookup.rs`：查表顺序按草案钉死——`[global].allow` 整命令豁免（两表皆现 global 优先）＞ 同层命令节遮蔽裸列表 ＞ 头部裸列表按 precedence；节内多维度命中按 precedence 有序合成（`git show --output=x`→confirm、`git reset --hard` 双命中取 deny）；`[local]` allow 命中一律带逃逸检查；default 链 = 节内 → 顶层 → confirm 恒链尾。
