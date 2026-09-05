@@ -2,6 +2,12 @@
 
 This file records substantive progress in reverse-chronological order — newest entry at the top, right below this line. Keep each entry short — summary and pointer only; conclusions settle into `cairn/<topic>.md`.
 
+## 2026-09-06 · 执行授权登记 + 沉淀触发扩展
+
+- 用户授权 P2 开工 → P3 收尾（M2.1–M3.3）：每里程碑 ≥1 commit、大改动按功能拆分；外部写入边界裁定——构建缓存（cargo registry / advisory DB / rustup 下载）不算禁写对象，P3 引入 rhai 无阻。
+- 沉淀纪律增补（cairn/AGENTS.md）：每次提交前、上下文临近压缩时各做一次 Cairn 沉淀检查，防长任务压缩丢失应沉淀信息。
+- Details: `cairn/ROADMAP.md`「推进节奏」、`cairn/AGENTS.md`「知识沉淀规则」。
+
 ## 2026-09-06 · P2–P6 里程碑细化（逐项验收标准入 ROADMAP）
 
 - ROADMAP 推进计划细化：P2 7 项（M2.1–M2.7）/ P3 3 项 / P4 3 项 / P5 2 项 / P6 3 项，每项带验收标准；原阶段级验收并入对应子项。
