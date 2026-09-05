@@ -31,7 +31,12 @@ crush_tether —— Crush 命令级 bash 权限门（Rust 实现 crush-guard 独
 ## 质量门禁
 
 - `cargo fmt --check` → `cargo clippy -- -D warnings` → `cargo test` → `cargo audit`（需 `cargo install cargo-audit --locked`）。
-- 单测重点在核心逻辑（平台无关）；提交前用环境中对应语言的 skill 审查改动，按审查结果修正后再提交。
+- 单测重点在核心逻辑（平台无关）；skill 相关约定见下节「项目特化约束（skill 使用）」。
+
+## 项目特化约束（skill 使用）
+
+- **实现前参照**：实现 Rust 代码前按需参照环境中对应 skill 的模式——`rust-best-practices`（惯例与 API 用法）、`rust-testing`（测试组织与模式）、`rust-async-patterns`（涉及异步时）——第一次就写成惯例形态，不等提交前审查返工。
+- **提交前审查**：提交前用环境中对应语言的 skill 审查改动，按审查结果修正后再提交（自质量门禁条目移入本节，2026-09-06）。
 
 ## 工具链钉版
 

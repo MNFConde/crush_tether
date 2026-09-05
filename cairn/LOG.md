@@ -2,6 +2,11 @@
 
 This file records substantive progress in reverse-chronological order — newest entry at the top, right below this line. Keep each entry short — summary and pointer only; conclusions settle into `cairn/<topic>.md`.
 
+## 2026-09-06 · skill 使用约定单列（实现前参照 + 提交前审查）
+
+- 根 AGENTS.md 新增「项目特化约束（skill 使用）」节：实现 Rust 代码前按需参照 rust 系 skill（rust-best-practices / rust-testing / rust-async-patterns）写成惯例形态；提交前 skill 审查条目自质量门禁移入本节，集中维护。
+- Details: `AGENTS.md`「项目特化约束（skill 使用）」。
+
 ## 2026-09-06 · 执行授权登记 + 沉淀触发扩展
 
 - 用户授权 P2 开工 → P3 收尾（M2.1–M3.3）：每里程碑 ≥1 commit、大改动按功能拆分；外部写入边界裁定——构建缓存（cargo registry / advisory DB / rustup 下载）不算禁写对象，P3 引入 rhai 无阻。
