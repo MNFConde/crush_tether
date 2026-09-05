@@ -1,6 +1,6 @@
 # crush_tether Roadmap
 
-**Current focus**: P0+P1 已落地（Rust 重写 + 回归用例全绿）；配置格式草案 v1 + 命令知识库框架已纸面定稿（决策论证 `doc/decisions.md` D-01~D-06）。P2–P6 已细化为逐项带验收标准的里程碑（2026-09-06，见「推进计划」M 编号条目）：**P2→P5 共 15 项可一口气连续推进、无外部决策点**（三个实现期定点见「推进节奏」节）；P6 的 mdor 退役需用户确认。**下一步 = P2（M2.1 起），启动待用户授权。** → **执行中（2026-09-06 用户下令开启完全访问模式）：M2.1（373df67）～M2.6（57c30d7）已完成，当前推进 M2.7；授权终点 = P3 收尾（M3.3），每里程碑 ≥1 commit。**
+**Current focus**: P0+P1 已落地（Rust 重写 + 回归用例全绿）；配置格式草案 v1 + 命令知识库框架已纸面定稿（决策论证 `doc/decisions.md` D-01~D-06）。P2–P6 已细化为逐项带验收标准的里程碑（2026-09-06，见「推进计划」M 编号条目）：**P2→P5 共 15 项可一口气连续推进、无外部决策点**（三个实现期定点见「推进节奏」节）；P6 的 mdor 退役需用户确认。**下一步 = P2（M2.1 起），启动待用户授权。** → **执行中（2026-09-06 用户下令开启完全访问模式）：M2.1–M2.7（P2 全部）已完成并收口（2026-09-06），当前推进 M3.1；授权终点 = P3 收尾（M3.3），每里程碑 ≥1 commit。**
 
 ## 推进计划（P0–P6）
 
@@ -11,7 +11,7 @@
   - 验收：`cargo clippy -D warnings` 零告警。
 - [x] **P1 分类核心（check 模式最小闭环）**：`cmd_parse`（tree-sitter-bash flatten + 写重定向/fd dup/路径逃逸检测）+ 判定表平移 + `Verdict::combine`；`channel` Crush/ClaudeCode 契约输出；`check` 模式（stdin JSON → allow JSON/静默/exit 2）。
   - 验收：`tests/guard_regression.rs` 89 用例全绿（test_guard.py 1:1 平移）；release 单次冷启动 ~9ms（budget <10ms 达标）；冒烟四形态（allow/deny/管道 sink/写 flag confirm）正确。
-- [ ] **P2 配置声明层 + 知识库 main**（M2.1–M2.7；格式细则见 design.md「配置格式与脚本边界（草案 v1）」；**验收全过后草案 v1 升格定稿**）：
+- [x] **P2 配置声明层 + 知识库 main**（M2.1–M2.7；格式细则见 design.md「配置格式与脚本边界（v1 定稿）」；**已升格定稿（2026-09-06，M2.7 验收后）**）：
   - **M2.1 rules.toml 解析模型**✅（2026-09-06，373df67）：裸键区（`version`/`default`/`precedence`）+ `[local]`/`[global]` 双表 + 命令节三桶 + `sub`/`flag` 子键 + 列表双形态（数组 / inline table）反序列化；`--config`/`CRUSH_TETHER_CONFIG` 显式覆盖入口（加载失败 → stderr 告警 + fail-safe confirm 已接线 check 模式）。
     - 验收：design.md 示例文件整体解析通过；非法键报错可定位；解析失败 → stderr 告警 + fail-safe confirm（不 panic、不误放行）。
   - **M2.2 三层发现与字段级继承合并**✅（2026-09-06，ce5148e）：全局 → 用户 → 项目三层发现（`CRUSH_PROJECT_DIR` 优先，缺失逐级上溯）；未定义即继承 / 定义即覆盖；数组 = 覆盖、inline table `add`/`remove` = 增删、标量写值即覆盖；`version` 过旧明确报错，不静默误解析。
@@ -24,7 +24,7 @@
     - 验收：每条规则正反用例单测全绿；无知识库时降级纯结构检查不报错；告警进 `type:"load"` 事件行。
   - **M2.6 默认配置生成 v1（项目层）**✅（2026-09-06，57c30d7）：三层皆缺有效配置才在项目 `.crush-tether/` 生成默认 `rules.toml` + `rules.rhai` + `knowledge.toml`；损坏（存在但解析失败）→ 告警 + confirm 兜底、原文件不动；temp+rename 原子幂等；生成动作不经规则链。
     - 验收：触发 / 不触发（任一层有效）、损坏不生成、幂等重生成、并发生成收敛单测全绿；重复生成字节一致。
-  - **M2.7 样例仓库端到端 + 草案升格**：临时样例仓库自定义规则改变裁决全链路；三个「可改回」项按草案推荐值生效展示（`go run` 落 confirm、`git reset` 取 confirm 档、`-h` 保留 confirm.flag）；验收通过后 design.md 草案 v1 升格定稿。
+  - **M2.7 样例仓库端到端 + 草案升格**✅（2026-09-06，db5401a + 升格 docs）：临时样例仓库自定义规则改变裁决全链路；三个「可改回」项按草案推荐值生效展示（`go run` 落 confirm、`git reset` 取 confirm 档、`-h` 保留 confirm.flag）；验收通过后 design.md 草案 v1 升格定稿。
     - 验收：自定义规则（覆盖 / 增删两种写法）改变裁决生效；升格文档动作完成、更正登记同步。
 - [ ] **P3 脚本层（Rhai 默认）**（M3.1–M3.3；完成后零内置策略迁移收口）：
   - **M3.1 RuleEngine trait + Rhai 接入**：trait 抽象 + `rhai` 钉版引入；Engine 单例 + AST 缓存；`max_operations` 等限流；不可绕过的安全原语注册；`--engine` 参数。
@@ -74,7 +74,7 @@
 - [x] 定稿运行模式与热重载方案（命名端点 + Arc 快照热重载，见 design.md「运行模式与配置热重载」）
 - [x] Rust 重写 P0+P1（check 模式 + 回归用例 9/9 组全绿 + 质量门禁全过）
 - [x] 定稿**零内置策略 + 默认配置生成**（二进制纯引擎；默认策略 = 项目侧生成的外部 `rules.toml` + `rules.rhai`；三层皆缺才生成、任一层有效即尊重；损坏留档后重新生成；全局/用户层生成由命令提供后期设计；效力顺序项目 > 用户 > 全局）
-- [x] 纸面定稿**配置格式草案 v1**（2026-09-05：`[local]`/`[global]` 双表 + 每命令 allow/confirm/deny 三桶查表 + 头部裸列表/precedence/default 标量；声明层零条件判断，两态子命令/find 突变/管道 sink 等全部下沉脚本层；token 级 merge；JSONL 裁决日志格式先行；见 design.md「配置格式与脚本边界（草案 v1）」——待 P2/P3 验收后升格定稿）
+- [x] 纸面定稿**配置格式草案 v1**（2026-09-05：`[local]`/`[global]` 双表 + 每命令 allow/confirm/deny 三桶查表 + 头部裸列表/precedence/default 标量；声明层零条件判断，两态子命令/find 突变/管道 sink 等全部下沉脚本层；token 级 merge；JSONL 裁决日志格式先行；见 design.md「配置格式与脚本边界（v1 定稿）」——已升格定稿（2026-09-06，P2 六项里程碑 + 样例端到端验收全绿））
 - [x] 设计评审 + 草案 v1 增补（2026-09-06：**命令知识库框架**（bucket、10 槽位封闭、别名归一参与运行时、属性仅 lint/脚本、删光=不做语义检查）+ **层间合并改字段级继承**（数组覆盖 / inline table `add`/`remove` 增删）+ **单命令建模**完备性标准（槽位跟着消费机制走）+ 损坏重生成收窄 + guard.py 重定位为参考对象；新建 `doc/decisions.md` 轻量 ADR（首批 D-01~D-06）与 `script/` 目录约定（三次法则 + 台账）——见 design.md 草案 v1 增补节、`doc/decisions.md`）
 - [x] 细化 P2–P6 推进计划为逐项里程碑（2026-09-06：P2 7 项 / P3 3 项 / P4 3 项 / P5 2 项 / P6 3 项，每项带验收标准；P2→P5 共 15 项一口气可推进、无外部决策点；P6 含 mdor 退役用户确认点；节奏与三个实现期定点见「推进节奏」节）
 

@@ -2,6 +2,13 @@
 
 This file records substantive progress in reverse-chronological order — newest entry at the top, right below this line. Keep each entry short — summary and pointer only; conclusions settle into `cairn/<topic>.md`.
 
+## 2026-09-06 · M2.7 落地：样例端到端验收 + 草案 v1 升格定稿（P2 收口）
+
+- `tests/sample_repo_e2e.rs`：全链路（发现→合并→归一→查表→组合）在真实二进制上验收——默认包推荐值展示（`-h` 保留 confirm、`git reset` confirm、`--hard` 双命中合成 deny、`go run` 落 confirm）、覆盖写法改判、增删写法跨层改判（用户层 -h confirm 被项目层 remove 剔除后 status -h 变 allow）。
+- 升格动作：design.md「配置格式与脚本边界」升格 v1 定稿（标题/锚点/状态注全仓同步，check-links 44/44 过）；更正登记第 9 条登记升格与遗留（89 用例迁移 M3.3、rules.rhai 入包 M3.2）；根 AGENTS 状态行更新为 P0–P2 已落地。
+- P2 收口：ROADMAP P2 复选框打勾。commit 21ee744(refactor) + db5401a(e2e) + 本提交(docs)。
+- Details: `doc/design.md`「配置格式与脚本边界（v1 定稿）」、`cairn/ROADMAP.md` P2/M2.7 条。
+
 ## 2026-09-06 · M2.6 落地：默认配置生成 v1
 
 - `config/seed.rs`：模板内嵌仅为生成源数据（零内置策略不变）；模板自 design.md 示例块逐行提取，测试钉死「模板=文档」。触发 = 发现层 Ok + 三层皆缺 + 无显式覆盖；损坏不生成不动原文件（D-03）；任一层有效尊重现状；temp+rename 原子幂等，8 线程并发收敛同字节。

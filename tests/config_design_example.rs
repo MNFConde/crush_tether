@@ -22,10 +22,10 @@ fn extract_rules_example(md: &str) -> String {
     rest[..end].to_string()
 }
 
-/// 提取「命令知识库（bucket 框架，草案）」小节的第一个 ```toml 代码块。
+/// 提取「命令知识库（bucket 框架，定稿）」小节的第一个 ```toml 代码块。
 fn extract_knowledge_example(md: &str) -> String {
     let section = md
-        .split("### 命令知识库（bucket 框架，草案）")
+        .split("### 命令知识库（bucket 框架，定稿）")
         .nth(1)
         .expect("design.md contains the knowledge base section");
     let start = section.find("```toml").expect("section opens a toml block") + "```toml".len();

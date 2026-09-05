@@ -13,7 +13,7 @@ authoring_mode: ai_generated
 
 ## 形成背景
 
-2026-09-06 设计评审暴露两类「命令约定关联」问题：等价方言（`npm exec`/`npm x` ≡ `npx`，一处 confirm 一处 allow 即构成绕过）与双桶冲突（`git reset` 同落 confirm/deny 两桶）。初版方案把 alias 表放进用户 rules.toml，用户纠正：命令关联是通用事实，不应由用户配置承载——由此确立独立知识库（bucket 框架）。格式与机制细节以 `doc/design.md`「命令知识库（bucket 框架，草案）」为单一事实源，决策论证与被否决方案见 `doc/decisions.md` D-01/D-06，本笔记只沉淀跨设计本体的可复用模式与教训。
+2026-09-06 设计评审暴露两类「命令约定关联」问题：等价方言（`npm exec`/`npm x` ≡ `npx`，一处 confirm 一处 allow 即构成绕过）与双桶冲突（`git reset` 同落 confirm/deny 两桶）。初版方案把 alias 表放进用户 rules.toml，用户纠正：命令关联是通用事实，不应由用户配置承载——由此确立独立知识库（bucket 框架）。格式与机制细节以 `doc/design.md`「命令知识库（bucket 框架，定稿）」为单一事实源，决策论证与被否决方案见 `doc/decisions.md` D-01/D-06，本笔记只沉淀跨设计本体的可复用模式与教训。
 
 ## 可复用模式
 

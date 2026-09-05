@@ -30,7 +30,7 @@ fn templates_match_design_md_examples_byte_for_byte() {
     );
     assert_eq!(
         DEFAULT_KNOWLEDGE_TOML.trim(),
-        extract_example(&md, "### 命令知识库（bucket 框架，草案）").trim(),
+        extract_example(&md, "### 命令知识库（bucket 框架，定稿）").trim(),
         "默认 knowledge.toml 模板必须与 design.md 示例一致"
     );
 }
