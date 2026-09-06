@@ -3,7 +3,7 @@
 
 mod common;
 
-use common::{TempDir, run_check};
+use common::{CheckRun, TempDir, run_check, run_check_with};
 
 fn project_with(tag: &str, rules: &str, script: &str) -> TempDir {
     let proj = TempDir::new(tag);
@@ -100,4 +100,93 @@ fn table_deny_is_final_over_activation() {
     );
     let r = run_check(proj.path(), "ls");
     assert_eq!(r.code, 2, "deny 终审");
+}
+
+// ── Lua 引擎侧（M6.1）：同一五件套在 --engine lua 下语义等价 ─────────────
+
+fn project_with_lua(tag: &str, rules: &str, script: &str) -> TempDir {
+    let proj = TempDir::new(tag);
+    let cfg = proj.path().join(".crush-tether");
+    std::fs::create_dir_all(&cfg).expect("create .crush-tether");
+    std::fs::write(cfg.join("rules.toml"), rules).expect("write rules.toml");
+    std::fs::write(cfg.join("rules.lua"), script).expect("write rules.lua");
+    proj
+}
+
+fn run_lua_check(proj: &TempDir, command: &str) -> CheckRun {
+    run_check_with(proj.path(), &["--engine", "lua"], command)
+}
+
+const LUA_ESCAPE_SCRIPT: &str = concat!(
+    "function check(ctx)\n",
+    "  if ctx.bin == \"ls\" then\n",
+    "    for _, a in ipairs(ctx.args) do\n",
+    "      if a == \"../outside\" then return allow(\"ls\") end\n",
+    "    end\n",
+    "  end\n",
+    "  return nil\n",
+    "end\n",
+);
+
+#[test]
+fn lua_local_declaration_escape_downgrades_to_confirm() {
+    let proj = project_with_lua(
+        "m6-local",
+        &format!("{BASE_TOML}[local]\nallow = [\"ls\"]\nscript_allow = [\"ls\"]\n"),
+        LUA_ESCAPE_SCRIPT,
+    );
+    let r = run_lua_check(&proj, "ls inside.txt");
+    assert_eq!(
+        r.stdout.trim(),
+        "{\"decision\":\"allow\"}",
+        "local 声明 + 仓库内参数激活放行（lua）"
+    );
+    let r = run_lua_check(&proj, "ls ../outside");
+    assert!(r.stdout.trim().is_empty(), "逃逸激活降 confirm（lua）");
+    assert_eq!(r.code, 0);
+}
+
+#[test]
+fn lua_undeclared_allow_rejects_script_and_fails_safe() {
+    let proj = project_with_lua(
+        "m6-reject",
+        BASE_TOML,
+        "function check(ctx)\n  if ctx.bin == \"curl\" then return allow(\"curl\") end\n  return nil\nend\n",
+    );
+    let r = run_lua_check(&proj, "ls");
+    assert!(
+        r.stdout.trim().is_empty(),
+        "拒载后 fail-safe confirm（lua）"
+    );
+    assert!(r.stderr.contains("rejected"), "{}", r.stderr);
+}
+
+#[test]
+fn lua_dynamic_allow_name_is_rejected_at_load_time() {
+    // 机制 1（Lua 扫描语义）：实参非引号字面量 → 拒载。
+    let proj = project_with_lua(
+        "m6-dyn",
+        &format!("{BASE_TOML}[local]\nscript_allow = [\"ls\"]\n"),
+        "function check(ctx)\n  return allow(ctx.bin)\nend\n",
+    );
+    let r = run_lua_check(&proj, "ls");
+    assert!(r.stdout.trim().is_empty(), "动态名拒载 fail-safe（lua）");
+    assert!(r.stderr.contains("rejected"), "{}", r.stderr);
+}
+
+#[test]
+fn lua_table_deny_is_final_over_activation() {
+    let proj = project_with_lua(
+        "m6-deny",
+        concat!(
+            "version = 1\n",
+            "default = \"confirm\"\n",
+            "[local]\n",
+            "deny = [\"ls\"]\n",
+            "script_allow = [\"ls\"]\n"
+        ),
+        "function check(ctx)\n  if ctx.bin == \"ls\" then return allow(\"ls\") end\n  return nil\nend\n",
+    );
+    let r = run_lua_check(&proj, "ls");
+    assert_eq!(r.code, 2, "deny 终审（lua）");
 }

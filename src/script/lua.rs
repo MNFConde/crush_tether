@@ -362,6 +362,8 @@ fn register_allow(lua: &Lua, decls: ScriptAllowDecls) {
 /// - 极端形态（多行括号、注释内调用）宁可漏收不误拒：漏收的调用由机制 3
 ///   运行时对账兜底（未声明照样拒），审计面不缩小。
 fn extract_allow_literals(source: &str) -> Result<Vec<String>, ScriptError> {
+    let stripped = strip_lua_comments(source);
+    let source = stripped.as_str();
     let mut out = Vec::new();
     let bytes = source.as_bytes();
     let mut i = 0;
@@ -372,8 +374,7 @@ fn extract_allow_literals(source: &str) -> Result<Vec<String>, ScriptError> {
         if at > 0 && is_ident_byte(bytes[at - 1]) {
             continue;
         }
-        // 词边界：`allow` 之后必须紧跟可选空白 + `(`，排除 `allowx`/
-        // `my_allow` 等标识符。
+        // `allow` 之后必须紧跟可选空白 + `(`，排除 `allowx` 等标识符。
         let rest = &source[i..];
         let trimmed = rest.trim_start();
         let paren = i + (rest.len() - trimmed.len());
@@ -409,6 +410,39 @@ fn is_ident_byte(b: u8) -> bool {
     b.is_ascii_alphanumeric() || b == b'_'
 }
 
+/// 剥离 Lua 注释（行注释 `-- …` 与块注释 `--[[ … ]]`，替换为空格保序）：
+/// 注释里被注掉的 `allow("x")` 不得参与机制 1 提取（否则误拒整个脚本）。
+/// 已知边界：字符串实参内含 `--` 会被误剥为注释——后果是**漏收**该调用
+/// （不误拒），机制 3 运行时对账仍拦截未声明名，审计面不缩小。
+fn strip_lua_comments(source: &str) -> String {
+    let b = source.as_bytes();
+    let mut out = Vec::with_capacity(b.len());
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] == b'-' && i + 1 < b.len() && b[i + 1] == b'-' {
+            let rest = &source[i + 2..];
+            let long = rest.trim_start_matches('-');
+            if let Some(long) = long.strip_prefix("[[") {
+                // 块注释：--[[ … ]]（一级等号；嵌套级未识别时按行注释保守处理）。
+                if let Some(end) = long.find("]]") {
+                    let consumed = 2 + (rest.len() - long.len() - 2) + 2 + end + 2;
+                    out.extend(std::iter::repeat_n(b' ', consumed));
+                    i += consumed;
+                    continue;
+                }
+            }
+            while i < b.len() && b[i] != b'\n' {
+                out.push(b' ');
+                i += 1;
+            }
+            continue;
+        }
+        out.push(b[i]);
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
 // ── mlua 类型桥接（与 rhai 侧注册同一套封装类型） ─────────────────────
 
 impl UserData for ScriptCtx {
@@ -439,3 +473,39 @@ impl UserData for ScriptDecision {
 }
 
 impl UserData for AllowActivation {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn extraction_collects_literals_and_rejects_dynamic_names() {
+        let ok = extract_allow_literals(concat!(
+            "function check(ctx)\n",
+            "  if ctx.bin == \"ls\" then return allow(\"ls\") end\n",
+            "  return allow('docker')\n",
+            "end\n",
+        ))
+        .unwrap();
+        assert!(ok.contains(&"ls".to_string()));
+        assert!(ok.contains(&"docker".to_string()));
+
+        assert!(extract_allow_literals("function check(ctx) return allow(ctx.bin) end").is_err());
+        // 词边界：my_allow / allowx 不算调用。
+        let decoy = "local my_allow = 1\nfunction check(ctx) return nil end\n";
+        assert!(extract_allow_literals(decoy).unwrap().is_empty());
+    }
+
+    #[test]
+    fn commented_out_allow_is_not_extracted() {
+        // 行注释与块注释里的调用不参与提取（误拒防护）。
+        let src = concat!(
+            "-- allow(\"curl\")\n",
+            "--[[\n",
+            "return allow(\"wget\")\n",
+            "]]\n",
+            "function check(ctx) return nil end\n",
+        );
+        assert!(extract_allow_literals(src).unwrap().is_empty());
+    }
+}
