@@ -2,6 +2,14 @@
 
 This file records substantive progress in reverse-chronological order — newest entry at the top, right below this line. Keep each entry short — summary and pointer only; conclusions settle into `cairn/<topic>.md`.
 
+## 2026-09-06 · script_allow 设计定稿 + M4.0 登记 + 挂账执行
+
+- **script_allow（脚本条件放行）设计定稿**（design.md 新节）：注册式 + 声明对账——声明双形态（顶级列表 / 命令节键）、引擎五件套（字面量提取 / 差集拒载 / 运行时双保险 / 定稿点作用域化逃逸检查 / deny 终审）、lint 三条新规则。allow 契约由「绝对禁止」演进为「放行面 = 用户声明集 ∩ 脚本条件命中」（更正登记 11）；实现登记 **M4.0 独立里程碑，启动需用户授权**。
+- **筛查管线重画**（更正登记 12）：双阶段图显式钉死执行顺序与三安全性质（定稿点唯一 / 逃逸检查挂定稿点 / deny 终审）；Rule trait 标记被 decide_with + RuleEngine 替代。
+- **挂账清偿**：脚本词汇约定（decision:: 四常量含 PASS、ctx 空串约定）定稿随 M4.0 前置小改落地；ctx 封装 + 决策枚举化挂 P6 与 Lua 同批；编辑器支持登记 P6 后候选（taplo schema / script-stubs / SchemaStore）。
+- 工具链：check-links 的 github_slug 修复下划线处理（GitHub slugger 保留 `_`，原实现删除导致含 `_` 标题无法被引用）。锚点 50/50 过。commits 8011be5 + 本提交。
+- Details: `doc/design.md`「脚本条件放行」「筛查管线与编译期组装」、`cairn/ROADMAP.md` M4.0/P6 条。
+
 ## 2026-09-06 · M3.3 落地：删内置判定表 + 89 用例迁移（P3 收口，本次授权完成）
 
 - `engine.rs` 收缩为纯管线原语（解析拉平 / 管道拓扑 / decide_with 注入式 / 组合裁决）；guard.py 判定表平移全部删除，零内置策略收口。「管道 → deny」策略移至默认 rules.rhai 谓词 3。
