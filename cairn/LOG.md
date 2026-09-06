@@ -2,6 +2,15 @@
 
 This file records substantive progress in reverse-chronological order — newest entry at the top, right below this line. Keep each entry short — summary and pointer only; conclusions settle into `cairn/<topic>.md`.
 
+## 2026-09-06 · 审查后修复：lua 协程限流覆盖与文档残留清理
+
+- **审查发现（探针实测）**：mlua `set_hook` 仅挂主线程，脚本自建协程（C 层 `coroutine.create`）完全逃逸指令预算——协程内 200 万次循环毫秒级完成、正常返回 Pass；「限流同等」验收声明对协程不成立。
+- **修复**：改 `set_global_hook`（实测覆盖协程，阈值处终止循环）；新增副作用标记型协程限流测试（无墙钟断言——循环被终止则完成标志不置位）。
+- **语义边界（design.md 更正登记 18）**：`coroutine.resume` 类 pcall 吞协程内错误——超预算协程被终止（DoS 已阻）但不转化为 fail-safe confirm；rhai 侧限流错误直接中断脚本，两引擎形态有差异、安全性等价（均被有界终止）。
+- **文档残留**（本批 docs 提交）：更正登记 19（DSL 节原语清单如实化）；script.file 说明引擎感知；零内置节默认包按引擎生成措辞。
+- **教训**：mlua hook 作用域差异 + 限流验证须覆盖并发原语（协程向量），详见 `cairn/rust-rewrite-notes.md`。
+- Details: `src/script/lua.rs`、`tests/script_lua.rs`、`doc/design.md`（更正登记 18/19）。
+
 ## 2026-09-06 · M6.1+M6.2 收口：Lua 引擎落地，P0–P6 仅余 M6.3
 
 - **M6.1 三件套一批定型**（b5c3ec8 接口层 / 3d9b7bc Lua 引擎 / 34ebf13 script_allow Lua 侧）：ctx 封装（ScriptCtx 自定义类型 + 只读 getter，**脚本侧 `ctx.bin` 属性语法保留**，用户拍板，模板零改动）+ 决策枚举化（ScriptDecision 四变体构造封闭，裸字符串返回边界统一解析，双保险保留）+ LuaEngine（mlua 0.12 lua54+vendored）实现同一 RuleEngine trait，ScriptChain 泛化 Box<dyn>。

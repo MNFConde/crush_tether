@@ -52,7 +52,7 @@
     - 验收：三档行为与 Crush 等价；M5.2 共用用例集纳入第三 adapter 全绿；插件分发在 zcode 侧实际触发 hook 生效（含配置默认禁用的启用路径验证）。
 - [x] **P6 收尾**（M6.1/M6.2 ✅ 2026-09-06；M6.3 待用户确认节奏）：
   - **M6.1 Lua 引擎**✅（2026-09-06，b5c3ec8 接口层定型 / 3d9b7bc Lua 引擎与引擎感知装配 / 34ebf13 script_allow Lua 侧）：mlua 0.12（lua54+vendored）实现同一 RuleEngine trait；**同批挂账兑现**——ctx 彻底封装（ScriptCtx 自定义类型，字段只读 getter 保持 `ctx.bin` 属性语法，模板零改动）与决策值枚举化（ScriptDecision 四变体构造封闭，裸字符串返回边界统一解析双保险）。
-    - 验收：与 Rhai 同一 RuleEngine trait（Box<dyn>）✅；默认规则 lua 版行为等价（双引擎同用例集对账测试）✅；限流同等（指令数 hook + 内存上限 vs rhai max_operations）✅；ctx 封装后词汇约定 Lua 侧 nil 等价成立（nil→Pass 单测）✅。实现注记：mlua 0.12 无 sandbox feature——沙箱改由 StdLib 白名单 + new_with 安全模式 + base 危险全局消毒实现；Function 不保活 Lua state（实例字段锚定）；script_allow 机制 1 Lua 侧为注释剥离后保守词法扫描（design.md 更正登记 17）；脚本文件按引擎选择 rules.rhai/rules.lua，本层缺失但有他引擎脚本文件时 stderr 告警。
+    - 验收：与 Rhai 同一 RuleEngine trait（Box<dyn>）✅；默认规则 lua 版行为等价（双引擎同用例集对账测试，载体 = `src/config/seed.rs` 内联 `default_lua_matches_rhai_predicate_semantics` 双跑对账 + nil 等价单测；`tests/script_lua.rs` 为引擎行为面）✅；限流同等（**2026-09-06 审查修复后成立**：全局指令数 hook 覆盖协程 + 内存上限 vs rhai max_operations，更正登记 18——初版 set_hook 有协程逃逸洞）✅；ctx 封装后词汇约定 Lua 侧 nil 等价成立（nil→Pass 单测）✅。实现注记：mlua 0.12 无 sandbox feature——沙箱改由 StdLib 白名单 + new_with 安全模式 + base 危险全局消毒实现；Function 不保活 Lua state（实例字段锚定）；script_allow 机制 1 Lua 侧为注释剥离后保守词法扫描（design.md 更正登记 17）；脚本文件按引擎选择 rules.rhai/rules.lua，本层缺失但有他引擎脚本文件时 stderr 告警。
   - **M6.2 质量收口 + 文档**✅（2026-09-06）：`cargo audit` 无漏洞；README 落地（安装/配置/四运行模式/agent 接入/安全模型）。
     - 验收：audit 零告警 → **口径修正（D-08，用户裁定）**：rhai 传递依赖 smartstring unmaintained（RUSTSEC-2026-0249，无 CVE）接受并名册化，监控点 = rhai 发布移除该依赖即升级。
   - **M6.3 mdor 侧退役**（Open Questions 1，待用户确认节奏；M5.3 zcode 实机探针按 2026-09-06 裁定挪至本项一并处理）：删 crush-guard 目录、回滚 `[project.scripts]`。

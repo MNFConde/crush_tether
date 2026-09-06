@@ -141,9 +141,9 @@ check（兜底/冒烟）：同一二进制单发，不碰端点，本进程全�
 
 > 定稿（2026-09-04）：**软件本身不提供任何规则**——二进制只实现引擎能力（解析/flatten/特征提取/安全原语/管线/组合裁决），不含一行策略数据。默认策略也由**外部配置文件 + 脚本**提供，以项目侧生成的形态落地。
 
-- **默认策略 = 外部数据**：默认 `rules.toml`（能声明表达的：命令集合、flag 前缀、位置参数数、特征布尔等）+ 默认 `rules.rhai`（声明层表达不了的跨参数逻辑：`find` 突变检测、`git config` ≥2 位置参数写判定等）以**模板内嵌于二进制**——模板只是生成源数据，不参与判定，不构成内置策略。
+- **默认策略 = 外部数据**：默认 `rules.toml`（能声明表达的：命令集合、flag 前缀、位置参数数、特征布尔等）+ 默认 `rules.rhai`（或 `--engine lua` 时的 `rules.lua`，M6.1；声明层表达不了的跨参数逻辑：`find` 突变检测、`git config` ≥2 位置参数写判定等）以**模板内嵌于二进制**——模板只是生成源数据，不参与判定，不构成内置策略。
   - **【已替换】（2026-09-05 草案更正）**：默认 `rules.toml` 的内容界定已由[配置格式与脚本边界（v1 定稿）](#配置格式与脚本边界v1-定稿)收窄——无条件的纯查表进 TOML（不再有「flag 前缀」「位置参数数」这类声明层字段），一切条件判断下沉脚本层；默认包的具体结构以本节（v1 定稿）为准。
-- **生成触发**：按层寻找配置（全局 → 用户 → 项目，含 `--config`/`CRUSH_TETHER_CONFIG` 显式指定）后**三层合并仍得不到任何有效配置**时，才在项目 `.crush-tether/` 写出默认 `rules.toml` + `rules.rhai`；**任一层存在有效配置即尊重现状，不生成**（避免将来全局/用户自定义被项目层默认值遮蔽）。
+- **生成触发**：按层寻找配置（全局 → 用户 → 项目，含 `--config`/`CRUSH_TETHER_CONFIG` 显式指定）后**三层合并仍得不到任何有效配置**时，才在项目 `.crush-tether/` 写出默认 `rules.toml` + 脚本模板（`rules.rhai`；`--engine lua` 时为 `rules.lua`）；**任一层存在有效配置即尊重现状，不生成**（避免将来全局/用户自定义被项目层默认值遮蔽）。
 - **损坏 ≠ 缺失（2026-09-06 收窄）**：文件存在但解析失败 → stderr 告警 + 按 fail-safe confirm 兜底，**原文件不动、不留档不生成**；仅文件不存在（三层皆缺）才触发生成。原「留档 `.bak-<时间戳>` 后重生成默认」方案已收窄——留档接管会使 serve 冷启动遇用户手改中间态时裁决静默漂移且 `.bak` 堆积（论证见 [D-03](decisions.md#d-03-损坏重生成收窄)）。
 - **全局/用户层生成延后**：v1 只做项目层生成；全局/用户层默认文件由命令提供（如 `crush-tether init --global`，后期设计）。
 - **引导豁免**：生成动作本身是管线引导步骤，不经规则链判定；只写 `.crush-tether/` 下固定文件名，不触碰其他路径。
@@ -238,9 +238,9 @@ crush-tether benchmark [--engine rhai --config <file>]            # 双跑对比
 | **Rhai**（默认） | 新语法 | `Engine::new().eval()` 一行嵌入；动态类型、专为配置/规则脚本 |
 | **Lua（mlua）** | 兼容旧习惯 | 经典语法，`--engine lua` 切换 |
 
-- 默认 `--engine rhai`；`--engine lua` 可选。两者实现同一 `RuleEngine` trait，由 Rust 提供**不可绕过的安全原语**（`writes_file`/`path_escapes`/`deny`），DSL 只能组合判定、不能绕过。
+- 默认 `--engine rhai`；`--engine lua` 可选。两者实现同一 `RuleEngine` trait，由 Rust 提供**不可绕过的安全原语**（`path_escapes`/`inside_repo` + `kb_*` 知识库数据源 + `allow("bin")` 受控激活通道；写特征经 ctx 字段 `writes_redirect`/`pipe_to_shell` 暴露），DSL 只能组合判定、不能绕过。
 - 安全防护：脚本须设 `max_operations`/`max_call_levels`/`max_expr_depth` 限流，防死循环/OOM。
-- **Lua 引擎定型（2026-09-06 M6.1 落地）**：mlua 0.12（Lua 5.4 vendored）。沙箱 = `new_with` 安全模式 + 库白名单（coroutine/table/math/string/utf8，无 io/os/package/debug/ffi）+ base 危险全局消毒（`dofile`/`loadfile`/`load`/`print` 置 nil）；限流 = 指令数 hook（20 万条预算，对齐 rhai `max_operations` 量级）+ `set_memory_limit`（16MB，OOM 防线）——与 rhai 限流同语义（死循环/深递归/OOM 有界 → fail-safe confirm）。词汇约定：ctx/decision 与 rhai 共用同一封装类型（`ScriptCtx` userdata 只读字段；`decision` 表四常量 userdata + `__eq`）；**返回 nil = PASS**（词汇约定 Lua 侧映射）；裸字符串经返回边界统一解析（双保险）。script_allow：机制 2/3 同语义，机制 1 为注释剥离后的保守词法扫描（[更正登记](#更正登记对既有定稿) 17）。脚本文件按引擎选择：`rules.rhai`/`rules.lua`（默认包生成随引擎）。
+- **Lua 引擎定型（2026-09-06 M6.1 落地）**：mlua 0.12（Lua 5.4 vendored）。沙箱 = `new_with` 安全模式 + 库白名单（coroutine/table/math/string/utf8，无 io/os/package/debug/ffi）+ base 危险全局消毒（`dofile`/`loadfile`/`load`/`print` 置 nil）；限流 = **全局**指令数 hook（`set_global_hook`，20 万条预算，主线程与脚本自建协程都被计数——对齐 rhai `max_operations` 量级）+ `set_memory_limit`（16MB，OOM 防线）；死循环/深递归/OOM 有界，协程内超预算被终止但 `coroutine.resume` 吞错、不转为脚本错误（[更正登记](#更正登记对既有定稿) 18）。词汇约定：ctx/decision 与 rhai 共用同一封装类型（`ScriptCtx` userdata 只读字段；`decision` 表四常量 userdata + `__eq`）；**返回 nil = PASS**（词汇约定 Lua 侧映射）；裸字符串经返回边界统一解析（双保险）。script_allow：机制 2/3 同语义，机制 1 为注释剥离后的保守词法扫描（[更正登记](#更正登记对既有定稿) 17）。脚本文件按引擎选择：`rules.rhai`/`rules.lua`（默认包生成随引擎）。
 
 ### 命令建模与规则（定稿）
 
@@ -614,7 +614,7 @@ JSONL 一行一条裁决，字段覆盖：命令原文、结果、触发层级�
  "script":{"file":null,"rule":null}}
 ```
 
-- `source.layer` ∈ global/user/project/explicit/script/default；脚本激活/改判时 layer=script 并填 `script.file`（区分项目层 rules.rhai 与用户层 `~/.config/crush-tether/rules.rhai`；`script.rule` v1 恒 null——脚本无命名规则概念，字段为后续扩展保留）。v1 可达值：user/project/explicit/script/default；`global` 待全局层发现落地（v1 不做）。
+- `source.layer` ∈ global/user/project/explicit/script/default；脚本激活/改判时 layer=script 并填 `script.file`（区分项目层与用户层脚本文件，文件名随 `--engine` 取 `rules.rhai`/`rules.lua`；`script.rule` v1 恒 null——脚本无命名规则概念，字段为后续扩展保留）。v1 可达值：user/project/explicit/script/default；`global` 待全局层发现落地（v1 不做）。
 - `kb`：本次裁决加载的知识库 bucket 列表；`[]` = 知识库已删光——**当前配置未经任何内置规则校验、别名/flag 归一未生效**，日志自证可见。`normalized` 记录归一链（如 `"npm exec → npx"`），未归一为 `null`。
 - serve 加载/**热重载成功**时另记一条非裁决事件行（`type:"load"`，含 kb 状态与 lint 告警），冷热路径都留痕；热重载失败不留痕（快照未换，stderr 告警）。
 - serve 模式由 serve 单点写（复用行协议已有字段），hook 降级路径与 check/benchmark 自写一行（mode 字段区分 hook 降级与独立 check）；人读视图由后续 `crush-tether log` 子命令渲染 JSONL（人看视图、程序读原文）。默认开/关在 P4 落地 serve 时定。
@@ -658,6 +658,8 @@ allow.flag = { remove = ["-h"] }                 # 继承并移除（flag 也能
 15. 「机制 1 字面量提取：字符串拼接 → 拒载」措辞 → **2026-09-06 收窄**：变量/循环变量等运行时确定的实参 → 拒载；常量拼接（`allow("cu"+"rl")`）被 rhai 优化器折叠为字面量，按折叠值提取并对账——静态提取集与运行实参恒一致，安全审计面等价。
 16. 「默认包 pnpm dlx 经 alias 归一到 npx」注释 → **2026-09-06 如实化**：默认知识库无 `[pnpm]` 条目，归一不发生，`pnpm dlx` 落 `[local.pnpm]` default 放行。定性（延续 [D-05](decisions.md#d-05-guardpy-定位重置参考对象而非验收标准)）：默认包为本项目自定策略，guard.py 的规则只是参考对照、不作验收标准；需收紧可把 `dlx` 补进 `confirm.sub`。
 17. 「script_allow 机制 1 = AST 静态提取」→ **2026-09-06 M6.1 补充**：Lua 侧无公开 AST，机制 1 退化为**注释剥离后的保守词法扫描**（识别 `allow("…")`/`allow('…')`；非引号实参拒载；行/块注释先剥离防误拒；字符串内含 `--` 的极端形态漏收不误拒）——机制 2/3（声明集对账拒载、运行时双保险）语义不变，审计面不缩小；rhai 侧仍为 AST 提取。同批：机制 1/2/3 对 Lua 生效、定稿点（逃逸检查/deny 终审）引擎无关复用。
+18. 「Lua 引擎定型：限流 = 指令数 hook……死循环/深递归/OOM 有界」→ **2026-09-06 补正（审查修复）**：hook 须为**全局形态**（`set_global_hook`）才覆盖脚本自建协程——初版用线程级 `set_hook`，协程内代码完全逃逸指令预算（探针实测：协程内 200 万次循环毫秒级完成、正常返回）。修复后主线程与协程均被计数；**语义边界**：`coroutine.resume` 类 pcall 吞协程内错误——超预算协程被终止（DoS 已阻止）但脚本不报错、继续走到返回值，不转化为 fail-safe confirm（rhai 侧限流错误直接中断脚本、Err → confirm，两引擎在此形态上有差异，安全性等价：循环均被有界终止）。
+19. DSL 节「安全原语（`writes_file`/`path_escapes`/`deny`）」清单 → **2026-09-06 如实化**：实际注册原语为 `path_escapes`/`inside_repo`/`kb_*` 知识库数据源族 + `allow("bin")` 受控激活通道（M4.0）；`writes_file`/`deny` 原语从未存在——写特征经 ctx 字段 `writes_redirect`/`pipe_to_shell` 暴露，deny 是脚本返回值不是原语。历史遗留措辞（P3 前草案期写入），非近期引入。
 1. 「能声明表达的进 `rules.toml`」→ 收窄为「**无条件的纯查表**进 `rules.toml`，一切条件判断进脚本」。
 2. 「`[[rules]]` 规则链 + first-match-wins」→ **删除**，替换为「`[local]`/`[global]` 双表 + 每命令三桶查表 + 可调桶间优先级 `precedence`」。
 3. 「命令集合并集（只增不减，`exclude` 表剔除）」→ 2026-09-05 替换为 token 级合并，**2026-09-06 再修订为字段级继承**（数组覆盖 / inline table 增删；「挪桶即剔除」弃用——挪桶是改判不是删除）；无需 `exclude` 表（见 [D-02](decisions.md#d-02-字段级继承合并模型)）。
