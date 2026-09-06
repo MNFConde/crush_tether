@@ -5,10 +5,13 @@
 //!   math / string / utf8——无 io / os / package / debug / ffi）；base 库中
 //!   可触文件系统或污染 stdout 的 `dofile` / `loadfile` / `load` / `print`
 //!   加载后置 nil（mlua 不代劳，自证清单见 [`sanitize_base`]）。
-//! - **限流**（与 rhai `max_operations` 同语义映射）：指令数 hook
-//!   （[`INSTRUCTION_BUDGET`]，超限 → 运行时错误 → 调用方 fail-safe
-//!   confirm）+ 内存上限 [`MEMORY_LIMIT`]（对齐 rhai 字符串/数组上限的
-//!   OOM 防线）。死循环/深递归/OOM 尝试一律有界拦截。
+//! - **限流**（与 rhai `max_operations` 同语义映射）：**全局**指令数 hook
+//!   （[`INSTRUCTION_BUDGET`]——`set_global_hook` 形态，主线程与脚本自建
+//!   协程都被计数；超限 → 运行时错误 → 调用方 fail-safe confirm）+ 内存
+//!   上限 [`MEMORY_LIMIT`]（OOM 防线）。死循环/深递归/OOM 尝试一律有界
+//!   拦截。协程语义边界：`coroutine.resume` 类 pcall 吞协程内错误——
+//!   超预算协程被终止（DoS 已阻）但脚本不报错、继续走到返回值（design.md
+//!   更正登记 18）。
 //! - **词汇约定**：与 rhai 同一封装类型——ctx 传 [`super::ScriptCtx`]
 //!   userdata（只读字段 `ctx.bin` 等），决策值 [`super::ScriptDecision`]
 //!   userdata（全局 `decision` 表四常量；`__eq` 按变体比较）。返回值
@@ -85,10 +88,12 @@ impl LuaEngine {
             .map_err(|e| ScriptError::Compile(e.to_string()))?;
         sanitize_base(&lua);
 
-        // 指令数限流 hook：每次 evaluate 前 budget 归零，超限 → 运行时错误。
+        // 全局指令数限流 hook：主线程与脚本自建协程都被计数（线程级
+        // set_hook 只挂主线程，C 层 coroutine.create 不继承——协程会
+        // 逃逸预算）；每次 evaluate 前 budget 归零，超限 → 运行时错误。
         let budget = Arc::new(AtomicU64::new(0));
         let hook_budget = budget.clone();
-        lua.set_hook(
+        lua.set_global_hook(
             HookTriggers::new().every_nth_instruction(INSTRUCTION_CHECK_INTERVAL),
             move |_, _| {
                 let used =

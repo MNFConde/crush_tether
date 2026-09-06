@@ -35,6 +35,7 @@ authoring_mode: ai_generated
 - **教训：mlua 0.12 只有 IntoLua 的 UserData 毯式实现，没有 FromLua**——`__eq` 等元方法第二参收 `AnyUserData` 后手动 `borrow::<T>()`（借用失败视为不等，因为 Lua 的 `__eq` 不跨 userdata 类型保证同型）。
 - **教训：rhai 1.x 的 getter API 是 `register_get`**（不是旧名 `register_getter`），闭包首参收 `&mut T`（`Mut<T>`）。rhai 属性访问本质是方法调用糖——自定义类型 + getter 可让脚本侧 `ctx.bin` 语法零改动地完成「暴露裸 map → 封装类型」迁移。
 - **教训：Rust `concat!` 无分隔拼接**，多行脚本文本用例里 `"return nil"+\"end\"` 拼成 `nilend` 语法错误——多行脚本文本的每行要么带前导空格要么以 `\n` 结尾（与 commit.md 6.5 的追加型编辑静默丢失同族：拼接点出错不报错）。
+- **教训：mlua 指令限流 hook 分线程/全局两档**——`set_hook` 只挂当前线程，脚本自建协程（C 层 `coroutine.create`）不继承，协程内死循环完全逃逸预算（实测 200 万次循环毫秒级完成）；须 `set_global_hook` 才覆盖（实测协程内 budget 正常计数并在阈值处终止循环）。语义边界：`coroutine.resume` 类 pcall 吞协程内错误——超预算协程被终止（DoS 已阻）但脚本不报错、不转化为 fail-safe confirm。验证写法用**副作用标记**（协程内置完成标志，resume 后查标志）而非墙钟断言。方法论：沙箱限流的验证必须覆盖该运行时的并发执行原语（协程/回调向量），只测主线程死循环会留洞。
 
 ## 决策记录
 

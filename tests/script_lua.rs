@@ -145,6 +145,36 @@ fn lua_infinite_loop_is_bounded_by_instruction_hook() {
 }
 
 #[test]
+fn lua_coroutine_loop_is_bounded_by_global_hook() {
+    // 协程内死循环同样受指令预算约束（全局 hook 覆盖脚本自建协程；线程级
+    // hook 只挂主线程会逃逸）。判定用副作用标记而非墙钟：循环被终止 →
+    // done 未置位 → DENY；若协程逃逸限流 → 循环跑完 → CONFIRM。
+    // 语义边界：coroutine.resume 类 pcall 吞协程内错误——脚本不报错、
+    // 正常走到返回值（design.md 更正登记 18）。
+    let e = compile(
+        concat!(
+            "function check(ctx)\n",
+            "  local done = false\n",
+            "  local co = coroutine.create(function()\n",
+            "    for i = 1, 2000000 do end\n",
+            "    done = true\n",
+            "  end)\n",
+            "  coroutine.resume(co)\n",
+            "  if done then return decision.CONFIRM end\n",
+            "  return decision.DENY\n",
+            "end\n",
+        ),
+        Default::default(),
+    );
+    assert_eq!(
+        e.evaluate(&cmd("ls"), Decision::Allow, Path::new(PROJ), false)
+            .unwrap(),
+        ScriptOutcome::Adjust(Decision::Deny),
+        "协程死循环必须在指令预算内被终止（done 不置位）"
+    );
+}
+
+#[test]
 fn lua_deep_recursion_is_bounded() {
     let e = compile(
         "local function f(x) return f(x) end function check(ctx) return f(1) end",
