@@ -331,25 +331,12 @@ fn merge_dims(
     secs: &[(&CommandSection, &'static str)],
     pick: fn(&CommandSection) -> Option<&BucketSpec>,
 ) -> Dims {
-    let specs: Vec<_> = secs.iter().filter_map(|(s, _)| pick(s)).collect();
-    let layers: Vec<&'static str> = secs
+    let specs: Vec<(&BucketSpec, &'static str)> = secs
         .iter()
-        .filter_map(|(s, _)| pick(s).map(|_| ()))
-        .zip(secs.iter().map(|(_, l)| *l))
-        .map(|(_, l)| l)
+        .filter_map(|(s, l)| pick(s).map(|b| (b, *l)))
         .collect();
-    let (sub, sub_prov) = resolve_chain(
-        specs
-            .iter()
-            .map(|b| b.sub.as_ref())
-            .zip(layers.iter().copied()),
-    );
-    let (flag, flag_prov) = resolve_chain(
-        specs
-            .iter()
-            .map(|b| b.flag.as_ref())
-            .zip(layers.iter().copied()),
-    );
+    let (sub, sub_prov) = resolve_chain(specs.iter().map(|(b, l)| (b.sub.as_ref(), *l)));
+    let (flag, flag_prov) = resolve_chain(specs.iter().map(|(b, l)| (b.flag.as_ref(), *l)));
     Dims {
         sub,
         flag,
