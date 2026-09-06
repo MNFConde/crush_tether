@@ -117,6 +117,8 @@ pub struct RhaiEngine {
     ast: rhai::AST,
     /// 声明集副本（定稿点作用域化逃逸检查的判据）。
     decls: ScriptAllowDecls,
+    /// 机制 1 提取的 `allow("…")` 字面量集。
+    allow_literals: Vec<String>,
 }
 
 impl RhaiEngine {
@@ -159,12 +161,22 @@ impl RhaiEngine {
             }
         }
 
-        Ok(Self { engine, ast, decls })
+        Ok(Self {
+            engine,
+            ast,
+            decls,
+            allow_literals: extracted,
+        })
     }
 
     /// 声明集（定稿点作用域化逃逸检查用）。
     pub fn decls(&self) -> &ScriptAllowDecls {
         &self.decls
+    }
+
+    /// 提取集（机制 1 产物；lint 死声明检查与 load 事件行的脚本侧数据源）。
+    pub fn allow_literals(&self) -> &[String] {
+        &self.allow_literals
     }
 }
 

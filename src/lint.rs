@@ -35,8 +35,15 @@ pub struct Lint {
 type Slot<'a> = (Decision, &'a str, Vec<String>);
 
 /// 对一份 `rules.toml` 做双层检查；知识库缺席时自动降级为纯结构检查。
-pub fn lint_file(file: &RulesFile, kb: Option<&KnowledgeBase>) -> Vec<Lint> {
+/// `script_allows` 为脚本侧 `allow("…")` 字面量提取集（script_allow 三条
+/// 新规则的比对基准；无脚本层传空切片——全部声明都是死声明）。
+pub fn lint_file(
+    file: &RulesFile,
+    kb: Option<&KnowledgeBase>,
+    script_allows: &[String],
+) -> Vec<Lint> {
     let mut out = Vec::new();
+    lint_script_allow(&mut out, file, kb, script_allows);
     let precedence = file
         .precedence
         .clone()
@@ -183,6 +190,82 @@ pub fn lint_file(file: &RulesFile, kb: Option<&KnowledgeBase>) -> Vec<Lint> {
         }
     }
     out
+}
+
+/// script_allow 三条（M4.0）：死声明（声明无任何脚本引用）、may_write
+/// 建议（与 allow-may-write 同级）、deny 冲突提示（校准放行面预期——
+/// 查表落 deny 的命令，脚本激活被终审拦下）。
+fn lint_script_allow(
+    out: &mut Vec<Lint>,
+    file: &RulesFile,
+    kb: Option<&KnowledgeBase>,
+    script_allows: &[String],
+) {
+    for (scope_label, scope) in [("[local]", &file.local), ("[global]", &file.global)] {
+        // 顶级列表形态。
+        for bin in tokens(scope.script_allow.as_ref()) {
+            check_decl(out, file, kb, script_allows, bin, scope_label, "list");
+        }
+        // 命令节键形态（`script_allow = true`）。
+        for (bin, section) in &scope.commands {
+            if section.script_allow == Some(true) {
+                check_decl(
+                    out,
+                    file,
+                    kb,
+                    script_allows,
+                    bin.clone(),
+                    scope_label,
+                    "section",
+                );
+            }
+        }
+    }
+}
+
+fn check_decl(
+    out: &mut Vec<Lint>,
+    file: &RulesFile,
+    kb: Option<&KnowledgeBase>,
+    script_allows: &[String],
+    bin: String,
+    scope_label: &str,
+    form: &str,
+) {
+    let where_ = format!("{scope_label}.script_allow");
+    if !script_allows.contains(&bin) {
+        out.push(Lint {
+            severity: LintSeverity::Warning,
+            code: "script-allow-dead",
+            message: format!(
+                "`{bin}` is declared in {where_} ({form}) but no script \
+                 allow(\"{bin}\") call references it"
+            ),
+        });
+    }
+    if may_write_bin(kb, &bin) {
+        out.push(suggestion(
+            "script-allow-may-write",
+            format!(
+                "`{bin}` is known to possibly write and is script-allowable \
+                 ({where_}); a script may permit arbitrary writes for it"
+            ),
+        ));
+    }
+    // deny 冲突：任一作用域的 deny 桶（头部裸列表或该命令节）命中即提示。
+    let deny_hit = [&file.local, &file.global].iter().any(|scope| {
+        tokens(scope.buckets.deny.as_ref()).contains(&bin)
+            || scope.commands.get(&bin).is_some_and(|s| s.deny.is_some())
+    });
+    if deny_hit {
+        out.push(suggestion(
+            "script-allow-deny-conflict",
+            format!(
+                "`{bin}` is script-allowable ({where_}) but also has deny entries; \
+                 table deny is final and blocks every allow activation"
+            ),
+        ));
+    }
 }
 
 /// 同 token 多桶（告警生效桶）+ 非 precedence 首位桶的死词条。
@@ -418,7 +501,7 @@ mod tests {
             "allow = [\"curl\"]\n",
             "confirm = [\"curl\"]\n",
         ));
-        let lints = lint_file(&f, None);
+        let lints = lint_file(&f, None, &[]);
         let c = codes(&lints);
         assert!(c.contains(&"multi-bucket"), "{lints:?}");
         assert!(c.contains(&"dead-entry"), "{lints:?}");
@@ -439,7 +522,7 @@ mod tests {
             "allow.sub = [\"status\"]\n",
             "deny.sub = [\"status\"]\n",
         ));
-        let lints = lint_file(&f, None);
+        let lints = lint_file(&f, None, &[]);
         assert!(codes(&lints).contains(&"multi-bucket"), "{lints:?}");
     }
 
@@ -455,7 +538,7 @@ mod tests {
             "allow.sub = [\"status\"]\n",
             "deny.sub = [\"push\"]\n",
         ));
-        assert!(lint_file(&f, None).is_empty());
+        assert!(lint_file(&f, None, &[]).is_empty());
     }
 
     #[test]
@@ -468,7 +551,7 @@ mod tests {
             "[local.git]\n",
             "allow.sub = [\"status\"]\n",
         ));
-        let lints = lint_file(&f, None);
+        let lints = lint_file(&f, None, &[]);
         assert!(
             codes(&lints).contains(&"head-list-and-section"),
             "{lints:?}"
@@ -479,21 +562,21 @@ mod tests {
     fn allow_may_write_suggests_with_kb_only() {
         let k = kb("version = 1\n[npx]\nmay_write = true");
         let f = file("version = 1\ndefault = \"confirm\"\n[local]\nallow = [\"npx\"]");
-        let lints = lint_file(&f, Some(&k));
+        let lints = lint_file(&f, Some(&k), &[]);
         assert!(codes(&lints).contains(&"allow-may-write"), "{lints:?}");
         // 无知识库降级：同配置纯结构检查无告警。
-        assert!(lint_file(&f, None).is_empty());
+        assert!(lint_file(&f, None, &[]).is_empty());
     }
 
     #[test]
     fn alias_redundant_warns_on_never_matching_entry() {
         let k = kb("version = 1\n[pip3]\nalias_of = \"pip\"");
         let f = file("version = 1\ndefault = \"confirm\"\n[local]\nallow = [\"pip\", \"pip3\"]");
-        let lints = lint_file(&f, Some(&k));
+        let lints = lint_file(&f, Some(&k), &[]);
         assert!(codes(&lints).contains(&"alias-redundant"), "{lints:?}");
         // 单边配置（无冗余）不告警。
         let f2 = file("version = 1\ndefault = \"confirm\"\n[local]\nallow = [\"pip\"]");
-        assert!(lint_file(&f2, Some(&k)).is_empty());
+        assert!(lint_file(&f2, Some(&k), &[]).is_empty());
     }
 
     #[test]
@@ -507,7 +590,7 @@ mod tests {
             "confirm.flag = [\"-f\"]\n",
             "allow.flag = [\"--force\"]\n",
         ));
-        let lints = lint_file(&f, Some(&k));
+        let lints = lint_file(&f, Some(&k), &[]);
         assert!(
             codes(&lints).contains(&"same-flag-cross-bucket"),
             "{lints:?}"
@@ -519,7 +602,7 @@ mod tests {
             "[local.git]\n",
             "confirm.flag = [\"-f\", \"--force\"]\n",
         ));
-        assert!(lint_file(&f2, Some(&k)).is_empty());
+        assert!(lint_file(&f2, Some(&k), &[]).is_empty());
     }
 
     #[test]
@@ -531,7 +614,7 @@ mod tests {
             "allow.sub = [\"status\"]\n",
             "deny.sub = [\"stauts\"]\n",
         ));
-        let lints = lint_file(&f, None);
+        let lints = lint_file(&f, None, &[]);
         let typos: Vec<_> = lints
             .iter()
             .filter(|l| l.code == "subcommand-typo")
@@ -549,7 +632,7 @@ mod tests {
             "[local.git]\n",
             "allow.sub = [\"confg\"]\n",
         ));
-        let lints = lint_file(&f, Some(&k));
+        let lints = lint_file(&f, Some(&k), &[]);
         let typos: Vec<_> = lints
             .iter()
             .filter(|l| l.code == "subcommand-typo")
@@ -561,7 +644,7 @@ mod tests {
             typos[0].message
         );
         // 无知识库时该用例无提示（降级纯结构检查）。
-        assert!(lint_file(&f, None).is_empty());
+        assert!(lint_file(&f, None, &[]).is_empty());
     }
 
     #[test]
@@ -575,7 +658,7 @@ mod tests {
             "allow = [\"curl\"]\n",
             "confirm = [\"curl\"]\n",
         ));
-        let lints = lint_file(&f, None);
+        let lints = lint_file(&f, None, &[]);
         let multi = lints.iter().find(|l| l.code == "multi-bucket").unwrap();
         assert!(
             multi.message.contains("effective: allow"),
@@ -595,6 +678,94 @@ mod tests {
             "allow = [\"curl\"]\n",
             "confirm = { add = [\"curl\"] }\n",
         ));
-        assert!(codes(&lint_file(&f, None)).contains(&"multi-bucket"));
+        assert!(codes(&lint_file(&f, None, &[])).contains(&"multi-bucket"));
+    }
+
+    #[test]
+    fn script_allow_dead_declaration_warns() {
+        // 无脚本引用的声明 → 死声明告警；被引用的声明不告警。
+        let f = file(concat!(
+            "version = 1\n",
+            "default = \"confirm\"\n",
+            "[local]\n",
+            "script_allow = [\"ls\", \"docker\"]\n",
+        ));
+        let lints = lint_file(&f, None, &["ls".to_string()]);
+        let dead: Vec<_> = lints
+            .iter()
+            .filter(|l| l.code == "script-allow-dead")
+            .collect();
+        assert_eq!(dead.len(), 1, "{lints:?}");
+        assert!(dead[0].message.contains("docker"));
+        // 两条都被引用 → 无死声明。
+        let lints = lint_file(&f, None, &["ls".to_string(), "docker".to_string()]);
+        assert!(!codes(&lints).contains(&"script-allow-dead"), "{lints:?}");
+        // 无脚本层（空提取集）→ 全部声明都是死声明。
+        let lints = lint_file(&f, None, &[]);
+        assert_eq!(
+            lints
+                .iter()
+                .filter(|l| l.code == "script-allow-dead")
+                .count(),
+            2
+        );
+    }
+
+    #[test]
+    fn script_allow_section_form_participates() {
+        let f = file(concat!(
+            "version = 1\n",
+            "default = \"confirm\"\n",
+            "[local.ls]\n",
+            "script_allow = true\n",
+        ));
+        let lints = lint_file(&f, None, &["ls".to_string()]);
+        assert!(!codes(&lints).contains(&"script-allow-dead"), "{lints:?}");
+    }
+
+    #[test]
+    fn script_allow_may_write_suggestion() {
+        let k = kb("version = 1\n[npx]\nmay_write = true");
+        let f = file("version = 1\ndefault = \"confirm\"\n[local]\nscript_allow = [\"npx\"]");
+        let lints = lint_file(&f, Some(&k), &["npx".to_string()]);
+        assert!(
+            codes(&lints).contains(&"script-allow-may-write"),
+            "{lints:?}"
+        );
+        // 无知识库 → 无该建议。
+        assert!(lint_file(&f, None, &["npx".to_string()]).is_empty());
+    }
+
+    #[test]
+    fn script_allow_deny_conflict_hint() {
+        // 头部 deny 裸列表命中。
+        let f = file(concat!(
+            "version = 1\n",
+            "default = \"confirm\"\n",
+            "[local]\n",
+            "script_allow = [\"docker\"]\n",
+            "deny = [\"docker\"]\n",
+        ));
+        let lints = lint_file(&f, None, &["docker".to_string()]);
+        assert!(
+            codes(&lints).contains(&"script-allow-deny-conflict"),
+            "{lints:?}"
+        );
+        // 命令节 deny 桶命中。
+        let f = file(concat!(
+            "version = 1\n",
+            "default = \"confirm\"\n",
+            "[local.git]\n",
+            "script_allow = true\n",
+            "deny.sub = [\"push\"]\n",
+        ));
+        let lints = lint_file(&f, None, &["git".to_string()]);
+        assert!(
+            codes(&lints).contains(&"script-allow-deny-conflict"),
+            "{lints:?}"
+        );
+        // 无 deny 条目 → 无提示。
+        let f = file("version = 1\ndefault = \"confirm\"\n[local]\nscript_allow = [\"ls\"]");
+        assert!(lint_file(&f, None, &["ls".to_string()]).is_empty());
     }
 }
