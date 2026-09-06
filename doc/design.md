@@ -86,13 +86,13 @@ crush-tether hook（二进制本体 · 短命进程 · client 角色）
   ② connect 端点（µs）─ 成功 ─▶ 一行协议收发 ─▶ 按契约 emit 裁决 ─▶ exit
   ③ 失败 ─▶ detached spawn serve + 有界等就绪 + 重试 connect（~200ms 预算）
   ④ 仍失败 ─▶ 降级本进程全量管线（check 路径），绝不无裁决放行
-  │ 命名端点 crush-tether-<hash(项目根, engine)>（每项目一实例 · ACL 限当前用户）
+  │ 命名端点 crush-tether-<hash(项目根, engine, --config)>（每项目一实例 · ACL 限当前用户）
   ▼
 crush-tether serve（二进制本体 · detached 常驻 · server 角色）
   · 启动第一动作 = 独占创建端点：成功 = 唯一服务；失败 = 已存在 → 静默退出
-  · 串行 accept：请求 → 匹配 Arc<RuleSet> 快照 → 应答
+  · 串行 accept：请求 → 匹配规则快照 → 应答
   · last_activity 归零 + 空闲超 grace → exit（崩溃自愈：下一条命令由 hook 重拉）
-  · 三层配置 → merge → 编译不可变快照；notify + debounce → 整段重编译换指针
+  · 三层配置 → merge → 编译不可变快照；notify + debounce → 整段重编译后整体替换
   · DSL（Rhai/Lua）沙箱在本进程内执行，永不以 OS 进程形态存在
 
 check（兜底/冒烟）：同一二进制单发，不碰端点，本进程全量 Parse → … → Verdict
@@ -191,7 +191,7 @@ crush-tether benchmark [--engine rhai --config <file>]            # 双跑对比
 - **端点名**：`crush-tether-<hash(canonical(project_dir), engine标签, --config 覆盖路径)>`（engine/`--config` 取自 CLI 参数；`--config` 缺省不进 hash）。**一项目一 serve**：配置/热重载/裁决域天然按项目隔离（显式 `--config` 覆盖视作独立裁决域），进程内无需多项目缓存与逐出；同项目**所有 agent/会话**共用同一 serve（裁决与 agent 无关，Channel 适配留在一次性 hook 进程）。
 - **单实例**：serve 启动第一动作 = **独占创建端点**（bind / 第一管道实例创建），同一 syscall 同步裁定唯一性与角色：成功 = 本项目唯一服务；失败 = 已存在 → 本进程静默退出（输者转 connect 重试，非报错退出）。同项目多会话并发冷启动的惊群由此消解，无锁无 pidfile。崩溃残留：Windows 管道与 abstract socket 活在内核命名空间，进程死即消失，天然免疫；文件系统 socket 需「bind 失败但 connect ECONNREFUSED → unlink + rebind」有界重试。
 - **协议**：复用 hook 的 JSON envelope 作行单元：请求 `{id, op:"check", command, agent}` / `{id, op:"ping"}`；响应 `{id, verdict:{decision, reason}, error}`（`error` = 畸形请求/未知 op 的带内报错；`agent` 供日志溯源）。`id` 客户端生成单调递增，严格逐请求应答，无乱序（v1 一连接一请求下恒为 1，字段为将来复用连接保留）。连接生命周期 = 一次请求（短命 hook 进程），无长连接池、无会话态。
-- 依赖钉版：tree-sitter 0.25 / tree-sitter-bash 0.25 / serde 1 / serde_json 1 / toml 0.9；`rhai`/`mlua`/`notify` 待 P3/P4 引入，避免未用依赖拖累编译。
+- 依赖钉版（全景清单；版本约束的唯一事实源 = 根 `Cargo.toml`）：tree-sitter 0.25 / tree-sitter-bash 0.25 / serde 1 / serde_json 1 / toml 0.9 / rhai 1（P3 引入，`internals` feature——AST 字面量提取）/ interprocess 2.4（P4 引入，命名端点）/ notify 8（P4 引入，热重载监听）；`mlua` 待 P6（Lua 引擎）引入。
 - **连接感知**：全靠内核事件，建立 = `accept()` 返回 / `ConnectNamedPipe` 完成，断开 = read 得 EOF（`0`）/ `ERROR_BROKEN_PIPE`；本机端点不存在 TCP 式半开连接（同机进程死 = 内核关 fd = 对端立即 EOF），无需心跳。
 - **Windows 忙实例**：第二客户端 `CreateFile` 得 `ERROR_PIPE_BUSY` → `WaitNamedPipe` 重试后重连（客户端标准模式）。
 - **安全**：端点 ACL 限当前用户（Windows 管道默认 DACL / unix socket 0600）。同用户其他进程可伪造请求，但裁决只输出 allow/confirm/deny 且 deny/confirm 均为安全侧，伪造最多把危险命令转人工确认，无可放大面。
@@ -203,7 +203,7 @@ crush-tether benchmark [--engine rhai --config <file>]            # 双跑对比
 
 | 资产 | 形态 | 所在位置 | 职责 | 不做什么 |
 |---|---|---|---|---|
-| `crush-tether`（二进制本体） | Rust 静态单 `.exe` | cargo 安装路径（`~/.cargo/bin/` 等） | 三角色运行时：hook client（channel 适配 + connect-or-spawn + 降级）/ serve（独占 bind + 端点监听 + 热重载 + idle 退出）/ check（单发全量管线）；独占 bind 的 syscall 在此 | 不存项目状态；不感知 agent 契约以外的环境 |
+| `crush-tether`（二进制本体） | Rust 静态单 `.exe` | cargo 安装路径（`~/.cargo/bin/` 等） | 四模式运行时：hook client（channel 适配 + connect-or-spawn + 降级）/ serve（独占 bind + 端点监听 + 热重载 + idle 退出）/ check（单发全量管线）/ benchmark（双跑对比验收）；独占 bind 的 syscall 在此 | 不存项目状态；不感知 agent 契约以外的环境 |
 | agent 配置条目 | 配置文本 | `.crushrc` / ClaudeCode settings | 一行命令直指二进制（`crush-tether hook --agent crush`） | 无包装脚本、无内联 shell 逻辑 |
 | `.crush-tether/rules.toml` | 声明层数据 | 项目内 | 数据/默认值/命令集合/简单 when→decision 规则 | 不是代码，不被执行 |
 | `.crush-tether/rules.rhai|.lua` | 脚本层数据 | 项目内 | 跨命令逻辑/自定义谓词/fn 规则 | 不独立执行，仅在二进制内沙箱运行（max_operations 限流） |
@@ -211,7 +211,7 @@ crush-tether benchmark [--engine rhai --config <file>]            # 双跑对比
 
 #### 配置加载与热重载
 
-- **冷启动全量、热更新整段重编译**：启动读 全局 → 用户 → 项目 三层（**v1 全局层无发现路径**，为后期设计留位；三层皆无有效配置则先执行项目侧默认生成，见 [零内置策略与默认配置生成（定稿）](#零内置策略与默认配置生成定稿)），按上文优先级 merge 后编译成不可变快照 `Arc<RuleSet>`；任一文件变化则**整段重建**再原子换指针（O(1)），在途请求继续用旧快照，新请求用新快照，无锁争用。脚本层链同理随快照整体重建（用户层先、项目层最后，见 [D-02](decisions.md#d-02-字段级继承合并模型) 与「配置拆分」）。
+- **冷启动全量、热更新整段重编译**：启动读 全局 → 用户 → 项目 三层（**v1 全局层无发现路径**，为后期设计留位；三层皆无有效配置则先执行项目侧默认生成，见 [零内置策略与默认配置生成（定稿）](#零内置策略与默认配置生成定稿)），按上文优先级 merge 后编译成不可变快照；任一文件变化则**整段重建**后整体替换——v1 串行 accept 下快照为本地所有权 `RuleSet`（rhai `Engine` 非 Send，`Arc` 化不可行），在途请求继续用旧快照，新请求用新快照，无锁争用；**并发版升级点** = rhai `sync` feature + `Arc<RwLock<Arc<RuleSet>>>` 原子换指针。脚本层链同理随快照整体重建（用户层先、项目层最后，见 [D-02](decisions.md#d-02-字段级继承合并模型) 与「配置拆分」）。
 - **stale 首请求边界**：热重载信号在 serve 主线程的**请求间隙**消费——debounce 窗口内到达的首个请求仍用旧快照裁决（最坏滞后一个请求，最终一致；裁决日志可按 load 事件行对齐时间线）。
 - **声明层**（`rules.toml`）：`serde` 反序列化 → 规则序表（μs 级，可随时整表重建）。
 - **脚本层**（`rules.rhai|lua`）：`Engine` 全局只建一次（编译 AST 缓存）；文件变化才重新编译；编译失败**保留旧快照** + stderr 告警，绝不半更新。
@@ -227,9 +227,9 @@ crush-tether benchmark [--engine rhai --config <file>]            # 双跑对比
 
 #### 扩展点（开闭原则落点）
 
-- 新 agent = 新 `Channel` 实现（不动 core）；新分类规则 = 新 `Rule` 或一条 `[[rules]]`（不动管线）；新 DSL 引擎 = 新 `RuleEngine` 实现（不动调用方）。
+- 新 agent = channel 层新增适配（`Agent` 变体 + 契约分派，不动 core）；新分类规则 = 配置词条或脚本层谓词（不动管线，[更正登记](#更正登记对既有定稿) 2/12 的替代形态）；新 DSL 引擎 = 新 `RuleEngine` 实现（不动调用方）。
 - **依赖方向**：`model ← cmd_parse/engine/config ← channel/service`，`model`/`engine` 不反向依赖 channel/service（编译期由模块可见性保证）。
-- **服务化不侵入核心**：`engine`/`config` 不感知「谁在调用、调用几次」，热重载只是换 `Arc<RuleSet>` 指针。
+- **服务化不侵入核心**：`engine`/`config` 不感知「谁在调用、调用几次」，热重载只是整体替换规则快照。
 
 ### DSL 引擎（定稿）
 
