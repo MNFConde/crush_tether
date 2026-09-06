@@ -1,6 +1,6 @@
 # AGENTS.md
 
-crush_tether —— Crush 命令级 bash 权限门（Rust 实现 crush-guard 独立化/重写）。当前状态：**P0–P6（M6.1/M6.2）已落地**（分类核心 + 配置 v1 全链：三层发现/字段级继承合并/双表三桶查表/知识库归一/双层 lint/默认包生成；脚本层双引擎：Rhai 默认 + Lua（mlua），ctx 封装与决策枚举化定型（M6.1），script_allow 受控放行五件套；serve 服务化：命名端点/connect-or-spawn/热重载/JSONL 裁决日志（D-07）；三 adapter：Crush/ClaudeCode/zcode；README 已落地），仅余 M6.3（mdor 退役 + M5.3 实机探针）见 [cairn/ROADMAP.md](cairn/ROADMAP.md)。**M6.3 已完成（2026-09-06，P0–P6 收官）**：探针首测抓到并修复 M4.1 Windows 句柄继承洞（943b205）；mdor 侧退役完成（mdor 仓库 13d175e）；实机探针四项观察闭环、正式 zcode 插件 `plugin/` 定稿入库。待用户拍板：探针插件禁用、mdor 是否实挂 crush-tether。格式规范见 [doc/design.md](doc/design.md)，决策论证见 [doc/decisions.md](doc/decisions.md)。
+crush_tether —— Crush 命令级 bash 权限门（Rust 实现 crush-guard 独立化/重写）。当前状态：**P0–P6 全部收官（M6.3 完成 2026-09-06）**（分类核心 + 配置 v1 全链：三层发现/字段级继承合并/双表三桶查表/知识库归一/双层 lint/默认包生成；脚本层双引擎：Rhai 默认 + Lua（mlua），ctx 封装与决策枚举化定型（M6.1），script_allow 受控放行五件套；serve 服务化：命名端点/connect-or-spawn/热重载/JSONL 裁决日志（D-07）；三 adapter：Crush/ClaudeCode/zcode，正式 zcode 插件 `plugin/` 入库；README 已落地；M6.3 闭环 = M4.1 Windows 句柄继承洞修复（943b205）+ mdor 侧退役（13d175e）+ M5.3 实机探针四项观察闭环）。后续：P7 体验与适配专项已登记待授权（M7.0–M7.3，见 [cairn/ROADMAP.md](cairn/ROADMAP.md)）；CI 双 job 已落地（`.github/workflows/ci.yml`）。待用户拍板：探针退役（清单见 ROADMAP M7.2）、mdor 是否实挂。格式规范见 [doc/design.md](doc/design.md)，决策论证见 [doc/decisions.md](doc/decisions.md)。
 
 > 本项目使用 Project Cairn 组织项目知识：Cairn 全套规则（初始化配置/阅读顺序/文档职责/冲突仲裁/知识库消费反射/知识沉淀规则）见 `cairn/AGENTS.md`。
 > 本机装有 project-cairn skill 且仓库存在 `cairn/` 时生效；否则视为不适用，跳过。

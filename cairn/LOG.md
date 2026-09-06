@@ -2,6 +2,15 @@
 
 This file records substantive progress in reverse-chronological order — newest entry at the top, right below this line. Keep each entry short — summary and pointer only; conclusions settle into `cairn/<topic>.md`.
 
+## 2026-09-07 · 会话审查闭环：漂移修复 + 退役清单钉死 + 可选加固登记
+
+- **审查发现 3 处文档漂移，全部修复**：ROADMAP P6 行标题滞后（子条目已 ✅ 父行仍写「待用户确认节奏」）；AGENTS.md 状态段自相矛盾（「仅余 M6.3」紧接「M6.3 已完成」——整段重写为收官态口径，消除「M6.1/M6.2 已落地」旧括号）；design.md 失效模式 #2 实测范围精化（实测 = 「进程已启动但非 2 退出码」fail-open；「路径不存在」未测、推断同路、随 M7 前置确认；顺带更正 ROADMAP「M6.2 遗留探针插件」标签笔误）。
+- **M7 前置登记于 P7 最前**（正式插件实机验证）：登记时 `crush-tether` 不在 PATH——不装 PATH 直接装正式插件会落进失效模式 #2 的 fail-open；M5.3 实测通过的是探针插件形态（node wrapper + 绝对路径），正式版 `type:"process"` + PATH 解析链路未跑过；M5.3 验收行同步加注。
+- **探针退役清单钉死在 M7.2**（用户裁定：审查项 6/7 均随退役消解，不单独处理）：禁用/卸载插件 + 清缓存目录 + 删 `.zcode/probe/`（dump 删前用户过目、三副本漂移随删消灭）+ 删 `.zcode/config.json`（防配置轨日后激活双 hook）+ 清用户级注册；全部为未入库临时件，持久文档不在范围。
+- **可选加固登记（带前因后果）**：Windows 句柄继承回归测试——943b205 仅人工验证，普通 CI shell 管道不可继承恰为盲区；若守护缺失，删代码全部测试仍绿、症状只在实用中重现；方案 = 可继承句柄 helper 父进程专用用例（可行但脆，非正式里程碑）。
+- 流程处置（用户裁定）：check-links 触发自理；mdor 退役提交（feature/m3-reader 分支）合并时处理；临时件残留不触碰业务代码与持久文档。
+- Details: `cairn/ROADMAP.md`（P6 行/Current focus 标签/P7 前置/M7.2 退役清单/可选加固/M5.3 验收注）、`AGENTS.md`（状态段重写）、`doc/design.md`（#2 行精化）。
+
 ## 2026-09-07 · CI 工作流落地（参考 mdor ci.yml 适配）
 
 - 新增 `.github/workflows/ci.yml`：ubuntu job = 本仓库全门禁（fmt/clippy/test/check-links/audit，单 crate 无 `-p` 限定）；windows-latest job = 专跑 test（覆盖句柄继承修复、命名管道 serve/hook 等 Windows 专属行为面）。
