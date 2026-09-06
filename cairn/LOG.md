@@ -2,6 +2,17 @@
 
 This file records substantive progress in reverse-chronological order — newest entry at the top, right below this line. Keep each entry short — summary and pointer only; conclusions settle into `cairn/<topic>.md`.
 
+## 2026-09-06 · 设计-实现一致性审查修复（13 笔提交，P6 前收口）
+
+- **审查**：双探索代理 + 人工复核（代理结论被修正 3 处：merge_with_labels 是 merge 的默认包装非未调用；check 自写日志 D-07 正文已载；default 档溯源 lookup 侧已接线——过度延伸的「default 未接线」撤回）。结论：M2 管线与 script_allow 五件套一致性最好，偏差集中在 P4 收尾承诺、文档滞后与测试基建。
+- **批一行为修复**（600033a 热重载 load 事件/27dd6d7 source.layer explicit+script 接线/4e063d2 --config 进 serve + 端点名纳入/284d63f 响应读 5s deadline/0b35b8e env 兜底+项目根统一/e2504a5 用户层脚本链/fe8691d lint write_flags+delegates 消费者/5798317 降级 mode=hook）。
+- **批二文档对齐**（22c1a52）：design.md 目标结构/四模式/协议字段/端点构成/stale 首请求边界/.bak 残留清理；更正登记 15（拼接 allow 按折叠值对账）/16（pnpm dlx 注释如实化，延续 D-05 定性：guard.py 非验收标准）；D-04 更正（组合裁决硬编码 deny 优先不随 precedence）；ROADMAP M2.2 勾选更正（全局层 v1 不做，登记 P6 后专项）。
+- **批三代码健康**（869b6f8/94ec9aa）：死参数清理、KB Arc 共享、RuleSetError 三类结构化、词汇 Decision::parse 单源、deny(missing_docs) 补 87 处、惊群「恰好一个存活」不变量、sleep→deadline 轮询、墙钟断言删除、TempDir 三次法则收敛。
+- **教训（追加型编辑静默丢失）**：93ee1a8 给 .gitignore 追加的 `/.crush-tether/` 实际入库为空行（拼接点出错不报错），运行时目录此后未被忽略——commit.md 六节新增 6.5（追加型编辑提交前 diff 逐行核对）。
+- **测试基建教训**：同线程顺序执行 `accept()`→`connect()` 会死锁（accept 阻塞等连接）——本地端点自测连接对必须先 connect 后 accept（Windows 命名管道单实例，二次 connect 无空闲实例会阻塞，每用例一对连接）。
+- 用户裁定：默认包是本项目自定策略，不向 guard.py 规则对齐（A1 注释如实化而非补 [pnpm] 别名）。
+- Details: `doc/design.md`（更正登记 15/16）、`doc/decisions.md`（D-04 更正）、`.agents/rules/commit.md` 6.5、`tests/{script_chain,service_reload,service_serve}.rs`。
+
 ## 2026-09-06 · P4+P5 落地：服务化三里程碑与三 adapter 契约
 
 - **M4.3**（0b36b42 + 4a209ad/942cc00/d6b5c50 溯源管道）：JSONL 裁决日志落盘 `<project>/.crush-tether/decisions.jsonl`（默认开，ADR-07；写入失败静默）；`source.layer` 全层溯源 = merge 层 Provenance 映射（词条→生效层，Set 覆盖清表/Delta 增删随层）+ lookup `EntrySource`（entry 形态 `<bin>.<bucket>.<dim>`/`<bucket>`/`default`）；`type:"load"` 事件行冷/热路径留痕含 lint 告警；`ts` 用 UTC RFC3339（std 无本地时区，不引依赖，Hinnant 算法自实现）。
