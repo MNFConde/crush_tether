@@ -36,12 +36,12 @@
 - [x] **M4.0 脚本条件放行（script_allow）**✅（2026-09-06，64ef27b 声明文法 + f8496d0 引擎五件套 + b88f70d lint 三条 + 本提交端到端；设计定稿见 design.md「脚本条件放行（script_allow，定稿）」与更正登记 11）：
   - 内容：声明文法双形态（顶级列表 `script_allow = [...]` + 命令节键 `script_allow = true`，D-02 跨层合并）；脚本 `allow("bin")` 原语（裸 `"allow"` 字符串仍违约）；引擎五件套（加载期字面量提取 / 声明集差集拒载 / 运行时对账双保险 / 定稿点作用域化逃逸检查 / deny 终审拦截）；lint 三条新规则（死声明 / may_write 建议 / deny 冲突提示）；脚本词汇约定修订随其前置小改落地（`decision::` 只读常量四值含 PASS、ctx 可选字段空串约定——design.md「脚本层职责边界」词汇约定条）。
   - 验收：a（local 声明）逃逸 → confirm、b（global 声明）逃逸 → allow、未声明 bin 拒载、动态名拒载、deny 之上激活无效、lint 三条正反用例全绿、decision:: 常量与空串约定单测全绿、全门禁过——全部达成（端到端 `tests/script_allow.rs` + 单测）。实现注记：字面量提取用 rhai `internals` feature 的 `AST::walk`（含函数体；rhai 锁版钉死，升级须回归）；`return allow(...)` 被优化器折叠为语句级 `Stmt::FnCall`，提取集对其单独布点；字符串拼接被常量折叠为字面量后按折叠值对账（静态提取与运行值恒一致）；定稿点逃逸检查与查表层同原语（命令参数词元），重定向目标不在词元内（已知边界，LOG 登记）。
-- [ ] **P4 常驻服务 + 热重载**（M4.1–M4.3；多 bucket 管理与配置编写提示为后置专项，不阻塞主线）：
-  - **M4.1 命名端点 serve + hook connect-or-spawn**：端点名 hash(项目根, engine)；独占 bind 单实例裁定（输者静默转 connect）；spawn + ~200ms 有界等就绪重试 → 仍失败降级本进程 check；`--idle-exit`（默认 30s）；v1 串行 accept + per-request deadline；端点 ACL 限当前用户。
+- [x] **P4 常驻服务 + 热重载**（M4.1–M4.3；多 bucket 管理与配置编写提示为后置专项，不阻塞主线）——已收口（2026-09-06，c127205 + 8999ea8 + 本提交）：
+  - **M4.1 命名端点 serve + hook connect-or-spawn**✅（2026-09-06，c127205）：端点名 hash(项目根, engine)；独占 bind 单实例裁定（输者静默转 connect）；spawn + ~200ms 有界等就绪重试 → 仍失败降级本进程 check；`--idle-exit`（默认 30s）；v1 串行 accept + per-request deadline；端点 ACL 限当前用户。
     - 验收：并发冷启动惊群收敛单实例；连接归零 idle 退出；降级路径仍出裁决绝不放行；`--benchmark` 双跑 diff 为空。
-  - **M4.2 热重载**：notify + 600ms debounce；三层整段重编译 + `Arc<RuleSet>` 原子换指针；编译失败保留旧快照 + stderr 告警；监听失效降级 stat（mtime+size+hash 三重校验）。
+  - **M4.2 热重载**✅（2026-09-06，8999ea8）：notify + 600ms debounce；三层整段重编译 + `Arc<RuleSet>` 原子换指针；编译失败保留旧快照 + stderr 告警；监听失效降级 stat（mtime+size+hash 三重校验）。
     - 验收：改规则文件不重启即生效（端到端）；坏文件期间新旧请求分别用新旧快照、无半更新；降级路径正确性不损。
-  - **M4.3 裁决日志落盘 + 资源预算达标**：JSONL 字段全集（含 `kb`/`normalized`/`script`）；serve 单点写 + hook 降级自写；`type:"load"` 事件行含 lint 告警；日志默认开关就此定并登记 ADR（建议默认开——P4 内唯一实现期定点）。
+  - **M4.3 裁决日志落盘 + 资源预算达标**✅（2026-09-06，本提交）：JSONL 字段全集（含 `kb`/`normalized`/`script`）；serve 单点写 + hook 降级自写；`type:"load"` 事件行含 lint 告警；日志默认开关就此定并登记 ADR（建议默认开——P4 内唯一实现期定点）。
     - 验收：日志字段与 design.md 示例一致；load 事件冷热路径都留痕；常驻 <10MB、P95 <5ms、零 busy-loop，CI benchmark 门槛防退化。
 - [ ] **P5 Adapter 完整化：ClaudeCode + zcode**（M5.1–M5.3；zcode 于 2026-09-06 并入）：
   - **M5.1 契约适配**：`hookSpecificOutput` 信封（permissionDecision allow/ask/deny）；输入键名与 `CLAUDE_PROJECT_DIR` 适配；权限基准 cwd 优先、回退 env；`updated_input` 全替换语义（区别于 Crush 浅合并）。

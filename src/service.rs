@@ -53,13 +53,15 @@ pub fn endpoint_name(project: &Path, engine: &str) -> String {
 
 // ── 协议 DTO ─────────────────────────────────────────────────────────────
 
-/// 请求行：`{id, op:"check", command}` / `{id, op:"ping"}`。
+/// 请求行：`{id, op:"check", command, agent}` / `{id, op:"ping"}`。
 #[derive(Debug, Serialize, Deserialize)]
 pub struct RequestLine {
     pub id: u64,
     pub op: String,
     #[serde(default)]
     pub command: String,
+    #[serde(default)]
+    pub agent: String,
 }
 
 /// 响应行：`verdict = None` 表示无裁决（ping 应答）。
@@ -95,6 +97,18 @@ fn parse_decision(s: &str) -> Option<Decision> {
 pub struct RuleSet {
     lookup: RuleLookup,
     script: Option<crate::script::RhaiEngine>,
+    /// 知识库 main 是否在位（日志 `kb` 字段：[] = 删光自证）。
+    pub kb_present: bool,
+    /// 项目层 rules.toml 的 lint 告警（`type:"load"` 事件行内容）。
+    pub lint_warnings: Vec<crate::lint::Lint>,
+}
+
+/// 单命令裁决的溯源信息（日志 source/normalized/script 字段数据源）。
+#[derive(Debug, Default, Clone)]
+pub struct DecisionTrace {
+    pub source: Option<crate::lookup::EntrySource>,
+    pub normalized: Option<String>,
+    pub script_changed: bool,
 }
 
 impl RuleSet {
@@ -179,53 +193,218 @@ impl RuleSet {
                 ));
             }
         };
-        Ok(RuleSet { lookup, script })
+        // lint（M2.5 双层）：项目层 rules.toml + 脚本提取集；只告警不拒绝，
+        // 告警进 serve 的 `type:"load"` 事件行。
+        let lint_warnings = match &found {
+            Ok(l) => match (&l.project, &script) {
+                (Some(f), Some(s)) => crate::lint::lint_file(f, kb, s.allow_literals()),
+                (Some(f), None) => crate::lint::lint_file(f, kb, &[]),
+                _ => Vec::new(),
+            },
+            Err(_) => Vec::new(),
+        };
+        Ok(RuleSet {
+            lookup,
+            script,
+            kb_present: kb.is_some(),
+            lint_warnings,
+        })
     }
 
     /// 完整单命令管线：解析拉平 → 查表 → 脚本 → 定稿点 → 组合裁决。
     pub fn decide(&self, command: &str, project: &Path) -> Verdict {
-        crate::engine::decide_with(command, project, &|cmd, project, pipe_to_shell| {
-            let v0 = self.lookup.classify(cmd, project);
-            let (decision, reason) = match &self.script {
-                Some(script) => {
-                    match script.evaluate(cmd, v0.decision, project, pipe_to_shell) {
-                        // 定稿点：deny 终审 + allow 激活作用域化逃逸检查的唯一出口。
-                        Ok(outcome) => crate::script::finalize(
-                            v0.decision,
-                            outcome,
-                            script.decls(),
-                            cmd,
-                            project,
-                        ),
-                        Err(e) => {
-                            eprintln!(
-                                "crush-tether: script evaluation failed: {e}; fail-safe confirm"
-                            );
-                            (
-                                Decision::Confirm,
-                                Some("script evaluation failed; fail-safe".into()),
-                            )
-                        }
+        self.decide_trace(command, project).0
+    }
+
+    /// 裁决 + 溯源（日志 source/normalized/script 字段）。
+    pub fn decide_trace(&self, command: &str, project: &Path) -> (Verdict, DecisionTrace) {
+        use std::cell::RefCell;
+        let trace = RefCell::new(DecisionTrace::default());
+        let verdict =
+            crate::engine::decide_with(command, project, &|cmd, project, pipe_to_shell| {
+                let c0 = self.lookup.classify_traced(cmd, project);
+                let v0 = c0.verdict;
+                {
+                    let mut t = trace.borrow_mut();
+                    if t.source.is_none() {
+                        t.source = c0.source.clone();
+                    }
+                    if t.normalized.is_none() && !c0.kb_chain.is_empty() {
+                        t.normalized = Some(c0.kb_chain.join(" -> "));
                     }
                 }
-                None => (v0.decision, None),
-            };
-            match (reason, decision != v0.decision) {
-                (Some(reason), true) => Verdict {
-                    decision,
-                    reason: Some(reason),
-                },
-                (Some(reason), false) => Verdict {
-                    decision,
-                    reason: v0.reason.or(Some(reason)),
-                },
-                (None, _) => Verdict {
-                    decision,
-                    reason: v0.reason,
-                },
-            }
-        })
+                let (decision, reason) = match &self.script {
+                    Some(script) => {
+                        match script.evaluate(cmd, v0.decision, project, pipe_to_shell) {
+                            // 定稿点：deny 终审 + allow 激活作用域化逃逸检查的唯一出口。
+                            Ok(outcome) => {
+                                let activate =
+                                    matches!(outcome, crate::script::ScriptOutcome::Activate(_));
+                                let (d, r) = crate::script::finalize(
+                                    v0.decision,
+                                    outcome,
+                                    script.decls(),
+                                    cmd,
+                                    project,
+                                );
+                                // script 字段自证：激活或改判（含 deny 终审拦截）留痕。
+                                if activate || d != v0.decision {
+                                    trace.borrow_mut().script_changed = true;
+                                }
+                                (d, r)
+                            }
+                            Err(e) => {
+                                eprintln!(
+                                    "crush-tether: script evaluation failed: {e}; fail-safe confirm"
+                                );
+                                (
+                                    Decision::Confirm,
+                                    Some("script evaluation failed; fail-safe".into()),
+                                )
+                            }
+                        }
+                    }
+                    None => (v0.decision, None),
+                };
+                let script_changed = trace.borrow().script_changed;
+                match (reason, decision != v0.decision) {
+                    (Some(reason), true) => Verdict {
+                        decision,
+                        reason: Some(reason),
+                    },
+                    (Some(reason), false) => Verdict {
+                        decision,
+                        reason: v0.reason.or(Some(reason)),
+                    },
+                    (None, _) => Verdict {
+                        decision,
+                        reason: if script_changed {
+                            Some("adjusted by rules.rhai".into())
+                        } else {
+                            v0.reason
+                        },
+                    },
+                }
+            });
+        (verdict, trace.into_inner())
     }
+}
+
+// ── 裁决日志（M4.3，ADR-07：默认开）───────────────────────────────────────
+
+/// 日志开关（默认开；`CRUSH_TETHER_LOG=0|off|false` 关闭）。
+pub fn log_enabled() -> bool {
+    match std::env::var("CRUSH_TETHER_LOG") {
+        Ok(v) => !matches!(v.as_str(), "0" | "off" | "false"),
+        Err(_) => true,
+    }
+}
+
+/// UTC RFC3339 时间戳（std 无本地时区能力；人读视图由 log 子命令渲染，挂账）。
+fn rfc3339_utc() -> String {
+    let d = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default();
+    let secs = d.as_secs();
+    let days = secs / 86_400;
+    let rem = secs % 86_400;
+    let (hh, mm, ss) = (rem / 3_600, rem % 3_600 / 60, rem % 60);
+    // civil_from_days：epoch 起的天数 → 年月日（Hinnant 算法）。
+    let z = days as i64 + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = (z - era * 146_097) as u64;
+    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
+    let y = yoe as i64 + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let dom = doy - (153 * mp + 2) / 5 + 1;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 };
+    let year = if month <= 2 { y + 1 } else { y };
+    format!("{year:04}-{month:02}-{dom:02}T{hh:02}:{mm:02}:{ss:02}Z")
+}
+
+/// 追加一行 JSONL（写入失败静默：日志永不影响裁决路径）。
+fn log_jsonl(project: &Path, value: &serde_json::Value) {
+    if !log_enabled() {
+        return;
+    }
+    let path = project.join(".crush-tether").join("decisions.jsonl");
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+    {
+        use std::io::Write as _;
+        let mut line = value.to_string();
+        line.push('\n');
+        let _ = f.write_all(line.as_bytes());
+    }
+}
+
+/// 裁决日志记录（design.md「日志」示例字段全集）。
+pub fn log_verdict(
+    project: &Path,
+    mode: &str,
+    agent: &str,
+    command: &str,
+    verdict: &Verdict,
+    trace: &DecisionTrace,
+    kb_present: bool,
+) {
+    let source = trace.source.as_ref().map(|s| {
+        let file = match s.layer {
+            "project" => ".crush-tether/rules.toml",
+            "user" => "~/.config/crush-tether/rules.toml",
+            _ => "",
+        };
+        serde_json::json!({
+            "layer": s.layer,
+            "file": if file.is_empty() {
+                serde_json::Value::Null
+            } else {
+                serde_json::json!(file)
+            },
+            "entry": s.entry,
+            "match": s.token,
+        })
+    });
+    let rec = serde_json::json!({
+        "ts": rfc3339_utc(),
+        "mode": mode,
+        "agent": agent,
+        "command": command,
+        "decision": verdict.decision.to_string(),
+        "reason": verdict.reason,
+        "source": source,
+        "kb": if kb_present { serde_json::json!(["main"]) } else { serde_json::json!([]) },
+        "normalized": trace.normalized,
+        "script": {
+            "file": if trace.script_changed { serde_json::json!("rules.rhai") } else { serde_json::Value::Null },
+            "rule": serde_json::Value::Null,
+        },
+    });
+    log_jsonl(project, &rec);
+}
+
+/// `type:"load"` 事件行：serve 冷启动/热重载留痕，含 lint 告警。
+pub fn log_load_event(project: &Path, ruleset: Option<&RuleSet>) {
+    let (lint, kb) = match ruleset {
+        Some(rs) => (
+            rs.lint_warnings
+                .iter()
+                .map(|w| serde_json::json!({"code": w.code, "message": w.message}))
+                .collect::<Vec<_>>(),
+            rs.kb_present,
+        ),
+        None => (Vec::new(), false),
+    };
+    let rec = serde_json::json!({
+        "ts": rfc3339_utc(),
+        "type": "load",
+        "kb": if kb { serde_json::json!(["main"]) } else { serde_json::json!([]) },
+        "lint": lint,
+    });
+    log_jsonl(project, &rec);
 }
 
 // ── 传输层 ───────────────────────────────────────────────────────────────
@@ -382,6 +561,7 @@ pub fn serve_main(project: PathBuf, engine: String, idle_exit: Duration) -> std:
     };
 
     // 规则快照：加载失败保持存活、逐请求 fail-safe confirm（绝不放行）。
+    // 冷启动 load 事件行留痕（ADR-07）。
     let mut ruleset: Option<RuleSet> = match RuleSet::load(&project, &engine, None) {
         Ok(rs) => Some(rs),
         Err(msg) => {
@@ -389,6 +569,7 @@ pub fn serve_main(project: PathBuf, engine: String, idle_exit: Duration) -> std:
             None
         }
     };
+    log_load_event(&project, ruleset.as_ref());
 
     // 热重载：notify 监听 + debounce（watcher 线程只发信号；重载在主线程
     // 的请求间隙执行——RuleSet 含 rhai Engine、非 Send）；alive 清零时
@@ -485,7 +666,21 @@ fn handle_connection(
         "ping" => None,
         "check" => match ruleset {
             Some(rs) => {
-                let v = rs.decide(&req.command, project);
+                let (v, trace) = rs.decide_trace(&req.command, project);
+                // serve 单点写裁决日志（ADR-07）。
+                log_verdict(
+                    project,
+                    "serve",
+                    if req.agent.is_empty() {
+                        "unknown"
+                    } else {
+                        &req.agent
+                    },
+                    &req.command,
+                    &v,
+                    &trace,
+                    rs.kb_present,
+                );
                 Some(VerdictDto {
                     decision: v.decision.to_string(),
                     reason: v.reason,
@@ -524,12 +719,13 @@ fn handle_connection(
 // ── hook 客户端角色 ──────────────────────────────────────────────────────
 
 /// 单次请求应答（一连接一请求）。
-fn ask(project: &Path, engine: &str, command: &str) -> Option<Verdict> {
+fn ask(project: &Path, engine: &str, agent: &str, command: &str) -> Option<Verdict> {
     let stream = connect(&endpoint_name(project, engine)).ok()?;
     let req = RequestLine {
         id: 1,
         op: "check".into(),
         command: command.to_string(),
+        agent: agent.to_string(),
     };
     let mut line = serde_json::to_string(&req).ok()?;
     line.push('\n');
@@ -555,6 +751,7 @@ pub fn ping(project: &Path, engine: &str) -> bool {
         id: 1,
         op: "ping".into(),
         command: String::new(),
+        agent: String::new(),
     }) else {
         return false;
     };
@@ -611,12 +808,12 @@ fn spawn_serve(project: &Path, engine: &str) {
 
 /// hook 主路径：connect-or-spawn → 仍失败返回 `None`（调用方降级本进程
 /// check，绝不无裁决放行）。`CRUSH_TETHER_DISABLE_SERVE=1` 跳过（逃生口）。
-pub fn hook_decide(project: &Path, engine: &str, command: &str) -> Option<Verdict> {
+pub fn hook_decide(project: &Path, engine: &str, agent: &str, command: &str) -> Option<Verdict> {
     if std::env::var_os("CRUSH_TETHER_DISABLE_SERVE").is_some() {
         return None;
     }
     // 直连常驻 serve（µs 级）。
-    if let Some(v) = ask(project, engine, command) {
+    if let Some(v) = ask(project, engine, agent, command) {
         return Some(v);
     }
     // 冷启动惊群：spawn serve（独占 bind 裁定唯一性，输者静默退出），有界
@@ -625,7 +822,7 @@ pub fn hook_decide(project: &Path, engine: &str, command: &str) -> Option<Verdic
     let t0 = Instant::now();
     while t0.elapsed() < Duration::from_millis(200) {
         std::thread::sleep(Duration::from_millis(20));
-        if let Some(v) = ask(project, engine, command) {
+        if let Some(v) = ask(project, engine, agent, command) {
             return Some(v);
         }
     }

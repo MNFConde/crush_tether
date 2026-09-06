@@ -608,6 +608,7 @@ JSONL 一行一条裁决，字段覆盖：命令原文、结果、触发层级�
 - `kb`：本次裁决加载的知识库 bucket 列表；`[]` = 知识库已删光——**当前配置未经任何内置规则校验、别名/flag 归一未生效**，日志自证可见。`normalized` 记录归一链（如 `"npm exec → npx"`），未归一为 `null`。
 - serve 加载/热重载时另记一条非裁决事件行（`type:"load"`，含 kb 状态与 lint 告警），冷热路径都留痕。
 - serve 模式由 serve 单点写（复用行协议已有字段），hook 降级路径自写一行；人读视图由后续 `crush-tether log` 子命令渲染 JSONL（人看视图、程序读原文）。默认开/关在 P4 落地 serve 时定。
+- **实现注记（2026-09-06，M4.3 落地，[D-07](decisions.md#d-07-裁决日志默认开与落盘形态)）**：默认开（`CRUSH_TETHER_LOG=0|off|false` 关）；落盘 `<project>/.crush-tether/decisions.jsonl` 追加写、写入失败静默；`ts` 为 UTC RFC3339（零依赖，本地时区由人读视图渲染）；热重载信号在 serve 主线程请求间隙消费（改规则后的第一个请求触发重载并留 load 事件）。
 
 ### 层间合并（字段级继承，定稿）
 
@@ -643,6 +644,7 @@ allow.flag = { remove = ["-h"] }                 # 继承并移除（flag 也能
 11. 「脚本 v1 无放行权」（第 10 条）的后续扩展**设计已定稿（2026-09-06）**：[脚本条件放行（script_allow，定稿）](#脚本条件放行script_allow定稿)——注册式 + 声明对账的受控开口，allow 契约由「绝对禁止」演进为「放行面 = 用户声明集 ∩ 脚本条件命中」，deny 终审与裸 `"allow"` 违约不变；实现登记 **M4.0**（独立里程碑，启动需用户授权），脚本词汇约定修订（decision 常量四值 / ctx 空串约定）随其前置小改落地。
 12. 「筛查管线 `Parse → Flatten → Extract → Match(逐规则) → Verdict` 与 `pub trait Rule` 规则链接口」→ **2026-09-06 重画为双阶段管线**（① TOML 查表一般层 → ② 脚本评估特殊层 → ③ 定稿唯一放行出口 → ④ 组合裁决），`Rule` trait 由规则注入式 `engine::decide_with` + `script::RuleEngine` 替代；三个安全性质（定稿点唯一 / 逃逸检查挂定稿点 / deny 终审）随形状显式钉死。见[筛查管线与编译期组装（定稿）](#筛查管线与编译期组装定稿)。
 13. 「默认包缺口（M3.3 变更记录登记的宽松断言）」→ **2026-09-06 补齐**（用户拍板推荐值）：①知识库 `[git]` 补 `sub.remote`/`sub.tag` 的 `write_tokens`（忠实平移 guard.py `GIT_ACTION` 数据，裸创建 `git tag <名>` 原工具同样不视为写）；②`[local]` 补 `deny` 裸列表（sudo/dd/shutdown/mkfs 族——guard.py `DESTRUCTIVE` 收窄为四族，`rm` 保留 confirm 档、reboot/halt/parted 等留项目自补）。M3.3 变更记录中 remote/tag 与 mkfs/dd/shutdown/sudo 两行宽松断言随之消解。
+14. 「日志默认开关在 P4 定」→ **2026-09-06 定稿落地**（M4.3，[D-07](decisions.md#d-07-裁决日志默认开与落盘形态)）：默认开、落盘 `.crush-tether/decisions.jsonl`、`ts` 用 UTC（本地时区渲染挂 `log` 子命令）、热重载信号在请求间隙消费（重编译留主线程——rhai Engine 非 Send）。`source.layer` 经合并层 Provenance 实现全层溯源，字段与示例一致。
 1. 「能声明表达的进 `rules.toml`」→ 收窄为「**无条件的纯查表**进 `rules.toml`，一切条件判断进脚本」。
 2. 「`[[rules]]` 规则链 + first-match-wins」→ **删除**，替换为「`[local]`/`[global]` 双表 + 每命令三桶查表 + 可调桶间优先级 `precedence`」。
 3. 「命令集合并集（只增不减，`exclude` 表剔除）」→ 2026-09-05 替换为 token 级合并，**2026-09-06 再修订为字段级继承**（数组覆盖 / inline table 增删；「挪桶即剔除」弃用——挪桶是改判不是删除）；无需 `exclude` 表（见 [D-02](decisions.md#d-02-字段级继承合并模型)）。

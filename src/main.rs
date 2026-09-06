@@ -110,7 +110,7 @@ fn run_check(agent: Agent, config_arg: Option<&str>, engine: &str) -> ExitCode {
         // 读不到输入：保守 confirm（exit 0 无输出，走正常权限提示）。
         return ExitCode::from(0);
     };
-    match check_verdict(&project, config_arg, engine, &command, agent) {
+    match check_verdict(&project, config_arg, engine, &command, agent, "check") {
         Ok(verdict) => ExitCode::from(channel::emit(&verdict, agent) as u8),
         Err(code) => code,
     }
@@ -121,11 +121,11 @@ fn run_hook(agent: Agent, config_arg: Option<&str>, engine: &str) -> ExitCode {
     let Some((command, project)) = read_project(agent) else {
         return ExitCode::from(0);
     };
-    if let Some(v) = service::hook_decide(&project, engine, &command) {
+    if let Some(v) = service::hook_decide(&project, engine, agent.slug(), &command) {
         return ExitCode::from(channel::emit(&v, agent) as u8);
     }
     // 降级路径：本进程 check（仍然全量管线，绝不无裁决放行）。
-    match check_verdict(&project, config_arg, engine, &command, agent) {
+    match check_verdict(&project, config_arg, engine, &command, agent, "check") {
         Ok(verdict) => ExitCode::from(channel::emit(&verdict, agent) as u8),
         Err(code) => code,
     }
@@ -137,8 +137,8 @@ fn run_benchmark(agent: Agent, config_arg: Option<&str>, engine: &str) -> ExitCo
     let Some((command, project)) = read_project(agent) else {
         return ExitCode::from(0);
     };
-    let local = check_verdict(&project, config_arg, engine, &command, agent).ok();
-    let via_serve = service::hook_decide(&project, engine, &command);
+    let local = check_verdict(&project, config_arg, engine, &command, agent, "benchmark").ok();
+    let via_serve = service::hook_decide(&project, engine, agent.slug(), &command);
     let local_d = local.as_ref().map(|v| v.decision.to_string());
     let serve_d = via_serve.as_ref().map(|v| v.decision.to_string());
     let match_ = match (&local_d, &serve_d) {
@@ -170,9 +170,22 @@ fn check_verdict(
     engine: &str,
     command: &str,
     agent: Agent,
+    mode: &str,
 ) -> Result<Verdict, ExitCode> {
     match RuleSet::load(project, engine, config_arg) {
-        Ok(rs) => Ok(rs.decide(command, project)),
+        Ok(rs) => {
+            let (verdict, trace) = rs.decide_trace(command, project);
+            service::log_verdict(
+                project,
+                mode,
+                agent.slug(),
+                command,
+                &verdict,
+                &trace,
+                rs.kb_present,
+            );
+            Ok(verdict)
+        }
         Err(msg) => {
             eprintln!("{msg}");
             Err(fail_safe_confirm(agent))

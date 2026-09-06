@@ -24,6 +24,14 @@ impl Agent {
             _ => None,
         }
     }
+
+    /// 日志 agent 字段用名。
+    pub fn slug(&self) -> &'static str {
+        match self {
+            Agent::Crush => "crush",
+            Agent::ClaudeCode => "claudecode",
+        }
+    }
 }
 
 /// 从 stdin JSON / 环境变量提取命令正文与项目根。
