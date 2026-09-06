@@ -38,7 +38,7 @@ default     = "allow"   # 节内 default 覆盖顶层 default（npm run 等其�
 
 [local.pnpm]
 confirm.sub = ["install", "add", "remove", "upgrade", "update", "publish"]
-default     = "allow"   # pnpm dlx 同理经 alias 归一到 npx
+default     = "allow"   # pnpm dlx 默认放行（默认包自定策略；需收紧可把 dlx 补进 confirm.sub）
 
 [local.yarn]
 confirm.sub = ["install", "add", "remove", "upgrade", "update", "publish"]
