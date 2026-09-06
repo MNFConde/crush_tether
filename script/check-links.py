@@ -28,7 +28,7 @@ INLINE_CODE_RE = re.compile(r"`[^`]*`")
 def github_slug(heading: str) -> str:
     out = ""
     for ch in heading.lower():
-        if unicodedata.category(ch)[0] in ("L", "N") or ch in (" ", "-"):
+        if unicodedata.category(ch)[0] in ("L", "N") or ch in (" ", "-", "_"):
             out += ch
     out = out.strip()
     while "  " in out:
