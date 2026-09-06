@@ -763,6 +763,26 @@ fn handle_connection(
 
 // ── hook 客户端角色 ──────────────────────────────────────────────────────
 
+/// 响应等待 deadline（design.md「慢请求 per-request deadline ~5s 兜底」）：
+/// serve 卡死时 hook 不无限阻塞，超时走本地降级路径。
+const RESPONSE_DEADLINE: Duration = Duration::from_secs(5);
+
+/// 在 deadline 内读一行响应。跨平台实现：Windows 命名管道无原生阻塞读
+/// 超时，用读线程 + channel 超时收号；超时后读取线程仍阻塞在 read 上，
+/// 随 hook 进程退出回收（进程短命，泄漏窗口有限）。
+fn read_line_deadline(
+    stream: interprocess::local_socket::Stream,
+    deadline: Duration,
+) -> Option<String> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let mut line = String::new();
+        let res = BufReader::new(stream).read_line(&mut line);
+        let _ = tx.send(res.ok().map(|_| line));
+    });
+    rx.recv_timeout(deadline).ok().flatten()
+}
+
 /// 单次请求应答（一连接一请求）。
 fn ask(
     project: &Path,
@@ -783,8 +803,7 @@ fn ask(
     line.push('\n');
     let mut stream = stream;
     stream.write_all(line.as_bytes()).ok()?;
-    let mut resp_line = String::new();
-    BufReader::new(&stream).read_line(&mut resp_line).ok()?;
+    let resp_line = read_line_deadline(stream, RESPONSE_DEADLINE)?;
     let resp: ResponseLine = serde_json::from_str(resp_line.trim()).ok()?;
     let v = resp.verdict?;
     let decision = parse_decision(&v.decision)?;
@@ -812,10 +831,9 @@ pub fn ping(project: &Path, engine: &str, config: Option<&str>) -> bool {
     if stream.write_all(req.as_bytes()).is_err() {
         return false;
     }
-    let mut resp_line = String::new();
-    if BufReader::new(&stream).read_line(&mut resp_line).is_err() {
+    let Some(resp_line) = read_line_deadline(stream, RESPONSE_DEADLINE) else {
         return false;
-    }
+    };
     serde_json::from_str::<ResponseLine>(resp_line.trim())
         .map(|r| r.error.is_none())
         .unwrap_or(false)
@@ -891,4 +909,51 @@ pub fn hook_decide(
         }
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 自建本地端点连接对（每用例一对连接：Windows 命名管道单实例，
+    /// 二次 connect 无空闲实例会阻塞，不做多连接用例）。
+    fn test_pair(tag: &str) -> (impl std::io::Write, interprocess::local_socket::Stream) {
+        use interprocess::local_socket::traits::{Listener as _, Stream as _};
+        use interprocess::local_socket::{ListenerOptions, Stream};
+
+        let name = format!("crush-tether-test-{tag}-{}", std::process::id());
+        let listener = ListenerOptions::new()
+            .name(ns_name(&name).expect("ns name"))
+            .create_sync()
+            .expect("bind test endpoint");
+        // 先 connect 后 accept：accept 阻塞等连接，同线程顺序执行会死锁。
+        let client = Stream::connect(ns_name(&name).expect("ns name")).expect("connect");
+        let server = listener.accept().expect("accept");
+        (server, client)
+    }
+
+    /// read_line_deadline：对端沉默 → 超时 None（未到 deadline 不提前返回）。
+    #[test]
+    fn read_line_deadline_times_out_when_peer_silent() {
+        let (_server, client) = test_pair("rd-silent");
+        let t0 = Instant::now();
+        assert!(
+            read_line_deadline(client, Duration::from_millis(150)).is_none(),
+            "对端沉默应超时"
+        );
+        assert!(
+            t0.elapsed() >= Duration::from_millis(100),
+            "未到 deadline 不应提前返回"
+        );
+    }
+
+    /// read_line_deadline：对端已写的一行应在 deadline 内送达。
+    #[test]
+    fn read_line_deadline_delivers_written_line() {
+        use std::io::Write as _;
+        let (mut server, client) = test_pair("rd-line");
+        server.write_all(b"{\"ok\":true}\n").expect("write line");
+        let line = read_line_deadline(client, Duration::from_secs(5)).expect("应收到一行");
+        assert_eq!(line.trim(), "{\"ok\":true}");
+    }
 }
