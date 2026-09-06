@@ -113,6 +113,8 @@
 
 **影响**：design.md「rules.toml 结构」新增「precedence 与 lint 的分工」条；lint 规则集（结构类）登记「同 token 多桶」规则。
 
+**更正（2026-09-06，实现核实）**：依据段「复合命令的组合裁决（任一 deny → deny）也是同一优先序的运行时体现」措辞过强——实现（`model::Verdict::combine`）把组合裁决**硬编码**为 deny > confirm > allow 的固定序，不随可调 `precedence` 键变化（组合语义是「任一危险即保守」安全性质的组成部分，不开放配置）。precedence 可调性的作用域 = 同命令多维度 token 的查表合成；两者分工不同，非同一机制的两次体现。
+
 ## D-05 guard.py 定位重置（参考对象而非验收标准）
 
 | 状态 | 日期 | 规范位置 |

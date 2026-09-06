@@ -53,16 +53,20 @@
 crush_tether/
 ├── Cargo.toml            # 单 crate：同时提供 lib 与 bin 两种入口
 ├── src/
-│   ├── lib.rs            # 库入口：核心逻辑（model/engine/config/cmd_parse/channel），可被复用/单测
-│   ├── main.rs           # bin：装配壳（check 模式已落地；serve 随 P4）
-│   ├── channel.rs        # agent 适配层（Crush / ClaudeCode 契约；stdin JSON/env → 裁决输出）
-│   ├── engine.rs         # 规则管线 + 安全原语/特征 + pipe sink + 组合裁决（零内置策略）
-│   ├── config.rs         # 三层加载/merge + 默认配置生成（rules.toml 反序列化；随 P2）
+│   ├── lib.rs            # 库入口：核心逻辑装配，可被复用/单测
+│   ├── main.rs           # bin：装配壳（check/hook/serve/benchmark 四模式参数分发）
 │   ├── model.rs          # Decision / Verdict（combine 组合语义）/ unparseable 兜底
-│   └── cmd_parse.rs      # tree-sitter-bash 解析 + flatten + 写重定向/路径逃逸检测
-├── tests/
-│   └── guard_regression.rs  # test_guard.py 89 用例 1:1 平移 + 解析器边界单测
-├── .cairn/               # Cairn 配置
+│   ├── engine.rs         # 管线原语：管道 sink 拓扑 + 组合裁决的注入式顶层入口（零内置策略）
+│   ├── cmd_parse.rs      # tree-sitter-bash 解析 + flatten + 写重定向/路径逃逸检测
+│   ├── channel.rs        # agent 适配层（Crush / ClaudeCode / zcode 契约；stdin JSON/env → 裁决输出）
+│   ├── config/           # 发现（含项目根解析单一实现）/ schema / 字段级继承合并 / 归一 / seed 模板
+│   ├── lookup.rs         # rules.toml 查表（多命中合成 + 溯源）
+│   ├── script.rs         # rules.rhai 沙箱（RhaiEngine + ScriptChain 层链 + 定稿点）
+│   ├── knowledge.rs      # 命令知识库（bucket 框架；alias_of/same_flag 归一数据源）
+│   ├── lint.rs           # 双层 lint（结构类 + 语义类；只告警不拒绝）
+│   └── service.rs        # RuleSet 装配 + serve（端点/热重载/idle 退出）+ hook client + 裁决日志
+├── tests/                # 集成测试（guard_regression 89 用例平移 + service/script/config 验收）
+├── script/               # 本地工程脚本（check-links 等，uv 管理）
 ├── cairn/                # Cairn 知识层
 └── doc/design.md         # 本文档
 ```
@@ -149,24 +153,28 @@ check（兜底/冒烟）：同一二进制单发，不碰端点，本进程全�
 
 ### 运行模式与配置热重载（定稿）
 
-#### 三种运行模式
+#### 运行模式（hook / serve / check / benchmark）
 
-二进制本体承担三个子命令角色，agent 配置只写 `hook`：
+二进制本体承担四个子命令角色，agent 配置只写 `hook`；**无子命令参数时默认 `check`**（嵌入/测试便利）：
 
 ```text
-crush-tether hook [--agent crush --engine rhai]      # agent 配置入口：connect-or-spawn，失联降级单发（默认）
-crush-tether serve [--agent crush --engine rhai]     # 常驻：命名端点监听，由 hook 进程自动拉起，无手动场景
-crush-tether check [--agent crush --engine rhai]     # 单发：stdin JSON → stdout/exit code（现 hook 契约，兜底 + 冒烟测试）
+crush-tether hook [--agent crush --engine rhai --config <file>]   # agent 配置入口：connect-or-spawn，失联降级单发
+crush-tether serve [--engine rhai --config <file> --project <dir> --idle-exit <secs>]  # 常驻：命名端点监听（hook 自动拉起，也可手动）
+crush-tether check [--agent crush --engine rhai --config <file>]  # 单发：stdin JSON → stdout/exit code（兜底 + 冒烟测试）
+crush-tether benchmark [--engine rhai --config <file>]            # 双跑对比：in-process vs serve 路径，裁决 diff 为空即 exit 0
 ```
 
 | 模式 | 触发方 | 进程 | 配置解析次数 | 适用 |
 |---|---|---|---|---|
-| hook（默认） | agent 的 PreToolUse 配置直配二进制 | 每命令一次（短命 client） | serve 已加载则 0 次 | 正常使用 |
-| serve（常驻） | hook 进程 connect 失败时自动 detached 拉起 | 长驻后台 | 文件变化时重载 | 正常使用 |
-| check（单发） | hook 降级路径 / 手动 | 每命令一次 | 每次全量 | 兜底路径 / 冒烟测试 / 模式验收 |
+| hook | agent 的 PreToolUse 配置直配二进制 | 每命令一次（短命 client） | serve 已加载则 0 次；降级时全量 | 正常使用 |
+| serve（常驻） | hook 进程 connect 失败时自动 detached 拉起（或手动） | 长驻后台 | 文件变化时重载 | 正常使用 |
+| check（默认） | 无子命令参数 / 手动 / 测试 | 每命令一次 | 每次全量 | 兜底路径 / 冒烟测试 / 模式验收 |
+| benchmark | 手动 | 双跑一次 | 两次全量 | 验收 in-process 与 serve 路径 diff 为空 |
 
-- **check 先行**：启动即以 check 模式直接挂 hook（最小正确路径，不引入后台进程风险），serve 稳定后切 hook 模式。
-- 三模式共用同一管线与裁决逻辑，可并启对照（`--benchmark` 同输入双跑，diff 即协议/管线 bug）。
+- 测试钩子环境变量：`CRUSH_TETHER_LOG=0|off|false`（关裁决日志，见「日志」节）、`CRUSH_TETHER_IDLE_EXIT=<secs>`（覆盖 spawn 的 serve 空闲退出秒数）、`CRUSH_TETHER_DISABLE_SERVE=1`（hook 跳过 connect-or-spawn，强制降级路径）。benchmark 双跑只对比 decision（不 diff reason——reason 文案允许两路径措辞差异）。
+
+- **check 先行**是 P1 的历史推进策略：agent 入口自 P5 起为 `hook`（serve 路径已验收），check 保留为无子命令时的默认模式（兜底/嵌入/测试）。
+- 四模式共用同一管线与裁决逻辑；`benchmark` 双跑 diff 为空是路径等价性的验收门。
 
 #### 生命周期：使用驱动（非 agent 进程耦合）【当前】
 
@@ -180,14 +188,14 @@ crush-tether check [--agent crush --engine rhai]     # 单发：stdin JSON → s
 #### serve 模式协议（命名端点，一项目一实例）
 
 - **传输**：**本机命名端点**（Windows named pipe / Unix domain socket），协议不绑定实现语言；不走 localhost TCP（连接膨胀、端口管理、安全面大）。非 Windows 平台优先 abstract namespace socket（进程死即消失，无残留文件），退选文件系统 socket（需处理崩溃残留 unlink + rebind 有界重试）。
-- **端点名**：`crush-tether-<hash(canonical(project_dir), engine标签)>`（engine 取自 CLI 参数）。**一项目一 serve**：配置/热重载/裁决域天然按项目隔离，进程内无需多项目缓存与逐出；同项目**所有 agent/会话**共用同一 serve（裁决与 agent 无关，Channel 适配留在一次性 hook 进程）。
+- **端点名**：`crush-tether-<hash(canonical(project_dir), engine标签, --config 覆盖路径)>`（engine/`--config` 取自 CLI 参数；`--config` 缺省不进 hash）。**一项目一 serve**：配置/热重载/裁决域天然按项目隔离（显式 `--config` 覆盖视作独立裁决域），进程内无需多项目缓存与逐出；同项目**所有 agent/会话**共用同一 serve（裁决与 agent 无关，Channel 适配留在一次性 hook 进程）。
 - **单实例**：serve 启动第一动作 = **独占创建端点**（bind / 第一管道实例创建），同一 syscall 同步裁定唯一性与角色：成功 = 本项目唯一服务；失败 = 已存在 → 本进程静默退出（输者转 connect 重试，非报错退出）。同项目多会话并发冷启动的惊群由此消解，无锁无 pidfile。崩溃残留：Windows 管道与 abstract socket 活在内核命名空间，进程死即消失，天然免疫；文件系统 socket 需「bind 失败但 connect ECONNREFUSED → unlink + rebind」有界重试。
-- **协议**：复用 hook 的 JSON envelope 作行单元：请求 `{id, op:"check", command}` / `{id, op:"ping"}`；响应 `{id, verdict:{decision, reason}}`。`id` 客户端生成单调递增，严格逐请求应答，无乱序。连接生命周期 = 一次请求（短命 hook 进程），无长连接池、无会话态。
+- **协议**：复用 hook 的 JSON envelope 作行单元：请求 `{id, op:"check", command, agent}` / `{id, op:"ping"}`；响应 `{id, verdict:{decision, reason}, error}`（`error` = 畸形请求/未知 op 的带内报错；`agent` 供日志溯源）。`id` 客户端生成单调递增，严格逐请求应答，无乱序（v1 一连接一请求下恒为 1，字段为将来复用连接保留）。连接生命周期 = 一次请求（短命 hook 进程），无长连接池、无会话态。
 - 依赖钉版：tree-sitter 0.25 / tree-sitter-bash 0.25 / serde 1 / serde_json 1 / toml 0.9；`rhai`/`mlua`/`notify` 待 P3/P4 引入，避免未用依赖拖累编译。
 - **连接感知**：全靠内核事件，建立 = `accept()` 返回 / `ConnectNamedPipe` 完成，断开 = read 得 EOF（`0`）/ `ERROR_BROKEN_PIPE`；本机端点不存在 TCP 式半开连接（同机进程死 = 内核关 fd = 对端立即 EOF），无需心跳。
 - **Windows 忙实例**：第二客户端 `CreateFile` 得 `ERROR_PIPE_BUSY` → `WaitNamedPipe` 重试后重连（客户端标准模式）。
 - **安全**：端点 ACL 限当前用户（Windows 管道默认 DACL / unix socket 0600）。同用户其他进程可伪造请求，但裁决只输出 allow/confirm/deny 且 deny/confirm 均为安全侧，伪造最多把危险命令转人工确认，无可放大面。
-- **v1 串行 accept**：`accept → 读 → 判 → 写` 单循环，「连接计数」退化为 `last_activity` 时间戳（poll timeout = 距退出 deadline 的剩余时间，到点醒一次退出，其余零唤醒）；并发 hook 请求排队，每请求 <1ms 可忽略；慢请求 per-request deadline（~5s）兜底。【备选】epoll/IOCP + atomic 计数的并发版，升级只换连接处理、协议不变（开闭原则落点）。
+- **v1 串行 accept**：`accept → 读 → 判 → 写` 单循环，「连接计数」退化为 `last_activity` 时间戳；并发 hook 请求排队，每请求 <1ms 可忽略。慢请求兜底 = hook 客户端响应读 **5s deadline**（超时走本进程降级 check）+ serve watchdog 空闲 grace（接受但静默的连接被 grace 回收）。【备选】epoll/IOCP + atomic 计数的并发版，升级只换连接处理、协议不变（开闭原则落点）。
 
 #### 软件与项目内脚本分工（定稿）
 
@@ -203,7 +211,8 @@ crush-tether check [--agent crush --engine rhai]     # 单发：stdin JSON → s
 
 #### 配置加载与热重载
 
-- **冷启动全量、热更新整段重编译**：启动读 全局 → 用户 → 项目 三层（三层皆无有效配置则先执行项目侧默认生成，见 [零内置策略与默认配置生成（定稿）](#零内置策略与默认配置生成定稿)），按上文优先级 merge 后编译成不可变快照 `Arc<RuleSet>`；任一文件变化则**整段重建**再原子换指针（O(1)），在途请求继续用旧快照，新请求用新快照，无锁争用。
+- **冷启动全量、热更新整段重编译**：启动读 全局 → 用户 → 项目 三层（**v1 全局层无发现路径**，为后期设计留位；三层皆无有效配置则先执行项目侧默认生成，见 [零内置策略与默认配置生成（定稿）](#零内置策略与默认配置生成定稿)），按上文优先级 merge 后编译成不可变快照 `Arc<RuleSet>`；任一文件变化则**整段重建**再原子换指针（O(1)），在途请求继续用旧快照，新请求用新快照，无锁争用。脚本层链同理随快照整体重建（用户层先、项目层最后，见 [D-02](decisions.md#d-02-字段级继承合并模型) 与「配置拆分」）。
+- **stale 首请求边界**：热重载信号在 serve 主线程的**请求间隙**消费——debounce 窗口内到达的首个请求仍用旧快照裁决（最坏滞后一个请求，最终一致；裁决日志可按 load 事件行对齐时间线）。
 - **声明层**（`rules.toml`）：`serde` 反序列化 → 规则序表（μs 级，可随时整表重建）。
 - **脚本层**（`rules.rhai|lua`）：`Engine` 全局只建一次（编译 AST 缓存）；文件变化才重新编译；编译失败**保留旧快照** + stderr 告警，绝不半更新。
 - **监听**：`notify`（inotify / ReadDirectoryChangesW）+ **600ms debounce**（编辑器写临时文件再 rename 会连发事件）；规则文件 KB 级，整文件重读远比增量 patch 简单可靠。
@@ -556,7 +565,7 @@ script_allow = true               # 命令节键：与该命令其他配置同�
 
 **引擎机制五件套**（机械校验，无一步依赖对脚本行为的推断；前两步在加载期，失败 = **拒载整个脚本** + fail-safe confirm）：
 
-1. **加载期字面量提取**：AST 静态提取脚本中全部 `allow("…")` 调用的参数；提取不到字面量（变量 / 字符串拼接 / 循环变量）→ 拒载——校验对象是语法树不是运行值，`let b = "cu"+"rl"; allow(b)` 与循环分发同样过不了这关。
+1. **加载期字面量提取**：AST 静态提取脚本中全部 `allow("…")` 调用的参数；实参为变量 / 循环变量等运行时确定的形态 → 拒载。常量拼接（`allow("cu"+"rl")`）被 rhai 优化器折叠为字面量，按折叠值提取并对账——静态提取集与运行实参恒一致，安全审计面等价（[更正登记](#更正登记对既有定稿) 15）。
 2. **声明集对账**：提取集 − 声明集 ≠ ∅ → 拒载（脚本作者无法替用户决定放行谁）。
 3. **运行时双保险**：`allow(name)` 执行时再校验 name ∈ 声明集。
 4. **定稿点作用域化逃逸检查**：激活后按声明元数据——local 声明 → 对原始命令参数执行 `path_escapes`，逃逸则激活失败降 confirm；global 声明 → 豁免；两表皆声明 → global 胜（M2.3「更强的承诺」同规）。检查在引擎、单点、脚本不可绕过也不可代劳（脚本自查通过照样再查，脚本没查引擎兜底）。
@@ -595,7 +604,7 @@ fn check(ctx) {
 JSONL 一行一条裁决，字段覆盖：命令原文、结果、触发层级、触发条件：
 
 ```json
-{"ts":"2026-09-06T14:03:22+08:00","mode":"serve","agent":"crush",
+{"ts":"2026-09-06T14:03:22Z","mode":"serve","agent":"crush",
  "command":"git push --force origin main",
  "decision":"deny","reason":"git.deny.sub: push",
  "source":{"layer":"project","file":".crush-tether/rules.toml",
@@ -604,10 +613,10 @@ JSONL 一行一条裁决，字段覆盖：命令原文、结果、触发层级�
  "script":{"file":null,"rule":null}}
 ```
 
-- `source.layer` ∈ global/user/project/explicit/script/default；脚本裁决填 `script.file`/`script.rule`。
+- `source.layer` ∈ global/user/project/explicit/script/default；脚本激活/改判时 layer=script 并填 `script.file`（区分项目层 rules.rhai 与用户层 `~/.config/crush-tether/rules.rhai`；`script.rule` v1 恒 null——脚本无命名规则概念，字段为后续扩展保留）。v1 可达值：user/project/explicit/script/default；`global` 待全局层发现落地（v1 不做）。
 - `kb`：本次裁决加载的知识库 bucket 列表；`[]` = 知识库已删光——**当前配置未经任何内置规则校验、别名/flag 归一未生效**，日志自证可见。`normalized` 记录归一链（如 `"npm exec → npx"`），未归一为 `null`。
-- serve 加载/热重载时另记一条非裁决事件行（`type:"load"`，含 kb 状态与 lint 告警），冷热路径都留痕。
-- serve 模式由 serve 单点写（复用行协议已有字段），hook 降级路径自写一行；人读视图由后续 `crush-tether log` 子命令渲染 JSONL（人看视图、程序读原文）。默认开/关在 P4 落地 serve 时定。
+- serve 加载/**热重载成功**时另记一条非裁决事件行（`type:"load"`，含 kb 状态与 lint 告警），冷热路径都留痕；热重载失败不留痕（快照未换，stderr 告警）。
+- serve 模式由 serve 单点写（复用行协议已有字段），hook 降级路径与 check/benchmark 自写一行（mode 字段区分 hook 降级与独立 check）；人读视图由后续 `crush-tether log` 子命令渲染 JSONL（人看视图、程序读原文）。默认开/关在 P4 落地 serve 时定。
 - **实现注记（2026-09-06，M4.3 落地，[D-07](decisions.md#d-07-裁决日志默认开与落盘形态)）**：默认开（`CRUSH_TETHER_LOG=0|off|false` 关）；落盘 `<project>/.crush-tether/decisions.jsonl` 追加写、写入失败静默；`ts` 为 UTC RFC3339（零依赖，本地时区由人读视图渲染）；热重载信号在 serve 主线程请求间隙消费（改规则后的第一个请求触发重载并留 load 事件）。
 
 ### 层间合并（字段级继承，定稿）
@@ -645,6 +654,8 @@ allow.flag = { remove = ["-h"] }                 # 继承并移除（flag 也能
 12. 「筛查管线 `Parse → Flatten → Extract → Match(逐规则) → Verdict` 与 `pub trait Rule` 规则链接口」→ **2026-09-06 重画为双阶段管线**（① TOML 查表一般层 → ② 脚本评估特殊层 → ③ 定稿唯一放行出口 → ④ 组合裁决），`Rule` trait 由规则注入式 `engine::decide_with` + `script::RuleEngine` 替代；三个安全性质（定稿点唯一 / 逃逸检查挂定稿点 / deny 终审）随形状显式钉死。见[筛查管线与编译期组装（定稿）](#筛查管线与编译期组装定稿)。
 13. 「默认包缺口（M3.3 变更记录登记的宽松断言）」→ **2026-09-06 补齐**（用户拍板推荐值）：①知识库 `[git]` 补 `sub.remote`/`sub.tag` 的 `write_tokens`（忠实平移 guard.py `GIT_ACTION` 数据，裸创建 `git tag <名>` 原工具同样不视为写）；②`[local]` 补 `deny` 裸列表（sudo/dd/shutdown/mkfs 族——guard.py `DESTRUCTIVE` 收窄为四族，`rm` 保留 confirm 档、reboot/halt/parted 等留项目自补）。M3.3 变更记录中 remote/tag 与 mkfs/dd/shutdown/sudo 两行宽松断言随之消解。
 14. 「日志默认开关在 P4 定」→ **2026-09-06 定稿落地**（M4.3，[D-07](decisions.md#d-07-裁决日志默认开与落盘形态)）：默认开、落盘 `.crush-tether/decisions.jsonl`、`ts` 用 UTC（本地时区渲染挂 `log` 子命令）、热重载信号在请求间隙消费（重编译留主线程——rhai Engine 非 Send）。`source.layer` 经合并层 Provenance 实现全层溯源，字段与示例一致。
+15. 「机制 1 字面量提取：字符串拼接 → 拒载」措辞 → **2026-09-06 收窄**：变量/循环变量等运行时确定的实参 → 拒载；常量拼接（`allow("cu"+"rl")`）被 rhai 优化器折叠为字面量，按折叠值提取并对账——静态提取集与运行实参恒一致，安全审计面等价。
+16. 「默认包 pnpm dlx 经 alias 归一到 npx」注释 → **2026-09-06 如实化**：默认知识库无 `[pnpm]` 条目，归一不发生，`pnpm dlx` 落 `[local.pnpm]` default 放行。定性（延续 [D-05](decisions.md#d-05-guardpy-定位重置参考对象而非验收标准)）：默认包为本项目自定策略，guard.py 的规则只是参考对照、不作验收标准；需收紧可把 `dlx` 补进 `confirm.sub`。
 1. 「能声明表达的进 `rules.toml`」→ 收窄为「**无条件的纯查表**进 `rules.toml`，一切条件判断进脚本」。
 2. 「`[[rules]]` 规则链 + first-match-wins」→ **删除**，替换为「`[local]`/`[global]` 双表 + 每命令三桶查表 + 可调桶间优先级 `precedence`」。
 3. 「命令集合并集（只增不减，`exclude` 表剔除）」→ 2026-09-05 替换为 token 级合并，**2026-09-06 再修订为字段级继承**（数组覆盖 / inline table 增删；「挪桶即剔除」弃用——挪桶是改判不是删除）；无需 `exclude` 表（见 [D-02](decisions.md#d-02-字段级继承合并模型)）。
@@ -661,7 +672,7 @@ allow.flag = { remove = ["-h"] }                 # 继承并移除（flag 也能
 - **抽取方式**：【当前】纯全局工具（本仓库为唯一实现，mdor 不再保留 crush-guard；Python 版随回归用例平移后退役）。
 - **是否重写**：【当前】Rust 重写已落地（P0+P1 完成，`src/{model,cmd_parse,engine,channel}` + check 模式 + 回归测试 9/9 绿）。
 - **fail-safe**：guard 任何环节崩了都保守降级为确认（输出 none）而非放行；解析失败（含 heredoc 无终止符）走 `unparseable` → confirm。
-- **规则来源**：【当前】零内置策略（2026-09-04 定稿）——二进制为纯引擎，默认策略由项目侧生成的外部 `rules.toml` + `rules.rhai` 提供；三层皆缺才生成，损坏留档（`.bak-<时间戳>`）后重新生成；全局/用户层生成由命令提供（后期设计）。见 [零内置策略与默认配置生成（定稿）](#零内置策略与默认配置生成定稿)。
+- **规则来源**：【当前】零内置策略（2026-09-04 定稿）——二进制为纯引擎，默认策略由项目侧生成的外部 `rules.toml` + `rules.rhai` 提供；三层皆缺才生成；损坏 ≠ 缺失（告警 + fail-safe confirm 兜底，原文件不动，[D-03](decisions.md#d-03-损坏重生成收窄)）；全局/用户层生成由命令提供（后期设计）。见 [零内置策略与默认配置生成（定稿）](#零内置策略与默认配置生成定稿)。
 
 ## 实现时的安全目标（fail-safe）
 

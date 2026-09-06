@@ -14,7 +14,7 @@
 - [x] **P2 配置声明层 + 知识库 main**（M2.1–M2.7；格式细则见 design.md「配置格式与脚本边界（v1 定稿）」；**已升格定稿（2026-09-06，M2.7 验收后）**）：
   - **M2.1 rules.toml 解析模型**✅（2026-09-06，373df67）：裸键区（`version`/`default`/`precedence`）+ `[local]`/`[global]` 双表 + 命令节三桶 + `sub`/`flag` 子键 + 列表双形态（数组 / inline table）反序列化；`--config`/`CRUSH_TETHER_CONFIG` 显式覆盖入口（加载失败 → stderr 告警 + fail-safe confirm 已接线 check 模式）。
     - 验收：design.md 示例文件整体解析通过；非法键报错可定位；解析失败 → stderr 告警 + fail-safe confirm（不 panic、不误放行）。
-  - **M2.2 三层发现与字段级继承合并**✅（2026-09-06，ce5148e）：全局 → 用户 → 项目三层发现（`CRUSH_PROJECT_DIR` 优先，缺失逐级上溯）；未定义即继承 / 定义即覆盖；数组 = 覆盖、inline table `add`/`remove` = 增删、标量写值即覆盖；`version` 过旧明确报错，不静默误解析。
+  - **M2.2 三层发现与字段级继承合并**✅（2026-09-06，ce5148e；**更正 2026-09-06**：v1 全局层无发现路径——`FoundLayers.global` 恒 None，为后期设计留位，实现/验收实际覆盖用户 → 项目两层 + `CRUSH_PROJECT_DIR`/`CLAUDE_PROJECT_DIR` 优先、缺失逐级上溯）：未定义即继承 / 定义即覆盖；数组 = 覆盖、inline table `add`/`remove` = 增删、标量写值即覆盖；`version` 过旧明确报错，不静默误解析。全局层发现登记 P6 后专项。
     - 验收：覆盖 / 继承 / 增删三类合并单测全绿（含 flag 桶剔除、节内 `default` 继承链）；效力顺序（项目 > 用户 > 全局，不粘性）单测全绿。
   - **M2.3 双表三桶查表 + 多命中合成**✅（2026-09-06，e19252f）：命令节优先、裸列表为语法糖被同层节遮蔽；`[global].allow` 命中整命令豁免；`[local]` allow 带路径逃逸检查；`precedence`（deny > confirm > allow、default 恒链尾）做多命中有序合成。
     - 验收：节 vs 裸列表遮蔽用例；`git show --output=x` 型多维度命中合成 confirm；路径逃逸转 confirm 与 global 豁免用例；复合命令组合裁决不退化。
@@ -95,7 +95,7 @@
 - 热重载：`notify` 事件监听 + 600ms debounce，**整段重编译 + `Arc<RuleSet>` 原子换指针**（不增量 patch）；脚本编译失败保留旧快照；监听失效降级 stat 校验。
 - 配置拆分：`.crush-tether/rules.toml`（声明层）+ `rules.rhai`/`rules.lua`（脚本层）。
 - 配置优先级：项目 > 用户 > 全局（不粘性，`deny` 可被高层覆盖；三层同时存在时效力同序）。
-- 规则来源：**零内置策略**——二进制纯引擎（解析/特征/安全原语/管线），不内嵌任何策略数据；默认策略由生成到项目侧的外部 `rules.toml` + `rules.rhai` 提供，二进制内嵌的仅是生成模板（不参与判定）。生成触发 = 三层皆无有效配置；损坏 ≠ 缺失（留档 `.bak-<时间戳>` 再生成）；生成动作不经规则链（引导豁免）；temp+rename 原子幂等；生成前/失败按 fail-safe confirm；全局/用户层默认文件由命令提供（后期设计）。
+- 规则来源：**零内置策略**——二进制纯引擎（解析/特征/安全原语/管线），不内嵌任何策略数据；默认策略由生成到项目侧的外部 `rules.toml` + `rules.rhai` 提供，二进制内嵌的仅是生成模板（不参与判定）。生成触发 = 三层皆无有效配置；损坏 ≠ 缺失（告警 + fail-safe confirm 兜底，原文件不动）；生成动作不经规则链（引导豁免）；temp+rename 原子幂等；生成前/失败按 fail-safe confirm；全局/用户层默认文件由命令提供（后期设计）。
 - 默认包分工：能声明表达的进默认 `rules.toml`；跨参数逻辑（`find` 突变、`git config` 多位置参数等）进默认 `rules.rhai`；89 回归用例迁移为「引擎 + 默认规则 fixture」驱动。
 - Agent 首发：**Crush**（一）→ **ClaudeCode**（二）→ **zcode**（三，2026-09-06 并入 P5/M5.3——hook 协议与 ClaudeCode 同构，信封薄变体复用）；OpenCode 延后至稳定，其余留空壳。
 - 语言：**Rust**（tree-sitter-bash + 三 DSL 生态）；工具链钉 1.97.1（rust-toolchain.toml）。
