@@ -21,6 +21,7 @@ tree-sitter-bash = "0.25"
 # AST 结构随 rhai 版本可能变化，升级须 cargo test（机制 3 运行时双保险兜底）。
 rhai = { version = "1", features = ["internals"] }
 interprocess = "2"
+notify = "8.2.0"
 
 [profile.release]
 lto = true

@@ -2,6 +2,15 @@
 
 This file records substantive progress in reverse-chronological order — newest entry at the top, right below this line. Keep each entry short — summary and pointer only; conclusions settle into `cairn/<topic>.md`.
 
+## 2026-09-06 · M4.1+M4.2 落地：命名端点 serve / hook connect-or-spawn / 热重载
+
+- **M4.1**（c127205）：`src/service.rs`——端点名 `hash(canonical(project), engine)`（DefaultHasher 定种）；独占 bind 单实例裁定（interprocess 默认 `FILE_FLAG_FIRST_PIPE_INSTANCE`，输者静默退出 0）；JSON 行协议 `{id,op,command}`→`{id,verdict}`，一连接一请求；`RuleSet` 装配（查表+脚本+定稿点，check/hook/serve 三模式共用）；`hook` 模式 connect-or-spawn（~200ms 有界重试）+ 降级；watchdog 整秒醒一次 idle 退出（`--idle-exit`，默认 30s）；`benchmark` 双跑对比。验收 5/5（`tests/service_serve.rs`）。
+- **M4.2**：notify 监听项目/用户配置目录 + 600ms debounce → watcher 线程只发重载信号，serve 主线程在请求间隙整段重编译 + 整体替换（串行设计无在途并发，天然无半更新）；重载失败保留旧快照 + 告警；监听失效降级逐请求 stat（mtime+size+内容 hash 三重指纹）。验收 2/2（`tests/service_reload.rs`：改规则即生效 / 坏文件保旧快照 / debounce 聚合）。
+- **教训 1**：rhai `Engine` 非 Send（Rc 内部）——`Arc<RuleSet>` 跨线程方案不可行；v1 串行下裁决留主线程，watcher 只发信号。并发版升级点：启用 rhai `sync` feature + `Arc<RwLock<Arc<RuleSet>>>`（登记为开闭落点）。
+- **教训 2**：rhai 优化器把 `return f(x)` 折叠为语句级 `Stmt::FnCall`（不作为 Expr 被 walk 访问）、把常量拼接折叠为字面量——AST 静态分析必须按优化后的 AST 形态设计。
+- 测试钩子：`CRUSH_TETHER_IDLE_EXIT`（spawn 的 serve 空闲秒数）、`CRUSH_TETHER_DISABLE_SERVE=1`（强制降级路径）。
+- Details: `src/service.rs`、`src/main.rs`（四模式）、`tests/service_{serve,reload}.rs`、design.md「serve 模式协议」「配置加载与热重载」。
+
 ## 2026-09-06 · M4.0 落地：script_allow 全链路（声明文法 + 五件套 + lint + 词汇约定）
 
 - 五笔提交：4555cc1（默认包缺口，前置）→ f466b25（decision:: 四常量含 PASS + ctx.sub 空串约定）→ 64ef27b（声明文法双形态 + 声明集合并，两表皆现 global 胜）→ f8496d0（allow("bin") 原语 + 五件套 + finalize 定稿点）→ b88f70d（lint 三条）。端到端 `tests/script_allow.rs`：local 逃逸→confirm / global 逃逸→allow / 拒载 fail-safe / deny 终审，全绿。

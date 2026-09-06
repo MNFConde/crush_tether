@@ -20,6 +20,10 @@
 //! - **降级**：hook 连不上（含 spawn + ~200ms 有界重试失败）→ 本进程降级
 //!   check，绝不无裁决放行；`CRUSH_TETHER_DISABLE_SERVE=1` 强制走降级路径
 //!   （用户逃生口 + 测试钩子）。
+//! - **热重载（M4.2）**：notify 监听配置目录 + 600ms debounce（编辑器
+//!   temp-rename 连发事件聚成一次），整段重编译 → `Arc` 原子换指针（在途
+//!   请求继续用旧快照，无半更新）；重载失败保留旧快照 + stderr 告警；监听
+//!   失效降级逐请求 stat（mtime + size + 内容 hash 三重校验），正确性不损。
 
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
@@ -256,6 +260,116 @@ fn now_ms() -> u64 {
 
 // ── serve 角色 ───────────────────────────────────────────────────────────
 
+// v1 串行 accept：裁决只发生在主线程，规则快照以本地所有权持有，
+// 重载即整体替换（无半更新）。并发版（epoll/IOCP）升级点：换
+// Arc<RwLock<Arc<RuleSet>>> 原子换指针——rhai Engine 非 Send，届时启用
+// rhai sync feature（普通注释：非 item 文档）。
+/// debounce 窗口（design.md「配置加载与热重载」：600ms）。
+const RELOAD_DEBOUNCE: Duration = Duration::from_millis(600);
+
+/// serve 消费的配置文件全集（热重载监听与 stat 降级校验的同一清单）。
+fn config_files(project: &Path) -> Vec<PathBuf> {
+    let mut files = Vec::new();
+    if let Some(home) = crate::config::home_dir() {
+        files.push(home.join(".config").join("crush-tether").join("rules.toml"));
+    }
+    for f in ["rules.toml", "rules.rhai", "knowledge.toml"] {
+        files.push(project.join(".crush-tether").join(f));
+    }
+    files
+}
+
+fn watch_dirs(project: &Path) -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
+    let pd = project.join(".crush-tether");
+    if pd.is_dir() {
+        dirs.push(pd);
+    }
+    if let Some(home) = crate::config::home_dir() {
+        let ud = home.join(".config").join("crush-tether");
+        if ud.is_dir() {
+            dirs.push(ud);
+        }
+    }
+    dirs
+}
+
+/// 整段重编译 + 整体替换；失败保留旧快照 + stderr 告警，绝不半更新。
+fn reload(ruleset: &mut Option<RuleSet>, project: &Path, engine: &str) {
+    match RuleSet::load(project, engine, None) {
+        Ok(rs) => *ruleset = Some(rs),
+        Err(msg) => {
+            eprintln!("crush-tether: hot reload failed; keeping previous snapshot: {msg}");
+        }
+    }
+}
+
+/// 配置指纹：mtime + size + 内容 hash 三重校验（监听失效的降级判据）。
+fn config_fingerprint(project: &Path) -> u64 {
+    let mut h = DefaultHasher::new();
+    for f in config_files(project) {
+        match std::fs::metadata(&f) {
+            Ok(md) => {
+                f.hash(&mut h);
+                md.len().hash(&mut h);
+                if let Ok(m) = md.modified() {
+                    m.hash(&mut h);
+                }
+                if let Ok(bytes) = std::fs::read(&f) {
+                    bytes.hash(&mut h);
+                }
+            }
+            // 文件消失也是状态变化。
+            Err(_) => u8::MAX.hash(&mut h),
+        }
+    }
+    h.finish()
+}
+
+/// 事件监听线程：notify 监听 + 600ms debounce → 发一次重载信号。信号由
+/// serve 主线程在请求间隙消费（RuleSet 含 rhai Engine、非 Send，重编译
+/// 必须留在主线程）。监听建不起来或事件通道断开 → alive 清零，serve
+/// 逐请求降级 stat 校验。
+fn spawn_watcher(project: PathBuf, alive: Arc<AtomicU64>) -> std::sync::mpsc::Receiver<()> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        use notify::Watcher as _;
+        let (tx_ev, rx_ev) = std::sync::mpsc::channel();
+        let mut watcher = match notify::recommended_watcher(tx_ev) {
+            Ok(w) => w,
+            Err(_) => {
+                alive.store(0, Ordering::Relaxed);
+                return;
+            }
+        };
+        let dirs = watch_dirs(&project);
+        if dirs.is_empty() {
+            alive.store(0, Ordering::Relaxed);
+            return;
+        }
+        for d in &dirs {
+            if watcher
+                .watch(d, notify::RecursiveMode::NonRecursive)
+                .is_err()
+            {
+                alive.store(0, Ordering::Relaxed);
+                return;
+            }
+        }
+        while rx_ev.recv().is_ok() {
+            // debounce：等写入稳定，并排空连发事件后再发一次信号。
+            std::thread::sleep(RELOAD_DEBOUNCE);
+            while rx_ev.try_recv().is_ok() {}
+            if tx.send(()).is_err() {
+                break; // serve 已结束
+            }
+        }
+        // 事件通道断开（watcher 失效）→ 降级 stat 校验。
+        alive.store(0, Ordering::Relaxed);
+    });
+    rx
+}
+
 /// serve 主循环：独占 bind → 装配规则快照 → 串行 accept。输者静默退出
 /// （ExitCode 0，无输出）。
 pub fn serve_main(project: PathBuf, engine: String, idle_exit: Duration) -> std::process::ExitCode {
@@ -268,13 +382,19 @@ pub fn serve_main(project: PathBuf, engine: String, idle_exit: Duration) -> std:
     };
 
     // 规则快照：加载失败保持存活、逐请求 fail-safe confirm（绝不放行）。
-    let ruleset: Option<RuleSet> = match RuleSet::load(&project, &engine, None) {
+    let mut ruleset: Option<RuleSet> = match RuleSet::load(&project, &engine, None) {
         Ok(rs) => Some(rs),
         Err(msg) => {
             eprintln!("{msg}");
             None
         }
     };
+
+    // 热重载：notify 监听 + debounce（watcher 线程只发信号；重载在主线程
+    // 的请求间隙执行——RuleSet 含 rhai Engine、非 Send）；alive 清零时
+    // 逐请求 stat 降级。
+    let watcher_alive = Arc::new(AtomicU64::new(1)); // 1 = 监听在位；0 = 降级 stat
+    let reload_sig = spawn_watcher(project.clone(), watcher_alive.clone());
 
     let last_activity = Arc::new(AtomicU64::new(now_ms()));
 
@@ -299,6 +419,25 @@ pub fn serve_main(project: PathBuf, engine: String, idle_exit: Duration) -> std:
         match listener.accept() {
             Ok(stream) => {
                 last_activity.store(now_ms(), Ordering::Relaxed);
+                // 热重载：消费 debounce 后的重载信号，主线程整段重编译 +
+                // 原子换指针（串行设计无在途并发请求，天然无半更新）。
+                let mut dirty = false;
+                while reload_sig.try_recv().is_ok() {
+                    dirty = true;
+                }
+                if dirty {
+                    reload(&mut ruleset, &project, &engine);
+                }
+                // 监听失效降级：逐请求 stat 三重校验，指纹变化才整段重载。
+                if watcher_alive.load(Ordering::Relaxed) == 0 {
+                    static LAST_FP: AtomicU64 = AtomicU64::new(0);
+                    let fp = config_fingerprint(&project);
+                    if LAST_FP.load(Ordering::Relaxed) != 0 && LAST_FP.load(Ordering::Relaxed) != fp
+                    {
+                        reload(&mut ruleset, &project, &engine);
+                    }
+                    LAST_FP.store(fp, Ordering::Relaxed);
+                }
                 handle_connection(&stream, ruleset.as_ref(), &project, &last_activity);
             }
             Err(_) => {
@@ -352,7 +491,7 @@ fn handle_connection(
                     reason: v.reason,
                 })
             }
-            // 规则快照损坏：fail-safe confirm（绝不放行）。
+            // 规则快照缺失：fail-safe confirm（绝不放行）。
             None => Some(VerdictDto {
                 decision: "confirm".into(),
                 reason: Some("serve rule set unavailable; fail-safe".into()),
