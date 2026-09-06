@@ -89,7 +89,7 @@ fn load_event_logged_on_serve_start_and_hot_reload() {
     std::fs::write(cfg.join("knowledge.toml"), "version = 1\n").expect("write kb");
 
     // 驻留 serve（60s idle），在同一实例生命周期内验证冷/热两条 load 事件行。
-    let _serve = spawn_serve(proj.path(), "60");
+    let _serve = spawn_serve(proj.path(), "60", None);
 
     // 冷启动：serve 首次加载留 load 事件行（hook 首请求等就绪 + 出裁决）。
     let r = run_mode_env(proj.path(), "hook", &[], "ls", &[]);

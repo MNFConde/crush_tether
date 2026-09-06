@@ -26,9 +26,9 @@ fn try_wait_all(children: &mut [&mut KillOnDrop]) -> bool {
 fn thundering_herd_converges_to_single_instance() {
     let proj = TempDir::new("m41-herd");
     // c1/c2/c3 之一是赢家；c2/c3 已确认退出。c1 持有候选赢家，Drop 时回收。
-    let _c1 = spawn_serve(proj.path(), "2");
-    let mut c2 = spawn_serve(proj.path(), "2");
-    let mut c3 = spawn_serve(proj.path(), "2");
+    let _c1 = spawn_serve(proj.path(), "2", None);
+    let mut c2 = spawn_serve(proj.path(), "2", None);
+    let mut c3 = spawn_serve(proj.path(), "2", None);
 
     // 输者（除赢家外的两个）应在有界时间内静默退出。
     let deadline = Instant::now() + Duration::from_secs(10);
@@ -56,7 +56,7 @@ fn thundering_herd_converges_to_single_instance() {
 #[test]
 fn serve_exits_after_idle_grace() {
     let proj = TempDir::new("m41-idle");
-    let mut c = spawn_serve(proj.path(), "1");
+    let mut c = spawn_serve(proj.path(), "1", None);
     let deadline = Instant::now() + Duration::from_secs(8);
     let mut exited = None;
     while Instant::now() < deadline {
@@ -147,4 +147,27 @@ fn benchmark_double_run_diff_is_empty() {
     );
     assert!(r.stdout.contains("\"match\":true"), "{}", r.stdout);
     assert_eq!(r.code, 0, "benchmark 双跑 diff 为空");
+}
+
+#[test]
+fn serve_path_honors_explicit_config() {
+    // serve 与 hook 同带 --config：端点名含 config 维度，serve 加载显式
+    // 覆盖裁决（deny）——显式配置接入 serve 主路径的端到端验证。
+    let proj = TempDir::new("m41-explicit-serve");
+    let ext = proj.path().join("override-rules.toml");
+    std::fs::write(
+        &ext,
+        "version = 1\ndefault = \"confirm\"\n[local]\ndeny = [\"ls\"]\n",
+    )
+    .expect("write override rules");
+    let _serve = spawn_serve(proj.path(), "30", Some(ext.to_string_lossy().as_ref()));
+
+    let r = run_mode_env(
+        proj.path(),
+        "hook",
+        &["--config", ext.to_string_lossy().as_ref()],
+        "ls",
+        &[],
+    );
+    assert_eq!(r.code, 2, "serve 按显式配置裁决 → deny：{}", r.stderr);
 }

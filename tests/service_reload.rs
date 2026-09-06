@@ -21,7 +21,7 @@ fn wait_reload() {
 #[test]
 fn hot_reload_picks_up_rule_changes_without_restart() {
     let proj = TempDir::new("m42-reload");
-    let _serve = spawn_serve(proj.path(), "30");
+    let _serve = spawn_serve(proj.path(), "30", None);
 
     // 初始：默认包生成，ls → allow。
     let (out, code) = hook(proj.path(), "ls");
@@ -62,7 +62,7 @@ fn hot_reload_picks_up_rule_changes_without_restart() {
 fn hot_reload_waits_for_write_quiescence() {
     // debounce：连续写入（编辑器 temp-rename 模拟）聚成一次重载，最终状态生效。
     let proj = TempDir::new("m42-debounce");
-    let _serve = spawn_serve(proj.path(), "30");
+    let _serve = spawn_serve(proj.path(), "30", None);
     // 等 serve 完成引导生成（同步点）。
     let (out, _) = hook(proj.path(), "ls");
     assert_eq!(out.trim(), "{\"decision\":\"allow\"}");

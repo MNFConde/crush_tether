@@ -81,7 +81,7 @@ fn main() -> ExitCode {
         "serve" => {
             let project = project_arg.unwrap_or_else(crush_tether::cmd_parse::project_root);
             let idle = Duration::from_secs(idle_secs.unwrap_or(30));
-            service::serve_main(project, engine, idle)
+            service::serve_main(project, engine, config_arg, idle)
         }
         "hook" => run_hook(agent, config_arg.as_deref(), &engine),
         "benchmark" => run_benchmark(agent, config_arg.as_deref(), &engine),
@@ -121,7 +121,7 @@ fn run_hook(agent: Agent, config_arg: Option<&str>, engine: &str) -> ExitCode {
     let Some((command, project)) = read_project(agent) else {
         return ExitCode::from(0);
     };
-    if let Some(v) = service::hook_decide(&project, engine, agent.slug(), &command) {
+    if let Some(v) = service::hook_decide(&project, engine, config_arg, agent.slug(), &command) {
         return ExitCode::from(channel::emit(&v, agent) as u8);
     }
     // 降级路径：本进程 check（仍然全量管线，绝不无裁决放行）。
@@ -138,7 +138,7 @@ fn run_benchmark(agent: Agent, config_arg: Option<&str>, engine: &str) -> ExitCo
         return ExitCode::from(0);
     };
     let local = check_verdict(&project, config_arg, engine, &command, agent, "benchmark").ok();
-    let via_serve = service::hook_decide(&project, engine, agent.slug(), &command);
+    let via_serve = service::hook_decide(&project, engine, config_arg, agent.slug(), &command);
     let local_d = local.as_ref().map(|v| v.decision.to_string());
     let serve_d = via_serve.as_ref().map(|v| v.decision.to_string());
     let match_ = match (&local_d, &serve_d) {

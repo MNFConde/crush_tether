@@ -39,15 +39,19 @@ use crate::lookup::RuleLookup;
 use crate::model::{Decision, Verdict};
 use crate::script::RuleEngine;
 
-/// 端点名：`crush-tether-<16hex(hash(canonical(project), engine))>`。
-/// DefaultHasher::new() 定种（SipHash 固定 key），跨进程稳定。
-pub fn endpoint_name(project: &Path, engine: &str) -> String {
+/// 端点名：`crush-tether-<16hex(hash(canonical(project), engine, config))>`。
+/// DefaultHasher::new() 定种（SipHash 固定 key），跨进程稳定；`--config`
+/// 显式覆盖参与 hash（裁决域按配置隔离），None 时不进 hash。
+pub fn endpoint_name(project: &Path, engine: &str, config: Option<&str>) -> String {
     let canon = project
         .canonicalize()
         .unwrap_or_else(|_| project.to_path_buf());
     let mut h = DefaultHasher::new();
     canon.to_string_lossy().hash(&mut h);
     engine.hash(&mut h);
+    if let Some(c) = config {
+        c.hash(&mut h);
+    }
     format!("crush-tether-{:016x}", h.finish())
 }
 
@@ -504,8 +508,8 @@ fn watch_dirs(project: &Path) -> Vec<PathBuf> {
 /// 整段重编译 + 整体替换；失败保留旧快照 + stderr 告警，绝不半更新。
 /// 成功后补写 `type:"load"` 事件行（D-07：冷热路径都留痕）；失败不留痕
 /// （快照未换，留痕会误报新配置已生效）。
-fn reload(ruleset: &mut Option<RuleSet>, project: &Path, engine: &str) {
-    match RuleSet::load(project, engine, None) {
+fn reload(ruleset: &mut Option<RuleSet>, project: &Path, engine: &str, config: Option<&str>) {
+    match RuleSet::load(project, engine, config) {
         Ok(rs) => {
             *ruleset = Some(rs);
             log_load_event(project, ruleset.as_ref());
@@ -583,9 +587,14 @@ fn spawn_watcher(project: PathBuf, alive: Arc<AtomicU64>) -> std::sync::mpsc::Re
 }
 
 /// serve 主循环：独占 bind → 装配规则快照 → 串行 accept。输者静默退出
-/// （ExitCode 0，无输出）。
-pub fn serve_main(project: PathBuf, engine: String, idle_exit: Duration) -> std::process::ExitCode {
-    let name = endpoint_name(&project, &engine);
+/// （ExitCode 0，无输出）。`config` 为 `--config` 显式覆盖（None = 三层发现）。
+pub fn serve_main(
+    project: PathBuf,
+    engine: String,
+    config: Option<String>,
+    idle_exit: Duration,
+) -> std::process::ExitCode {
+    let name = endpoint_name(&project, &engine, config.as_deref());
     let listener = match bind(&name) {
         Ok(l) => l,
         // 已有实例（或绑定失败）→ 本进程是惊群输者：静默退出，由 hook 客户端
@@ -595,7 +604,7 @@ pub fn serve_main(project: PathBuf, engine: String, idle_exit: Duration) -> std:
 
     // 规则快照：加载失败保持存活、逐请求 fail-safe confirm（绝不放行）。
     // 冷启动 load 事件行留痕（ADR-07）。
-    let mut ruleset: Option<RuleSet> = match RuleSet::load(&project, &engine, None) {
+    let mut ruleset: Option<RuleSet> = match RuleSet::load(&project, &engine, config.as_deref()) {
         Ok(rs) => Some(rs),
         Err(msg) => {
             eprintln!("{msg}");
@@ -640,7 +649,7 @@ pub fn serve_main(project: PathBuf, engine: String, idle_exit: Duration) -> std:
                     dirty = true;
                 }
                 if dirty {
-                    reload(&mut ruleset, &project, &engine);
+                    reload(&mut ruleset, &project, &engine, config.as_deref());
                 }
                 // 监听失效降级：逐请求 stat 三重校验，指纹变化才整段重载。
                 if watcher_alive.load(Ordering::Relaxed) == 0 {
@@ -648,7 +657,7 @@ pub fn serve_main(project: PathBuf, engine: String, idle_exit: Duration) -> std:
                     let fp = config_fingerprint(&project);
                     if LAST_FP.load(Ordering::Relaxed) != 0 && LAST_FP.load(Ordering::Relaxed) != fp
                     {
-                        reload(&mut ruleset, &project, &engine);
+                        reload(&mut ruleset, &project, &engine, config.as_deref());
                     }
                     LAST_FP.store(fp, Ordering::Relaxed);
                 }
@@ -755,8 +764,15 @@ fn handle_connection(
 // ── hook 客户端角色 ──────────────────────────────────────────────────────
 
 /// 单次请求应答（一连接一请求）。
-fn ask(project: &Path, engine: &str, agent: &str, command: &str) -> Option<Verdict> {
-    let stream = connect(&endpoint_name(project, engine)).ok()?;
+fn ask(
+    project: &Path,
+    engine: &str,
+    config: Option<&str>,
+    agent: &str,
+    command: &str,
+) -> Option<Verdict> {
+    let name = endpoint_name(project, engine, config);
+    let stream = connect(&name).ok()?;
     let req = RequestLine {
         id: 1,
         op: "check".into(),
@@ -779,8 +795,8 @@ fn ask(project: &Path, engine: &str, agent: &str, command: &str) -> Option<Verdi
 }
 
 /// 端点存活探测（测试/客户端等待就绪用）。
-pub fn ping(project: &Path, engine: &str) -> bool {
-    let Ok(stream) = connect(&endpoint_name(project, engine)) else {
+pub fn ping(project: &Path, engine: &str, config: Option<&str>) -> bool {
+    let Ok(stream) = connect(&endpoint_name(project, engine, config)) else {
         return false;
     };
     let Ok(mut req) = serde_json::to_string(&RequestLine {
@@ -804,8 +820,9 @@ pub fn ping(project: &Path, engine: &str) -> bool {
         .map(|r| r.error.is_none())
         .unwrap_or(false)
 }
-/// detached spawn serve（输者语义由 serve 自身处理：静默退出 0）。
-fn spawn_serve(project: &Path, engine: &str) {
+/// detached spawn serve（输者语义由 serve 自身处理：静默退出 0）；config
+/// 为 `--config` 显式覆盖时透传给 serve 子进程（端点名同源）。
+fn spawn_serve(project: &Path, engine: &str, config: Option<&str>) {
     let Ok(exe) = std::env::current_exe() else {
         return;
     };
@@ -813,19 +830,24 @@ fn spawn_serve(project: &Path, engine: &str) {
         .ok()
         .and_then(|v| v.parse::<u64>().ok())
         .unwrap_or(30);
+    let mut args = vec![
+        "serve".to_string(),
+        "--project".to_string(),
+        project.to_string_lossy().into_owned(),
+        "--engine".to_string(),
+        engine.to_string(),
+        "--idle-exit".to_string(),
+        idle_secs.to_string(),
+    ];
+    if let Some(c) = config {
+        args.push("--config".to_string());
+        args.push(c.to_string());
+    }
     let mut cmd = std::process::Command::new(exe);
-    cmd.args([
-        "serve",
-        "--project",
-        &project.to_string_lossy(),
-        "--engine",
-        engine,
-        "--idle-exit",
-        &idle_secs.to_string(),
-    ])
-    .stdin(std::process::Stdio::null())
-    .stdout(std::process::Stdio::null())
-    .stderr(std::process::Stdio::null());
+    cmd.args(&args)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
@@ -844,21 +866,27 @@ fn spawn_serve(project: &Path, engine: &str) {
 
 /// hook 主路径：connect-or-spawn → 仍失败返回 `None`（调用方降级本进程
 /// check，绝不无裁决放行）。`CRUSH_TETHER_DISABLE_SERVE=1` 跳过（逃生口）。
-pub fn hook_decide(project: &Path, engine: &str, agent: &str, command: &str) -> Option<Verdict> {
+pub fn hook_decide(
+    project: &Path,
+    engine: &str,
+    config: Option<&str>,
+    agent: &str,
+    command: &str,
+) -> Option<Verdict> {
     if std::env::var_os("CRUSH_TETHER_DISABLE_SERVE").is_some() {
         return None;
     }
     // 直连常驻 serve（µs 级）。
-    if let Some(v) = ask(project, engine, agent, command) {
+    if let Some(v) = ask(project, engine, config, agent, command) {
         return Some(v);
     }
     // 冷启动惊群：spawn serve（独占 bind 裁定唯一性，输者静默退出），有界
     // 等就绪重试 ~200ms。
-    spawn_serve(project, engine);
+    spawn_serve(project, engine, config);
     let t0 = Instant::now();
     while t0.elapsed() < Duration::from_millis(200) {
         std::thread::sleep(Duration::from_millis(20));
-        if let Some(v) = ask(project, engine, agent, command) {
+        if let Some(v) = ask(project, engine, config, agent, command) {
             return Some(v);
         }
     }
