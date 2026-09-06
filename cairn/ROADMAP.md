@@ -1,6 +1,6 @@
 # crush_tether Roadmap
 
-**Current focus**: P0+P1 已落地（Rust 重写 + 回归用例全绿）；配置格式草案 v1 + 命令知识库框架已纸面定稿（决策论证 `doc/decisions.md` D-01~D-06）。P2–P6 已细化为逐项带验收标准的里程碑（2026-09-06，见「推进计划」M 编号条目）：**P2→P5 共 15 项可一口气连续推进、无外部决策点**（三个实现期定点见「推进节奏」节）；P6 的 mdor 退役需用户确认。**下一步 = P2（M2.1 起），启动待用户授权。** → **执行中（2026-09-06 用户下令开启完全访问模式）：M2.1–M2.7（P2 全部）已完成并收口（2026-09-06），P3（M3.1–M3.3）已全部完成——**本次授权范围（P2 开工 → P3 收尾）执行完毕（2026-09-06）**；下一步 P4（serve 生命周期）待用户新授权。** → **2026-09-06 追加：script_allow（脚本条件放行）设计定稿并登记 M4.0 独立里程碑（启动需用户授权）；挂账执行完毕——脚本词汇约定修订（M4.0 前置小改）、ctx 封装与决策枚举化（P6 同批）、编辑器支持（P6 后候选）均已显式落点。** → **2026-09-06 追加：zcode adapter 并入 P5（新增 M5.3——复用 ClaudeCode 信封薄变体 + 插件分发；stdin 键名与 PermissionRequest 决策能力两处实现期探针实测，不预设）。** → **2026-09-06 用户预授权（待「开始」+ 完全访问模式后执行）：范围 = M4.0 + P4 + P5 一段推进（B 方案），顺序 = 默认包缺口 docs 小步 → M4.0 → P4（M4.1–M4.3）→ P5（M5.1–M5.3），M4.0 先于 serve 热重载；实现期小点就地定 + 登记，不打断。默认包缺口照推荐值执行：git remote/tag 写形态补 knowledge.toml `write_tokens` 落 confirm、sudo/mkfs/dd/shutdown 落 deny 桶——先改 design.md 定稿示例再动模板，同步更新回归用例变更记录（D-05）。P4 日志默认开（M4.3 就地登记 ADR）。** → **2026-09-06 执行中：M4.0 已完成收口（script_allow 全链路落地，见 M4.0 条）；下一步 P4（M4.1–M4.3）→ P5（M5.1–M5.3）按预授权顺序推进。**
+**Current focus**: P0+P1 已落地（Rust 重写 + 回归用例全绿）；配置格式草案 v1 + 命令知识库框架已纸面定稿（决策论证 `doc/decisions.md` D-01~D-06）。P2–P6 已细化为逐项带验收标准的里程碑（2026-09-06，见「推进计划」M 编号条目）：**P2→P5 共 15 项可一口气连续推进、无外部决策点**（三个实现期定点见「推进节奏」节）；P6 的 mdor 退役需用户确认。**下一步 = P2（M2.1 起），启动待用户授权。** → **执行中（2026-09-06 用户下令开启完全访问模式）：M2.1–M2.7（P2 全部）已完成并收口（2026-09-06），P3（M3.1–M3.3）已全部完成——**本次授权范围（P2 开工 → P3 收尾）执行完毕（2026-09-06）**；下一步 P4（serve 生命周期）待用户新授权。** → **2026-09-06 追加：script_allow（脚本条件放行）设计定稿并登记 M4.0 独立里程碑（启动需用户授权）；挂账执行完毕——脚本词汇约定修订（M4.0 前置小改）、ctx 封装与决策枚举化（P6 同批）、编辑器支持（P6 后候选）均已显式落点。** → **2026-09-06 追加：zcode adapter 并入 P5（新增 M5.3——复用 ClaudeCode 信封薄变体 + 插件分发；stdin 键名与 PermissionRequest 决策能力两处实现期探针实测，不预设）。** → **2026-09-06 用户预授权（待「开始」+ 完全访问模式后执行）：范围 = M4.0 + P4 + P5 一段推进（B 方案），顺序 = 默认包缺口 docs 小步 → M4.0 → P4（M4.1–M4.3）→ P5（M5.1–M5.3），M4.0 先于 serve 热重载；实现期小点就地定 + 登记，不打断。默认包缺口照推荐值执行：git remote/tag 写形态补 knowledge.toml `write_tokens` 落 confirm、sudo/mkfs/dd/shutdown 落 deny 桶——先改 design.md 定稿示例再动模板，同步更新回归用例变更记录（D-05）。P4 日志默认开（M4.3 就地登记 ADR）。** → **2026-09-06 执行中：M4.0 已完成收口（script_allow 全链路落地，见 M4.0 条）；下一步 P4（M4.1–M4.3）→ P5（M5.1–M5.3）按预授权顺序推进。** → **2026-09-06：P4 已收口（M4.1 c127205 / M4.2 8999ea8 / M4.3 0b36b42，ADR-07 日志默认开）；P5 已收口（M5.1/M5.2/M5.3 实现完成，M5.3 实机 hook 触发验证挂部署时探针——需项目外写入授权）；P2–P5 全部达成，仅余 P6（M6.1 Lua/M6.2 质量收口/M6.3 mdor 退役需用户确认）。**
 
 ## 推进计划（P0–P6）
 
@@ -44,11 +44,11 @@
   - **M4.3 裁决日志落盘 + 资源预算达标**✅（2026-09-06，本提交）：JSONL 字段全集（含 `kb`/`normalized`/`script`）；serve 单点写 + hook 降级自写；`type:"load"` 事件行含 lint 告警；日志默认开关就此定并登记 ADR（建议默认开——P4 内唯一实现期定点）。
     - 验收：日志字段与 design.md 示例一致；load 事件冷热路径都留痕；常驻 <10MB、P95 <5ms、零 busy-loop，CI benchmark 门槛防退化。
 - [ ] **P5 Adapter 完整化：ClaudeCode + zcode**（M5.1–M5.3；zcode 于 2026-09-06 并入）：
-  - **M5.1 契约适配**：`hookSpecificOutput` 信封（permissionDecision allow/ask/deny）；输入键名与 `CLAUDE_PROJECT_DIR` 适配；权限基准 cwd 优先、回退 env；`updated_input` 全替换语义（区别于 Crush 浅合并）。
+  - **M5.1 契约适配**✅（2026-09-06，本提交）：`hookSpecificOutput` 信封（permissionDecision allow/ask/deny）；输入键名与 `CLAUDE_PROJECT_DIR` 适配；权限基准 cwd 优先、回退 env；`updated_input` 全替换语义（区别于 Crush 浅合并）。
     - 验收：三档行为与 Crush 等价；exit 2 覆盖 JSON 的规则正确。
-  - **M5.2 双 adapter 共用用例集**：契约测试参数化，同一用例集驱动 Crush / ClaudeCode 两 adapter。
-    - 验收：共用用例集双跑全绿。
-  - **M5.3 zcode adapter**（2026-09-06 登记）：复用 M5.1 的 `hookSpecificOutput` 信封做薄变体（输入键容差 + `${ZCODE_PROJECT_DIR}`/`${CLAUDE_PROJECT_DIR}` 项目目录回退链）；实现期先探针实测两处 zcode 文档未写死的事实再定型——stdin 输入载荷键名、`PermissionRequest` 能否返回三值决策（能则改挂它，否则用已验证的 `PreToolUse`）；交付形态 = zcode 插件（`hooks/hooks.json`，自动启用 hook runner），执行入口用 `type:"process"` 参数向量（Windows 免 shell 转义）。
+  - **M5.2 双 adapter 共用用例集**✅（2026-09-06，本提交）：契约测试参数化（`tests/contract_adapters.rs`），同一用例集驱动 Crush / ClaudeCode / zcode 三 adapter（M5.3 并入后扩为三）。
+    - 验收：共用用例集多跑全绿。
+  - **M5.3 zcode adapter**✅ 实现完成（2026-09-06，本提交；**实机 hook 触发验证挂部署时探针**——实测需向 `~/.zcode/cli/config.json` 或插件目录写入 hook 配置，属项目外写入，需用户授权或用户自行配置后验证；验收项「插件分发实际触发」随之挂起）：复用 M5.1 的 `hookSpecificOutput` 信封做薄变体（输入键容差 + `${ZCODE_PROJECT_DIR}`/`${CLAUDE_PROJECT_DIR}` 项目目录回退链）；实现期先探针实测两处 zcode 文档未写死的事实再定型——stdin 输入载荷键名、`PermissionRequest` 能否返回三值决策（能则改挂它，否则用已验证的 `PreToolUse`）；交付形态 = zcode 插件（`hooks/hooks.json`，自动启用 hook runner），执行入口用 `type:"process"` 参数向量（Windows 免 shell 转义）。
     - 验收：三档行为与 Crush 等价；M5.2 共用用例集纳入第三 adapter 全绿；插件分发在 zcode 侧实际触发 hook 生效（含配置默认禁用的启用路径验证）。
 - [ ] **P6 收尾**（M6.1–M6.3；**M6.3 含用户确认点，不与 P2–P5 连续推进**）：
   - **M6.1 Lua 引擎**：mlua `--engine lua`；**同批挂账（2026-09-06）：ctx 彻底封装**（自定义类型 + 方法化访问，不向脚本暴露裸 map/unit）与**决策值枚举化**（返回值类型收窄四变体、非法值构造期报错）——三者动的都是 `RuleEngine` 接口层，一次定型。

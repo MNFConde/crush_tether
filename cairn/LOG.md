@@ -2,6 +2,14 @@
 
 This file records substantive progress in reverse-chronological order — newest entry at the top, right below this line. Keep each entry short — summary and pointer only; conclusions settle into `cairn/<topic>.md`.
 
+## 2026-09-06 · P4+P5 落地：服务化三里程碑与三 adapter 契约
+
+- **M4.3**（0b36b42 + 4a209ad/942cc00/d6b5c50 溯源管道）：JSONL 裁决日志落盘 `<project>/.crush-tether/decisions.jsonl`（默认开，ADR-07；写入失败静默）；`source.layer` 全层溯源 = merge 层 Provenance 映射（词条→生效层，Set 覆盖清表/Delta 增删随层）+ lookup `EntrySource`（entry 形态 `<bin>.<bucket>.<dim>`/`<bucket>`/`default`）；`type:"load"` 事件行冷/热路径留痕含 lint 告警；`ts` 用 UTC RFC3339（std 无本地时区，不引依赖，Hinnant 算法自实现）。
+- **M5.1–M5.3**：ClaudeCode 契约补全（confirm → `permissionDecision:"ask"` 信封、stdin `cwd` 权限基准优先）；契约测试参数化共用例集驱动三 adapter；zcode adapter 薄变体（`ZCODE_PROJECT_DIR`→`CLAUDE_PROJECT_DIR`→stdin `cwd` 容差链、同构信封）。**M5.3 实机 hook 触发验证挂部署时探针**（实测需写 `~/.zcode` 配置，项目外写入需用户授权）。
+- **教训**：Windows 下测试构造 JSON 载荷须用 serde_json 序列化路径——`display()` 反斜杠产生非法 `\U` 转义导致 stdin 解析静默失败（fail-safe 路径生效，表面症状是「裁决丢失」）。
+- 已知 flake：`config::seed::tests::concurrent_seeding_converges_to_same_bytes`（Windows 并发 rename 竞态，单独跑稳定通过，M2.6 遗留）。
+- Details: `src/{channel,service}.rs`、`src/config/merge.rs`（Provenance）、`tests/{contract_adapters,service_log}.rs`、design.md 更正登记 14。
+
 ## 2026-09-06 · M4.1+M4.2 落地：命名端点 serve / hook connect-or-spawn / 热重载
 
 - **M4.1**（c127205）：`src/service.rs`——端点名 `hash(canonical(project), engine)`（DefaultHasher 定种）；独占 bind 单实例裁定（interprocess 默认 `FILE_FLAG_FIRST_PIPE_INSTANCE`，输者静默退出 0）；JSON 行协议 `{id,op,command}`→`{id,verdict}`，一连接一请求；`RuleSet` 装配（查表+脚本+定稿点，check/hook/serve 三模式共用）；`hook` 模式 connect-or-spawn（~200ms 有界重试）+ 降级；watchdog 整秒醒一次 idle 退出（`--idle-exit`，默认 30s）；`benchmark` 双跑对比。验收 5/5（`tests/service_serve.rs`）。
