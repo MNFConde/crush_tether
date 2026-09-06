@@ -2,6 +2,13 @@
 
 This file records substantive progress in reverse-chronological order — newest entry at the top, right below this line. Keep each entry short — summary and pointer only; conclusions settle into `cairn/<topic>.md`.
 
+## 2026-09-07 · CI 工作流落地（参考 mdor ci.yml 适配）
+
+- 新增 `.github/workflows/ci.yml`：ubuntu job = 本仓库全门禁（fmt/clippy/test/check-links/audit，单 crate 无 `-p` 限定）；windows-latest job = 专跑 test（覆盖句柄继承修复、命名管道 serve/hook 等 Windows 专属行为面）。
+- **适配点**：check-links 经 `astral-sh/setup-uv`；audit 改用 `taiki-e/install-action` 装二进制（比逐次 `cargo install` 快）；D-08 的 unmaintained 警告默认 warning 级不失败，无需 audit.toml（本地核实仓库与用户级均无配置、退出码 0）。
+- **已知风险登记**：seed 并发测试 Windows rename 竞态偶发 flake 可能使 windows job 偶红（维持登记不修）；mlua vendored + tree-sitter 冷构建较慢（rust-cache 承接）。
+- Details: `.github/workflows/ci.yml`、`AGENTS.md`「质量门禁」。
+
 ## 2026-09-07 · 登记 P7 体验与适配专项 + zcode 原生权限叠加结论
 
 - **P7 登记（四项均待授权，ROADMAP）**：M7.0 写目标感知逃逸检查（用户策略「读默认都通过、写默认只许仓内」——现状 `[local]` 逃逸检查参数级、输入输出不分，读外翻 confirm、`[global]` 豁免整体有洞，正解 = 逃逸检查只看写效果路径）；M7.1 规则测试工具（explain / batch / 断言式用例 / **用户面 REPL**——定位是放开给用户调试自己的规则配置与脚本）；M7.2 探针 python 化（`script/hook_probe.py`，uv 管理无全局 python，方法语言无关入 design.md「hook 探针方法（定稿）」）；M7.3 多 agent 实机兼容性实测 + 特性降级矩阵（不支持的能力默认不生效、绝不报错）。

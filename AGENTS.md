@@ -31,6 +31,7 @@ crush_tether —— Crush 命令级 bash 权限门（Rust 实现 crush-guard 独
 ## 质量门禁
 
 - `cargo fmt --check` → `cargo clippy -- -D warnings` → `cargo test` → `cargo audit`（需 `cargo install cargo-audit --locked`）。
+- CI（`.github/workflows/ci.yml`）：ubuntu job 跑全门禁含 check-links（audit 经 taiki-e/install-action 装二进制）；windows-latest job 专跑 test 覆盖 Windows 专属行为面。
 - 单测重点在核心逻辑（平台无关）；skill 相关约定见下节「项目特化约束（skill 使用）」。
 
 ## 项目特化约束（skill 使用）

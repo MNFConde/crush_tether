@@ -1,0 +1,50 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # 质量门禁（AGENTS.md「质量门禁」）：fmt → clippy → test → check-links → audit
+  quality:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      # 读 rust-toolchain.toml 钉版 1.97.1（minimal profile，文件内已含 rustfmt/clippy 组件）
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - uses: Swatinem/rust-cache@v2
+      - name: fmt
+        run: cargo fmt --check
+      # 单 crate 无 workspace，无 -p 限定
+      - name: clippy
+        run: cargo clippy -- -D warnings
+      - name: test
+        run: cargo test
+      - uses: astral-sh/setup-uv@v5
+      - name: check-links
+        run: uv run python script/check-links.py
+      # D-08：rhai 传递依赖 smartstring unmaintained（RUSTSEC-2026-0249，无 CVE）
+      # 名册化接受——unmaintained 级为 warning 不影响退出码；监控点 = rhai 发布
+      # 移除该依赖即升级消警告（design.md 更正登记 / decisions.md D-08）
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-audit
+      - name: audit
+        run: cargo audit
+
+  # Windows 专属行为面：句柄继承（更正登记 20）、命名管道 serve/hook、探针语义。
+  # 只跑 test 不跑 clippy（Windows runner 慢）；已知登记项：seed 并发测试
+  # Windows rename 竞态偶发 flake（维持登记不修）。
+  windows-test:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - uses: Swatinem/rust-cache@v2
+      - name: test
+        run: cargo test
