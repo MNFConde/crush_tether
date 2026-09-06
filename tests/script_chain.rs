@@ -76,7 +76,7 @@ fn broken_user_script_fails_safe_confirm() {
     assert_eq!(r.code, 0);
     assert!(r.stdout.trim().is_empty(), "fail-safe confirm 无输出");
     assert!(
-        r.stderr.contains("rules.rhai failed to load"),
+        r.stderr.contains("script layer failed to load"),
         "stderr 告警：{}",
         r.stderr
     );

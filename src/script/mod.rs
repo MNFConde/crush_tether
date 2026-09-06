@@ -1,7 +1,8 @@
-//! 脚本层引擎（Rhai，v1）：沙箱执行 `rules.rhai`，承载声明层表达不了的
-//! 条件判断（design.md「DSL 引擎（定稿）」）。
+//! 脚本层引擎（M6.1 双引擎）：沙箱执行 `rules.rhai`（默认）/ `rules.lua`，
+//! 承载声明层表达不了的条件判断（design.md「DSL 引擎（定稿）」）。
 //!
-//! - 同一 [`RuleEngine`] trait 是引擎开闭落点（`--engine lua` 随 P6 落地）。
+//! - 同一 [`RuleEngine`] trait 是引擎开闭落点：[`RhaiEngine`]（默认）与
+//!   [`LuaEngine`]（`--engine lua`）。
 //! - Rust 提供**不可绕过的安全原语**（`path_escapes` / `inside_repo` /
 //!   `kb_*` 知识库数据源），DSL 只能组合判定、不能绕过；沙箱默认无
 //!   文件/进程/网络 API。
@@ -32,8 +33,38 @@ use crate::config::merge::{DeclScope, ScriptAllowDecls};
 use crate::knowledge::KnowledgeBase;
 use crate::model::Decision;
 
-/// 本构建支持的脚本层引擎名（`--engine`；Lua 随 P6）。
-pub const SUPPORTED_ENGINES: &[&str] = &["rhai"];
+mod lua;
+pub use lua::LuaEngine;
+
+/// 本构建支持的脚本层引擎名（`--engine`）。
+pub const SUPPORTED_ENGINES: &[&str] = &["rhai", "lua"];
+
+/// 引擎 → 脚本文件名（design.md「配置拆分」：`rules.rhai` / `rules.lua`）。
+/// 未支持引擎 → None（`--engine` 校验已在 CLI 层拦截）。
+pub fn script_file_name(engine: &str) -> Option<&'static str> {
+    match engine {
+        "rhai" => Some("rules.rhai"),
+        "lua" => Some("rules.lua"),
+        _ => None,
+    }
+}
+
+/// 按引擎名编译脚本源（引擎分派点；各引擎实现同一条 [`RuleEngine`] trait）。
+fn compile_engine(
+    engine: &str,
+    source: &str,
+    project: PathBuf,
+    kb: Option<Arc<KnowledgeBase>>,
+    decls: ScriptAllowDecls,
+) -> Result<Box<dyn RuleEngine>, ScriptError> {
+    match engine {
+        "rhai" => RhaiEngine::compile(source, project, kb, decls).map(|e| Box::new(e) as _),
+        "lua" => LuaEngine::compile(source, project, kb, decls).map(|e| Box::new(e) as _),
+        other => Err(ScriptError::Rejected(format!(
+            "unsupported script engine `{other}`"
+        ))),
+    }
+}
 
 /// 脚本层失败原因（任何变体 → 调用方 fail-safe confirm）。
 #[derive(Debug)]
@@ -142,7 +173,7 @@ fn register_decision_types(engine: &mut Engine) {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AllowActivation(pub String);
 
-/// 脚本引擎抽象（引擎开闭落点；Rhai 为 v1 默认实现）。
+/// 脚本引擎抽象（引擎开闭落点；Rhai 为默认实现，Lua 为兼容实现）。
 pub trait RuleEngine {
     /// 单命令评估。`pipe_to_shell` 为管线原语计算的管道拓扑特征（整条
     /// 命令行级）。`allow(name)` 激活只产出 [`ScriptOutcome::Activate`]，
@@ -154,6 +185,12 @@ pub trait RuleEngine {
         project: &Path,
         pipe_to_shell: bool,
     ) -> Result<ScriptOutcome, ScriptError>;
+
+    /// 提取集（机制 1 产物；lint 死声明检查与 load 事件行的脚本侧数据源）。
+    fn allow_literals(&self) -> &[String];
+
+    /// 声明集（定稿点作用域化逃逸检查用）。
+    fn decls(&self) -> &ScriptAllowDecls;
 }
 
 /// 单命令脚本评估结果（管线第 2 步产出，第 3 步定稿点消费）。
@@ -239,6 +276,14 @@ impl RhaiEngine {
 }
 
 impl RuleEngine for RhaiEngine {
+    fn allow_literals(&self) -> &[String] {
+        &self.allow_literals
+    }
+
+    fn decls(&self) -> &ScriptAllowDecls {
+        &self.decls
+    }
+
     fn evaluate(
         &self,
         cmd: &SimpleCommand,
@@ -560,8 +605,8 @@ fn register_primitives(engine: &mut Engine, project: PathBuf, kb: Option<Arc<Kno
 /// 执行可作最终裁决）：用户层先、项目层后，前一层输出为后一层输入。
 /// 层标签用于日志溯源（`script.file` 区分两层文件）。
 pub struct ScriptChain {
-    /// 依执行序排列（user → project）。
-    engines: Vec<(&'static str, RhaiEngine)>,
+    /// 依执行序排列（user → project）；引擎多态（rhai/lua 共链语义）。
+    engines: Vec<(&'static str, Box<dyn RuleEngine>)>,
 }
 
 impl ScriptChain {
@@ -607,28 +652,59 @@ impl ScriptChain {
     }
 }
 
-/// 加载脚本层链：用户层 `~/.config/crush-tether/rules.rhai` 先、项目层
-/// `.crush-tether/rules.rhai` 后（缺失 = 跳过该层；两层皆缺 = None，TOML
-/// 自足）。任一层损坏（含 script_allow 对账拒载）→ `Err` → fail-safe
-/// confirm。
+/// 加载脚本层链：用户层 `~/.config/crush-tether/<script_file>` 先、项目层
+/// `.crush-tether/<script_file>` 后（缺失 = 跳过该层；两层皆缺 = None，
+/// TOML 自足）。脚本文件名由引擎决定（`rules.rhai` / `rules.lua`）。本引擎
+/// 脚本缺失但该层存在他引擎脚本 → stderr 告警（防静默丢失脚本层——引擎
+/// 切换后忘建对应文件时裁决面缩水）。任一层损坏（含 script_allow 对账
+/// 拒载）→ `Err` → fail-safe confirm。
 pub fn load_script_chain(
     project: &Path,
     home: Option<&Path>,
     kb: Option<Arc<KnowledgeBase>>,
     decls: ScriptAllowDecls,
+    engine: &str,
 ) -> Result<Option<ScriptChain>, ScriptError> {
+    let Some(file) = script_file_name(engine) else {
+        return Err(ScriptError::Rejected(format!(
+            "unsupported script engine `{engine}`"
+        )));
+    };
     let mut engines = Vec::new();
+    let mut layers: Vec<(&'static str, Option<PathBuf>)> = Vec::new();
     if let Some(h) = home {
-        let path = h.join(".config").join("crush-tether").join("rules.rhai");
-        if let Some(e) =
-            load_optional_engine(&path, project.to_path_buf(), kb.clone(), decls.clone())?
-        {
-            engines.push(("user", e));
-        }
+        layers.push(("user", Some(h.join(".config").join("crush-tether"))));
     }
-    let path = project.join(".crush-tether").join("rules.rhai");
-    if let Some(e) = load_optional_engine(&path, project.to_path_buf(), kb, decls)? {
-        engines.push(("project", e));
+    layers.push(("project", Some(project.join(".crush-tether"))));
+    for (tag, dir) in layers {
+        let Some(dir) = dir else { continue };
+        let path = dir.join(file);
+        if let Some(e) = load_optional_engine(
+            &path,
+            project.to_path_buf(),
+            kb.clone(),
+            decls.clone(),
+            engine,
+        )? {
+            engines.push((tag, e));
+            continue;
+        }
+        // 本层本引擎脚本缺失：其他支持引擎的脚本文件在位 → 告警。
+        for other in SUPPORTED_ENGINES {
+            if *other == engine {
+                continue;
+            }
+            let Some(other_file) = script_file_name(other) else {
+                continue;
+            };
+            if dir.join(other_file).is_file() {
+                eprintln!(
+                    "crush-tether: {other_file} present but engine is `{engine}` \
+                     ({file} missing); script layer predicates are inactive for this \
+                     request path"
+                );
+            }
+        }
     }
     Ok((!engines.is_empty()).then(|| ScriptChain { engines }))
 }
@@ -639,15 +715,16 @@ fn load_optional_engine(
     project: PathBuf,
     kb: Option<Arc<KnowledgeBase>>,
     decls: ScriptAllowDecls,
-) -> Result<Option<RhaiEngine>, ScriptError> {
+    engine: &str,
+) -> Result<Option<Box<dyn RuleEngine>>, ScriptError> {
     match std::fs::read_to_string(path) {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(e) => Err(ScriptError::Io(e)),
-        Ok(source) => RhaiEngine::compile(&source, project, kb, decls).map(Some),
+        Ok(source) => compile_engine(engine, &source, project, kb, decls).map(Some),
     }
 }
 
-/// `--engine` 参数校验（v1 仅 rhai；lua 随 P6）。
+/// `--engine` 参数校验。
 pub fn engine_supported(name: &str) -> bool {
     SUPPORTED_ENGINES.contains(&name)
 }
@@ -880,6 +957,7 @@ mod tests {
             Some(Path::new("D:/code/tmp/definitely-absent")),
             None,
             ScriptAllowDecls::default(),
+            "rhai",
         )
         .unwrap();
         assert!(r.is_none(), "TOML 自足：两层脚本皆缺失不是错误");

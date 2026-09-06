@@ -150,7 +150,7 @@ impl fmt::Display for RuleSetError {
             RuleSetError::Script(e) => {
                 write!(
                     f,
-                    "crush-tether: rules.rhai failed to load: {e}; fail-safe confirm"
+                    "crush-tether: script layer failed to load: {e}; fail-safe confirm"
                 )
             }
         }
@@ -169,6 +169,8 @@ pub struct RuleSet {
     pub lint_warnings: Vec<crate::lint::Lint>,
     /// `--config` 显式覆盖路径（日志 source.layer=explicit 时的 file 溯源）。
     pub config_path: Option<PathBuf>,
+    /// 引擎标签（决定脚本文件名 `rules.rhai`/`rules.lua` 与日志 script.file）。
+    pub engine: String,
 }
 
 /// 单命令裁决的溯源信息（日志 source/normalized/script 字段数据源）。
@@ -188,7 +190,11 @@ impl RuleSet {
     /// 加载配置（三层发现 + 引导生成 + 显式覆盖）与脚本层；任一损坏返回
     /// `Err(RuleSetError)`——调用方按 fail-safe confirm 处理（D-03：损坏 ≠
     /// 缺失，绝不静默回落）。
-    pub fn load(project: &Path, config_arg: Option<&str>) -> Result<RuleSet, RuleSetError> {
+    pub fn load(
+        project: &Path,
+        config_arg: Option<&str>,
+        engine: &str,
+    ) -> Result<RuleSet, RuleSetError> {
         let home = crate::config::home_dir();
         let found = crate::config::discover_layers(Some(project), home.as_deref());
         // 三层皆缺 → 引导生成默认包（生成动作是管线引导步骤，不经规则链，
@@ -196,7 +202,7 @@ impl RuleSet {
         // 时不生成：损坏 ≠ 缺失（D-03），fail-safe confirm、原文件不动。
         let found = match found {
             Ok(l) if l.all_absent() && crate::config::explicit_path(config_arg).is_none() => {
-                match crate::config::seed::seed_defaults_if_absent(project) {
+                match crate::config::seed::seed_defaults_if_absent(project, engine) {
                     Ok(_) => {
                         eprintln!(
                             "crush-tether: no config found; seeded defaults in {}",
@@ -265,6 +271,7 @@ impl RuleSet {
             home.as_deref(),
             kb_arc.clone(),
             lookup.script_allow().clone(),
+            engine,
         ) {
             Ok(s) => s,
             Err(e) => return Err(RuleSetError::Script(e.to_string())),
@@ -290,6 +297,7 @@ impl RuleSet {
             kb_present: kb.is_some(),
             lint_warnings,
             config_path,
+            engine: engine.to_string(),
         })
     }
 
@@ -434,6 +442,8 @@ pub struct LogContext<'a> {
     pub kb_present: bool,
     /// `--config` 显式覆盖路径（source.layer=explicit 时的 file 值）。
     pub explicit: Option<&'a Path>,
+    /// 当前引擎的脚本文件名（source.layer=script 与 script.file 溯源）。
+    pub script_file: Option<&'static str>,
 }
 
 /// 裁决日志记录（design.md「日志」示例字段全集）。
@@ -448,7 +458,7 @@ pub fn log_verdict(
         let file: Option<String> = match s.layer {
             "project" => Some(".crush-tether/rules.toml".into()),
             "user" => Some("~/.config/crush-tether/rules.toml".into()),
-            "script" => Some("rules.rhai".into()),
+            "script" => Some(ctx.script_file.unwrap_or("rules.rhai").to_string()),
             "explicit" => ctx.explicit.map(|p| p.to_string_lossy().into_owned()),
             _ => None,
         };
@@ -471,8 +481,11 @@ pub fn log_verdict(
         "normalized": trace.normalized,
         "script": {
             "file": match trace.script_layer {
-                Some("user") => serde_json::json!("~/.config/crush-tether/rules.rhai"),
-                Some(_) => serde_json::json!("rules.rhai"),
+                Some("user") => serde_json::json!(format!(
+                    "~/.config/crush-tether/{}",
+                    ctx.script_file.unwrap_or("rules.rhai")
+                )),
+                Some(_) => serde_json::json!(ctx.script_file.unwrap_or("rules.rhai")),
                 None => serde_json::Value::Null,
             },
             "rule": serde_json::Value::Null,
@@ -571,8 +584,8 @@ fn watch_dirs(project: &Path) -> Vec<PathBuf> {
 /// 整段重编译 + 整体替换；失败保留旧快照 + stderr 告警，绝不半更新。
 /// 成功后补写 `type:"load"` 事件行（D-07：冷热路径都留痕）；失败不留痕
 /// （快照未换，留痕会误报新配置已生效）。
-fn reload(ruleset: &mut Option<RuleSet>, project: &Path, config: Option<&str>) {
-    match RuleSet::load(project, config) {
+fn reload(ruleset: &mut Option<RuleSet>, project: &Path, config: Option<&str>, engine: &str) {
+    match RuleSet::load(project, config, engine) {
         Ok(rs) => {
             *ruleset = Some(rs);
             log_load_event(project, ruleset.as_ref());
@@ -667,7 +680,7 @@ pub fn serve_main(
 
     // 规则快照：加载失败保持存活、逐请求 fail-safe confirm（绝不放行）。
     // 冷启动 load 事件行留痕（ADR-07）。
-    let mut ruleset: Option<RuleSet> = match RuleSet::load(&project, config.as_deref()) {
+    let mut ruleset: Option<RuleSet> = match RuleSet::load(&project, config.as_deref(), &engine) {
         Ok(rs) => Some(rs),
         Err(msg) => {
             eprintln!("{msg}");
@@ -716,13 +729,13 @@ pub fn serve_main(
                     dirty = true;
                 }
                 if dirty {
-                    reload(&mut ruleset, &project, config.as_deref());
+                    reload(&mut ruleset, &project, config.as_deref(), &engine);
                 }
                 // 监听失效降级：逐请求 stat 三重校验，指纹变化才整段重载。
                 if watcher_alive.load(Ordering::Relaxed) == 0 {
                     let fp = config_fingerprint(&project);
                     if last_fp != 0 && last_fp != fp {
-                        reload(&mut ruleset, &project, config.as_deref());
+                        reload(&mut ruleset, &project, config.as_deref(), &engine);
                     }
                     last_fp = fp;
                 }
@@ -789,6 +802,7 @@ fn handle_connection(
                         },
                         kb_present: rs.kb_present,
                         explicit: rs.config_path.as_deref(),
+                        script_file: crate::script::script_file_name(&rs.engine),
                     },
                 );
                 Some(VerdictDto {

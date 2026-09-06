@@ -69,7 +69,7 @@ fn broken_script_fails_safe() {
     assert_eq!(r.code, 0);
     assert!(r.stdout.trim().is_empty());
     assert!(
-        r.stderr.contains("fail-safe confirm") && r.stderr.contains("rules.rhai"),
+        r.stderr.contains("fail-safe confirm") && r.stderr.contains("script layer failed"),
         "got: {}",
         r.stderr
     );
@@ -85,7 +85,9 @@ fn no_script_toml_only_still_works() {
 #[test]
 fn unsupported_engine_fails_safe() {
     let proj = project_with_script("engine", TOML, None);
-    let r = run_check_with(proj.path(), &["--engine", "lua"], "ls");
+    // 未支持引擎（M6.1 起 lua 已支持，用真不存在的名字）→ confirm，不静默
+    // 回退默认引擎。
+    let r = run_check_with(proj.path(), &["--engine", "python"], "ls");
     assert_eq!(r.code, 0);
     assert!(
         r.stdout.trim().is_empty(),
@@ -99,6 +101,9 @@ fn unsupported_engine_fails_safe() {
         "{\"decision\":\"allow\"}",
         "显式 rhai 正常"
     );
+    // M6.1：lua 已支持（TOML 自足项目无脚本层，裁决不受影响）。
+    let r = run_check_with(proj.path(), &["--engine", "lua"], "ls");
+    assert_eq!(r.stdout.trim(), "{\"decision\":\"allow\"}", "显式 lua 正常");
 }
 
 #[test]
