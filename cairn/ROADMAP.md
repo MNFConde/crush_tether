@@ -48,7 +48,7 @@
     - 验收：三档行为与 Crush 等价；exit 2 覆盖 JSON 的规则正确。
   - **M5.2 双 adapter 共用用例集**✅（2026-09-06，本提交）：契约测试参数化（`tests/contract_adapters.rs`），同一用例集驱动 Crush / ClaudeCode / zcode 三 adapter（M5.3 并入后扩为三）。
     - 验收：共用用例集多跑全绿。
-  - **M5.3 zcode adapter**✅ 实现完成（2026-09-06，本提交；**实机 hook 触发验证挂部署时探针**——实测需向 `~/.zcode/cli/config.json` 或插件目录写入 hook 配置，属项目外写入，需用户授权或用户自行配置后验证；验收项「插件分发实际触发」随之挂起）：复用 M5.1 的 `hookSpecificOutput` 信封做薄变体（输入键容差 + `${ZCODE_PROJECT_DIR}`/`${CLAUDE_PROJECT_DIR}` 项目目录回退链）；实现期先探针实测两处 zcode 文档未写死的事实再定型——stdin 输入载荷键名、`PermissionRequest` 能否返回三值决策（能则改挂它，否则用已验证的 `PreToolUse`）；交付形态 = zcode 插件（`hooks/hooks.json`，自动启用 hook runner），执行入口用 `type:"process"` 参数向量（Windows 免 shell 转义）。
+  - **M5.3 zcode adapter**✅ 实现完成（2026-09-06，本提交；**实机 hook 触发验证挂部署时探针**——实测需向 `~/.zcode/cli/config.json` 或插件目录写入 hook 配置，属项目外写入，需用户授权或用户自行配置后验证；验收项「插件分发实际触发」随之挂起）：复用 M5.1 的 `hookSpecificOutput` 信封做薄变体（输入键容差 + `${ZCODE_PROJECT_DIR}`/`${CLAUDE_PROJECT_DIR}` 项目目录回退链）；实现期先探针实测两处 zcode 文档未写死的事实再定型——stdin 输入载荷键名、`PermissionRequest` 能否返回三值决策（能则改挂它，否则用已验证的 `PreToolUse`）；**顺带观察项（零成本，同一份探针载荷多看一眼）**：`PermissionRequest` 载荷是否回传用户最终选择——结果回填 P6 后「权限学习」候选的前置探针，省得专项时重搭探针环境；交付形态 = zcode 插件（`hooks/hooks.json`，自动启用 hook runner），执行入口用 `type:"process"` 参数向量（Windows 免 shell 转义）。
     - 验收：三档行为与 Crush 等价；M5.2 共用用例集纳入第三 adapter 全绿；插件分发在 zcode 侧实际触发 hook 生效（含配置默认禁用的启用路径验证）。
 - [x] **P6 收尾**（M6.1/M6.2 ✅ 2026-09-06；M6.3 待用户确认节奏）：
   - **M6.1 Lua 引擎**✅（2026-09-06，b5c3ec8 接口层定型 / 3d9b7bc Lua 引擎与引擎感知装配 / 34ebf13 script_allow Lua 侧）：mlua 0.12（lua54+vendored）实现同一 RuleEngine trait；**同批挂账兑现**——ctx 彻底封装（ScriptCtx 自定义类型，字段只读 getter 保持 `ctx.bin` 属性语法，模板零改动）与决策值枚举化（ScriptDecision 四变体构造封闭，裸字符串返回边界统一解析双保险）。
