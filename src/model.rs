@@ -21,6 +21,16 @@ impl Decision {
             Decision::Deny => "deny",
         }
     }
+
+    /// 词汇单源解析（协议 `decision` 字段 / 配置 `decision` 词条共用）。
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "allow" => Some(Decision::Allow),
+            "confirm" => Some(Decision::Confirm),
+            "deny" => Some(Decision::Deny),
+            _ => None,
+        }
+    }
 }
 
 impl fmt::Display for Decision {

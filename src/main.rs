@@ -85,11 +85,12 @@ fn main() -> ExitCode {
         }
         "hook" => run_hook(agent, config_arg.as_deref(), &engine),
         "benchmark" => run_benchmark(agent, config_arg.as_deref(), &engine),
-        _ => run_check(agent, config_arg.as_deref(), &engine),
+        _ => run_check(agent, config_arg.as_deref()),
     }
 }
 
-/// 引擎标签（`--engine` 缺省 rhai）；进入端点名 hash 与脚本装配。
+/// 引擎标签（`--engine` 缺省 rhai）；进入端点名 hash（脚本装配与引擎
+/// 标签无关——快照按项目装配）。
 fn engine_label(engine_arg: Option<&str>) -> String {
     engine_arg.unwrap_or("rhai").to_string()
 }
@@ -105,13 +106,13 @@ fn read_project(agent: Agent) -> Option<(String, PathBuf)> {
 }
 
 /// check 模式：单发全量管线（in-process）。
-fn run_check(agent: Agent, config_arg: Option<&str>, engine: &str) -> ExitCode {
+fn run_check(agent: Agent, config_arg: Option<&str>) -> ExitCode {
     let Some((command, project)) = read_project(agent) else {
         // 读不到输入：保守 confirm（exit 0 无输出，走正常权限提示）。
         return ExitCode::from(0);
     };
-    match check_verdict(&project, config_arg, engine, &command, agent, "check") {
-        Ok(verdict) => ExitCode::from(channel::emit(&verdict, agent) as u8),
+    match check_verdict(&project, config_arg, &command, agent, "check") {
+        Ok(verdict) => ExitCode::from(channel::emit(&verdict, agent)),
         Err(code) => code,
     }
 }
@@ -122,12 +123,12 @@ fn run_hook(agent: Agent, config_arg: Option<&str>, engine: &str) -> ExitCode {
         return ExitCode::from(0);
     };
     if let Some(v) = service::hook_decide(&project, engine, config_arg, agent.slug(), &command) {
-        return ExitCode::from(channel::emit(&v, agent) as u8);
+        return ExitCode::from(channel::emit(&v, agent));
     }
     // 降级路径：本进程 check（仍然全量管线，绝不无裁决放行）。日志 mode
     // 记 "hook"：审计可区分「serve 降级」与「独立 check」。
-    match check_verdict(&project, config_arg, engine, &command, agent, "hook") {
-        Ok(verdict) => ExitCode::from(channel::emit(&verdict, agent) as u8),
+    match check_verdict(&project, config_arg, &command, agent, "hook") {
+        Ok(verdict) => ExitCode::from(channel::emit(&verdict, agent)),
         Err(code) => code,
     }
 }
@@ -138,7 +139,7 @@ fn run_benchmark(agent: Agent, config_arg: Option<&str>, engine: &str) -> ExitCo
     let Some((command, project)) = read_project(agent) else {
         return ExitCode::from(0);
     };
-    let local = check_verdict(&project, config_arg, engine, &command, agent, "benchmark").ok();
+    let local = check_verdict(&project, config_arg, &command, agent, "benchmark").ok();
     let via_serve = service::hook_decide(&project, engine, config_arg, agent.slug(), &command);
     let local_d = local.as_ref().map(|v| v.decision.to_string());
     let serve_d = via_serve.as_ref().map(|v| v.decision.to_string());
@@ -168,12 +169,11 @@ fn json_str(s: &str) -> String {
 fn check_verdict(
     project: &std::path::Path,
     config_arg: Option<&str>,
-    engine: &str,
     command: &str,
     agent: Agent,
     mode: &str,
 ) -> Result<Verdict, ExitCode> {
-    match RuleSet::load(project, engine, config_arg) {
+    match RuleSet::load(project, config_arg) {
         Ok(rs) => {
             let (verdict, trace) = rs.decide_trace(command, project);
             service::log_verdict(
@@ -200,5 +200,5 @@ fn check_verdict(
 /// fail-safe 兜底：confirm（两 agent 契约下均为静默 exit 0，走正常权限提示）。
 fn fail_safe_confirm(agent: Agent) -> ExitCode {
     let verdict = Verdict::confirm("configuration error; fail-safe");
-    ExitCode::from(channel::emit(&verdict, agent) as u8)
+    ExitCode::from(channel::emit(&verdict, agent))
 }

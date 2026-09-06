@@ -10,6 +10,7 @@
 //! 告警 + fail-safe confirm；绝不带着坏层静默用其余层裁决。
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use crate::config::{LoadError, RulesFile};
 use crate::knowledge::KnowledgeBase;
@@ -22,8 +23,8 @@ pub struct FoundLayers {
     pub user: Option<RulesFile>,
     pub project: Option<RulesFile>,
     /// 知识库 main：项目层 `.crush-tether/knowledge.toml`（v1 单文件，随默认
-    /// 配置生成落盘）。
-    pub knowledge: Option<KnowledgeBase>,
+    /// 配置生成落盘）。`Arc` 共享：RuleSet 装配的多处消费免深克隆。
+    pub knowledge: Option<Arc<KnowledgeBase>>,
 }
 
 impl FoundLayers {
@@ -44,7 +45,7 @@ pub fn discover_layers(
         None => None,
     };
     let knowledge = match project_root {
-        Some(p) => load_knowledge(&p.join(".crush-tether").join("knowledge.toml")),
+        Some(p) => load_knowledge(&p.join(".crush-tether").join("knowledge.toml")).map(Arc::new),
         None => None,
     };
     let project = match project_root {

@@ -361,15 +361,8 @@ impl<'de> Deserialize<'de> for Decision {
             }
 
             fn visit_str<E: de::Error>(self, s: &str) -> Result<Self::Value, E> {
-                match s {
-                    "allow" => Ok(Decision::Allow),
-                    "confirm" => Ok(Decision::Confirm),
-                    "deny" => Ok(Decision::Deny),
-                    other => Err(de::Error::unknown_variant(
-                        other,
-                        &["allow", "confirm", "deny"],
-                    )),
-                }
+                Decision::parse(s)
+                    .ok_or_else(|| de::Error::unknown_variant(s, &["allow", "confirm", "deny"]))
             }
         }
 

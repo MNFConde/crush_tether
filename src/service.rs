@@ -26,6 +26,7 @@
 //!   失效降级逐请求 stat（mtime + size + 内容 hash 三重校验），正确性不损。
 
 use std::collections::hash_map::DefaultHasher;
+use std::fmt;
 use std::hash::{Hash, Hasher};
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
@@ -42,9 +43,23 @@ use crate::model::{Decision, Verdict};
 /// DefaultHasher::new() 定种（SipHash 固定 key），跨进程稳定；`--config`
 /// 显式覆盖参与 hash（裁决域按配置隔离），None 时不进 hash。
 pub fn endpoint_name(project: &Path, engine: &str, config: Option<&str>) -> String {
-    let canon = project
-        .canonicalize()
-        .unwrap_or_else(|_| project.to_path_buf());
+    // canonicalize 失败（挂载抖动等）回退原始路径并告警：回退路径与赢家
+    // 成功 canonicalize 时会 hash 出不同端点名（单实例被静默打破），至少
+    // 在 stderr 留痕。warn-once：冷启动会多次调本函数，不刷屏。
+    static CANON_WARN: std::sync::Once = std::sync::Once::new();
+    let canon = match project.canonicalize() {
+        Ok(p) => p,
+        Err(e) => {
+            CANON_WARN.call_once(|| {
+                eprintln!(
+                    "crush-tether: canonicalize {} failed ({e}); endpoint name may \
+                     diverge from the running serve",
+                    project.display()
+                )
+            });
+            project.to_path_buf()
+        }
+    };
     let mut h = DefaultHasher::new();
     canon.to_string_lossy().hash(&mut h);
     engine.hash(&mut h);
@@ -86,15 +101,49 @@ pub struct VerdictDto {
 }
 
 fn parse_decision(s: &str) -> Option<Decision> {
-    match s {
-        "allow" => Some(Decision::Allow),
-        "confirm" => Some(Decision::Confirm),
-        "deny" => Some(Decision::Deny),
-        _ => None,
-    }
+    Decision::parse(s)
 }
 
 // ── RuleSet：可复用的「查表 + 脚本 + 定稿点」装配 ─────────────────────────
+
+/// RuleSet 装配失败类别（调用方统一 fail-safe confirm；Display 即 stderr
+/// 告警文案）。结构化以便调用方区分失败环节（配置 vs 脚本）。
+#[derive(Debug)]
+pub enum RuleSetError {
+    /// 显式 `--config` 文件加载失败。
+    ExplicitConfig { path: PathBuf, source: String },
+    /// 三层发现路径加载失败。
+    Config(String),
+    /// 脚本层 rules.rhai 编译 / script_allow 对账拒载。
+    Script(String),
+}
+
+impl fmt::Display for RuleSetError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            RuleSetError::ExplicitConfig { path, source } => write!(
+                f,
+                "crush-tether: explicit config {} failed to load: {source}; fail-safe \
+                 confirm",
+                path.display()
+            ),
+            RuleSetError::Config(e) => {
+                write!(
+                    f,
+                    "crush-tether: config failed to load: {e}; fail-safe confirm"
+                )
+            }
+            RuleSetError::Script(e) => {
+                write!(
+                    f,
+                    "crush-tether: rules.rhai failed to load: {e}; fail-safe confirm"
+                )
+            }
+        }
+    }
+}
+
+impl std::error::Error for RuleSetError {}
 
 /// 装配完成的规则快照（M4.2 起被 `Arc` 包裹原子换指针）。
 pub struct RuleSet {
@@ -120,13 +169,9 @@ pub struct DecisionTrace {
 
 impl RuleSet {
     /// 加载配置（三层发现 + 引导生成 + 显式覆盖）与脚本层；任一损坏返回
-    /// `Err(完整告警消息)`——调用方按 fail-safe confirm 处理（D-03：损坏 ≠
+    /// `Err(RuleSetError)`——调用方按 fail-safe confirm 处理（D-03：损坏 ≠
     /// 缺失，绝不静默回落）。
-    pub fn load(
-        project: &Path,
-        _engine_label: &str,
-        config_arg: Option<&str>,
-    ) -> Result<RuleSet, String> {
+    pub fn load(project: &Path, config_arg: Option<&str>) -> Result<RuleSet, RuleSetError> {
         let home = crate::config::home_dir();
         let found = crate::config::discover_layers(Some(project), home.as_deref());
         // 三层皆缺 → 引导生成默认包（生成动作是管线引导步骤，不经规则链，
@@ -153,7 +198,9 @@ impl RuleSet {
             }
             other => other,
         };
-        let kb = found.as_ref().ok().and_then(|l| l.knowledge.as_ref());
+        // 知识库 Arc 共享（发现层一次性包装；脚本链/lint/查表免深克隆）。
+        let kb_arc = found.as_ref().ok().and_then(|l| l.knowledge.clone());
+        let kb = kb_arc.as_deref();
         let config_path = crate::config::explicit_path(config_arg);
         let lookup = if let Some(path) = &config_path {
             match crate::config::load_file(path) {
@@ -177,11 +224,10 @@ impl RuleSet {
                     )
                 }
                 Err(e) => {
-                    return Err(format!(
-                        "crush-tether: explicit config {} failed to load: {e}; fail-safe \
-                         confirm",
-                        path.display()
-                    ));
+                    return Err(RuleSetError::ExplicitConfig {
+                        path: path.clone(),
+                        source: e.to_string(),
+                    });
                 }
             }
         } else {
@@ -190,11 +236,7 @@ impl RuleSet {
                     crate::config::merge(crate::config::Layers::from_found(l)),
                     kb,
                 ),
-                Err(e) => {
-                    return Err(format!(
-                        "crush-tether: config failed to load: {e}; fail-safe confirm"
-                    ));
-                }
+                Err(e) => return Err(RuleSetError::Config(e.to_string())),
             }
         };
 
@@ -204,15 +246,11 @@ impl RuleSet {
         let script = match crate::script::load_script_chain(
             project,
             home.as_deref(),
-            kb.map(|k| Arc::new(k.clone())),
+            kb_arc.clone(),
             lookup.script_allow().clone(),
         ) {
             Ok(s) => s,
-            Err(e) => {
-                return Err(format!(
-                    "crush-tether: rules.rhai failed to load: {e}; fail-safe confirm"
-                ));
-            }
+            Err(e) => return Err(RuleSetError::Script(e.to_string())),
         };
         // lint（M2.5 双层）：项目层 rules.toml + 全链脚本提取集并集；只告警
         // 不拒绝，告警进 serve 的 `type:"load"` 事件行。
@@ -514,8 +552,8 @@ fn watch_dirs(project: &Path) -> Vec<PathBuf> {
 /// 整段重编译 + 整体替换；失败保留旧快照 + stderr 告警，绝不半更新。
 /// 成功后补写 `type:"load"` 事件行（D-07：冷热路径都留痕）；失败不留痕
 /// （快照未换，留痕会误报新配置已生效）。
-fn reload(ruleset: &mut Option<RuleSet>, project: &Path, engine: &str, config: Option<&str>) {
-    match RuleSet::load(project, engine, config) {
+fn reload(ruleset: &mut Option<RuleSet>, project: &Path, config: Option<&str>) {
+    match RuleSet::load(project, config) {
         Ok(rs) => {
             *ruleset = Some(rs);
             log_load_event(project, ruleset.as_ref());
@@ -610,7 +648,7 @@ pub fn serve_main(
 
     // 规则快照：加载失败保持存活、逐请求 fail-safe confirm（绝不放行）。
     // 冷启动 load 事件行留痕（ADR-07）。
-    let mut ruleset: Option<RuleSet> = match RuleSet::load(&project, &engine, config.as_deref()) {
+    let mut ruleset: Option<RuleSet> = match RuleSet::load(&project, config.as_deref()) {
         Ok(rs) => Some(rs),
         Err(msg) => {
             eprintln!("{msg}");
@@ -642,6 +680,10 @@ pub fn serve_main(
         });
     }
 
+    // 监听失效降级的指纹基线（serve 实例局部：同进程多个 serve 实例互不
+    // 污染；0 = 尚无基线，首个请求只记录不触发重载）。
+    let mut last_fp: u64 = 0;
+
     // v1 串行 accept：accept → 读 → 判 → 写。
     loop {
         use interprocess::local_socket::traits::Listener as _;
@@ -655,17 +697,15 @@ pub fn serve_main(
                     dirty = true;
                 }
                 if dirty {
-                    reload(&mut ruleset, &project, &engine, config.as_deref());
+                    reload(&mut ruleset, &project, config.as_deref());
                 }
                 // 监听失效降级：逐请求 stat 三重校验，指纹变化才整段重载。
                 if watcher_alive.load(Ordering::Relaxed) == 0 {
-                    static LAST_FP: AtomicU64 = AtomicU64::new(0);
                     let fp = config_fingerprint(&project);
-                    if LAST_FP.load(Ordering::Relaxed) != 0 && LAST_FP.load(Ordering::Relaxed) != fp
-                    {
-                        reload(&mut ruleset, &project, &engine, config.as_deref());
+                    if last_fp != 0 && last_fp != fp {
+                        reload(&mut ruleset, &project, config.as_deref());
                     }
-                    LAST_FP.store(fp, Ordering::Relaxed);
+                    last_fp = fp;
                 }
                 handle_connection(&stream, ruleset.as_ref(), &project, &last_activity);
             }
@@ -790,15 +830,10 @@ fn read_line_deadline(
 }
 
 /// 单次请求应答（一连接一请求）。
-fn ask(
-    project: &Path,
-    engine: &str,
-    config: Option<&str>,
-    agent: &str,
-    command: &str,
-) -> Option<Verdict> {
-    let name = endpoint_name(project, engine, config);
-    let stream = connect(&name).ok()?;
+/// 单次请求应答（一连接一请求）。`name` 为端点名（`hook_decide` 算一次
+/// 下传——重试环里不做重复 canonicalize/hash）。
+fn ask(name: &str, agent: &str, command: &str) -> Option<Verdict> {
+    let stream = connect(name).ok()?;
     let req = RequestLine {
         id: 1,
         op: "check".into(),
@@ -900,8 +935,10 @@ pub fn hook_decide(
     if std::env::var_os("CRUSH_TETHER_DISABLE_SERVE").is_some() {
         return None;
     }
+    // 端点名算一次下传：重试环内不做重复 canonicalize/hash。
+    let name = endpoint_name(project, engine, config);
     // 直连常驻 serve（µs 级）。
-    if let Some(v) = ask(project, engine, config, agent, command) {
+    if let Some(v) = ask(&name, agent, command) {
         return Some(v);
     }
     // 冷启动惊群：spawn serve（独占 bind 裁定唯一性，输者静默退出），有界
@@ -910,7 +947,7 @@ pub fn hook_decide(
     let t0 = Instant::now();
     while t0.elapsed() < Duration::from_millis(200) {
         std::thread::sleep(Duration::from_millis(20));
-        if let Some(v) = ask(project, engine, config, agent, command) {
+        if let Some(v) = ask(&name, agent, command) {
             return Some(v);
         }
     }

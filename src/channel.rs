@@ -110,7 +110,7 @@ pub fn read_hook_input(agent: Agent) -> Option<HookInput> {
     })
 }
 
-pub fn emit(verdict: &Verdict, agent: Agent) -> i32 {
+pub fn emit(verdict: &Verdict, agent: Agent) -> u8 {
     let hook_envelope = |decision: &str| {
         println!(
             "{{\"hookSpecificOutput\":{{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"{decision}\"}}}}"
