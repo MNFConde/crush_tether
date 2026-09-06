@@ -74,6 +74,10 @@ fn verdict_log_fields_match_design_example() {
 
 #[test]
 fn load_event_logged_on_serve_start_and_hot_reload() {
+    use std::time::{Duration, Instant};
+
+    use common::spawn_serve;
+
     let proj = TempDir::new("m43-load");
     let cfg = proj.path().join(".crush-tether");
     std::fs::create_dir_all(&cfg).expect("mkdir");
@@ -83,34 +87,41 @@ fn load_event_logged_on_serve_start_and_hot_reload() {
     )
     .expect("write rules");
     std::fs::write(cfg.join("knowledge.toml"), "version = 1\n").expect("write kb");
-    // serve 冷启动（hook 触发 spawn）→ load 事件行。
-    let r = run_mode_env(
-        proj.path(),
-        "hook",
-        &[],
-        "ls",
-        &[("CRUSH_TETHER_IDLE_EXIT", "2")],
-    );
+
+    // 驻留 serve（60s idle），在同一实例生命周期内验证冷/热两条 load 事件行。
+    let _serve = spawn_serve(proj.path(), "60");
+
+    // 冷启动：serve 首次加载留 load 事件行（hook 首请求等就绪 + 出裁决）。
+    let r = run_mode_env(proj.path(), "hook", &[], "ls", &[]);
     assert_eq!(r.code, 0);
-    let lines = log_of(proj.path());
-    let load = lines
-        .iter()
+    let load = log_of(proj.path())
+        .into_iter()
         .find(|v| v["type"] == "load")
-        .expect("load event");
+        .expect("冷启动 load 事件");
     assert!(load.get("lint").is_some(), "{load}");
     assert_eq!(load["kb"], serde_json::json!(["main"]));
 
-    // 热重载 → 下一请求触发主线程消费重载信号：第二条 load 事件行 + 新规则生效。
+    // 热重载：改规则 → deny；重载在 serve 主线程请求间隙消费信号，load
+    // 事件行先于该请求应答落盘（冷热路径都留痕，D-07）。
     std::fs::write(
         cfg.join("rules.toml"),
         "version = 1\ndefault = \"confirm\"\n[local]\ndeny = [\"ls\"]\n",
     )
     .expect("write new rules");
-    std::thread::sleep(std::time::Duration::from_millis(1500));
-    let r = run_mode_env(proj.path(), "hook", &[], "ls", &[]);
-    assert_eq!(r.code, 2, "重载后新规则生效 → deny");
-    let lines = log_of(proj.path());
-    let loads = lines.iter().filter(|v| v["type"] == "load").count();
+    // watcher debounce（600ms）窗口内的请求仍用旧快照：轮询到新规则生效为止。
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let r = run_mode_env(proj.path(), "hook", &[], "ls", &[]);
+        if r.code == 2 {
+            break;
+        }
+        assert!(Instant::now() < deadline, "重载后新规则应生效 → deny");
+        std::thread::sleep(Duration::from_millis(200));
+    }
+    let loads = log_of(proj.path())
+        .iter()
+        .filter(|v| v["type"] == "load")
+        .count();
     assert!(loads >= 2, "热重载留第二条 load 事件：{loads}");
 }
 

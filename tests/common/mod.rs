@@ -99,3 +99,29 @@ pub fn run_mode_env(
 pub fn run_check(project: &Path, command: &str) -> CheckRun {
     run_check_with(project, &[], command)
 }
+
+/// 保证 serve 子进程在所有路径上被回收（clippy zombie-process）。
+pub struct KillOnDrop(pub std::process::Child);
+
+impl Drop for KillOnDrop {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
+/// 直接 spawn 一个 serve 子进程（测试需要驻留实例时用；hook 触发的
+/// connect-or-spawn 生命周期不可控，测热重载/惊群须自管进程）。
+pub fn spawn_serve(project: &Path, idle_secs: &str) -> KillOnDrop {
+    KillOnDrop(
+        Command::new(BIN)
+            .args(["serve", "--project"])
+            .arg(project)
+            .args(["--engine", "rhai", "--idle-exit", idle_secs])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("spawn serve"),
+    )
+}

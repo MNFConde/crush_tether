@@ -474,9 +474,14 @@ fn watch_dirs(project: &Path) -> Vec<PathBuf> {
 }
 
 /// 整段重编译 + 整体替换；失败保留旧快照 + stderr 告警，绝不半更新。
+/// 成功后补写 `type:"load"` 事件行（D-07：冷热路径都留痕）；失败不留痕
+/// （快照未换，留痕会误报新配置已生效）。
 fn reload(ruleset: &mut Option<RuleSet>, project: &Path, engine: &str) {
     match RuleSet::load(project, engine, None) {
-        Ok(rs) => *ruleset = Some(rs),
+        Ok(rs) => {
+            *ruleset = Some(rs);
+            log_load_event(project, ruleset.as_ref());
+        }
         Err(msg) => {
             eprintln!("crush-tether: hot reload failed; keeping previous snapshot: {msg}");
         }

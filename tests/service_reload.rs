@@ -4,33 +4,9 @@
 mod common;
 
 use std::path::Path;
-use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
-use common::{BIN, TempDir, run_mode_env};
-
-struct KillOnDrop(std::process::Child);
-
-impl Drop for KillOnDrop {
-    fn drop(&mut self) {
-        let _ = self.0.kill();
-        let _ = self.0.wait();
-    }
-}
-
-fn spawn_serve(project: &Path, idle_secs: &str) -> KillOnDrop {
-    KillOnDrop(
-        Command::new(BIN)
-            .args(["serve", "--project"])
-            .arg(project)
-            .args(["--engine", "rhai", "--idle-exit", idle_secs])
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
-            .expect("spawn serve"),
-    )
-}
+use common::{TempDir, run_mode_env, spawn_serve};
 
 fn hook(project: &Path, command: &str) -> (String, i32) {
     let r = run_mode_env(project, "hook", &[], command, &[]);

@@ -10,35 +10,11 @@
 
 mod common;
 
-use std::path::Path;
-use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
-use common::{BIN, TempDir, run_mode_env};
+use common::{KillOnDrop, TempDir, run_mode_env, spawn_serve};
 
 const CHECK_INTERVAL: Duration = Duration::from_millis(100);
-
-fn spawn_serve(project: &Path, idle_secs: &str) -> std::process::Child {
-    Command::new(BIN)
-        .args(["serve", "--project"])
-        .arg(project)
-        .args(["--engine", "rhai", "--idle-exit", idle_secs])
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .expect("spawn serve")
-}
-
-/// 保证子进程在所有路径上被回收（clippy zombie-process）。
-struct KillOnDrop(std::process::Child);
-
-impl Drop for KillOnDrop {
-    fn drop(&mut self) {
-        let _ = self.0.kill();
-        let _ = self.0.wait();
-    }
-}
 
 fn try_wait_all(children: &mut [&mut KillOnDrop]) -> bool {
     children
@@ -50,9 +26,9 @@ fn try_wait_all(children: &mut [&mut KillOnDrop]) -> bool {
 fn thundering_herd_converges_to_single_instance() {
     let proj = TempDir::new("m41-herd");
     // c1/c2/c3 之一是赢家；c2/c3 已确认退出。c1 持有候选赢家，Drop 时回收。
-    let _c1 = KillOnDrop(spawn_serve(proj.path(), "2"));
-    let mut c2 = KillOnDrop(spawn_serve(proj.path(), "2"));
-    let mut c3 = KillOnDrop(spawn_serve(proj.path(), "2"));
+    let _c1 = spawn_serve(proj.path(), "2");
+    let mut c2 = spawn_serve(proj.path(), "2");
+    let mut c3 = spawn_serve(proj.path(), "2");
 
     // 输者（除赢家外的两个）应在有界时间内静默退出。
     let deadline = Instant::now() + Duration::from_secs(10);
@@ -80,7 +56,7 @@ fn thundering_herd_converges_to_single_instance() {
 #[test]
 fn serve_exits_after_idle_grace() {
     let proj = TempDir::new("m41-idle");
-    let mut c = KillOnDrop(spawn_serve(proj.path(), "1"));
+    let mut c = spawn_serve(proj.path(), "1");
     let deadline = Instant::now() + Duration::from_secs(8);
     let mut exited = None;
     while Instant::now() < deadline {
