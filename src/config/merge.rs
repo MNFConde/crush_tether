@@ -18,6 +18,29 @@ use crate::model::Decision;
 /// default 恒链尾）。
 pub const DEFAULT_PRECEDENCE: [Decision; 3] = [Decision::Deny, Decision::Confirm, Decision::Allow];
 
+/// 词条 → 生效配置层溯源（M4.3 日志 `source.layer` 数据源）。
+/// 层标签 ∈ global/user/project（explicit 经 `LayerLabels` 替换）。
+pub type Provenance = BTreeMap<String, &'static str>;
+
+/// 层标签（效力顺序 global → user → project 固定，标签可替换：
+/// `--config` 显式覆盖把 project 层标为 `explicit`）。
+#[derive(Debug, Clone, Copy)]
+pub struct LayerLabels {
+    pub global: &'static str,
+    pub user: &'static str,
+    pub project: &'static str,
+}
+
+impl Default for LayerLabels {
+    fn default() -> Self {
+        LayerLabels {
+            global: "global",
+            user: "user",
+            project: "project",
+        }
+    }
+}
+
 /// 三层输入（低 → 高：global → user → project）；`None` = 该层缺。
 pub struct Layers<'a> {
     pub global: Option<&'a RulesFile>,
@@ -42,6 +65,8 @@ impl<'a> Layers<'a> {
 pub struct MergedRules {
     /// 顶层兜底档（三层皆未定义 → None，查表时落 confirm fail-safe）。
     pub default: Option<Decision>,
+    /// 兜底档生效层。
+    pub default_layer: Option<&'static str>,
     pub precedence: Vec<Decision>,
     /// script_allow 声明集（M4.0）。
     pub script_allow: ScriptAllowDecls,
@@ -57,7 +82,18 @@ pub struct MergedScope {
     pub deny: Vec<String>,
     /// 本作用域 `script_allow` 顶级列表的合并结果（D-02 链）。
     pub script_allow: Vec<String>,
+    /// 词条 → 生效层（source.layer 数据源）。
+    pub prov: ScopeProvenance,
     pub commands: BTreeMap<String, MergedCommand>,
+}
+
+/// 作用域头部桶的溯源映射。
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ScopeProvenance {
+    pub allow: Provenance,
+    pub confirm: Provenance,
+    pub deny: Provenance,
+    pub script_allow: Provenance,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -69,6 +105,8 @@ pub struct MergedCommand {
     pub default: Option<Decision>,
     /// 节内 `script_allow` 键（高层定义即覆盖，`false` = 显式取消）。
     pub script_allow: Option<bool>,
+    /// 兜底档生效层。
+    pub default_layer: Option<&'static str>,
 }
 
 /// 命令节一个桶的两个维度词条集。
@@ -76,22 +114,38 @@ pub struct MergedCommand {
 pub struct Dims {
     pub sub: Vec<String>,
     pub flag: Vec<String>,
+    /// 词条 → 生效层。
+    pub sub_prov: Provenance,
+    pub flag_prov: Provenance,
 }
 
 /// 合并三层。全 None 输入得到「全空 + 默认 precedence」（三层皆缺的默认
 /// 配置生成判定在发现层做，不在合并层）。
 pub fn merge(layers: Layers<'_>) -> MergedRules {
+    merge_with_labels(layers, LayerLabels::default())
+}
+
+/// 同 [`merge`]，但层标签可替换（`--config` 显式覆盖 → project 层标为
+/// `explicit`）。
+pub fn merge_with_labels(layers: Layers<'_>, labels: LayerLabels) -> MergedRules {
     let low_to_high = [layers.global, layers.user, layers.project];
+    let layer_names = [labels.global, labels.user, labels.project];
     // 标量：高层定义即覆盖 → 从高往低找第一个定义。
     let default = low_to_high.iter().rev().flatten().find_map(|f| f.default);
+    let default_layer = low_to_high
+        .iter()
+        .zip(layer_names.iter())
+        .rev()
+        .find(|(f, _)| f.is_some())
+        .and_then(|(f, l)| f.as_ref().map(|_| *l));
     let precedence = low_to_high
         .iter()
         .rev()
         .flatten()
         .find_map(|f| f.precedence.clone())
         .unwrap_or_else(|| DEFAULT_PRECEDENCE.to_vec());
-    let local = merge_scope(&low_to_high, |f| &f.local);
-    let global = merge_scope(&low_to_high, |f| &f.global);
+    let local = merge_scope(&low_to_high, &layer_names, |f| &f.local);
+    let global = merge_scope(&low_to_high, &layer_names, |f| &f.global);
     // script_allow 声明集：两形态汇入同一集合（顶级列表 ∪ 节键 true），
     // 附声明所在表元数据；两表皆现 → global 胜（M2.3「更强的承诺」同规）。
     let mut script_allow = ScriptAllowDecls::default();
@@ -113,6 +167,7 @@ pub fn merge(layers: Layers<'_>) -> MergedRules {
     }
     MergedRules {
         default,
+        default_layer,
         precedence,
         script_allow,
         local,
@@ -184,16 +239,28 @@ impl ScriptAllowDecls {
 }
 
 /// 沿低 → 高解一条列表链：`Set` 覆盖累计；`Delta` 基于累计增删（先 remove
-/// 后 add）；链上无任何定义 → 空集。
-fn resolve_chain<'a>(chain: impl Iterator<Item = Option<&'a ListField>>) -> Vec<String> {
+/// 后 add）；链上无任何定义 → 空集。返回词条集 + 每词条的生效层。
+fn resolve_chain<'a>(
+    chain: impl Iterator<Item = (Option<&'a ListField>, &'static str)>,
+) -> (Vec<String>, Provenance) {
     let mut acc: Option<Vec<String>> = None;
-    for field in chain.flatten() {
+    let mut prov = Provenance::new();
+    for (field, layer) in chain.filter_map(|(f, l)| f.map(|f| (f, l))) {
         match field {
-            ListField::Set(v) => acc = Some(v.clone()),
+            ListField::Set(v) => {
+                acc = Some(v.clone());
+                prov.clear();
+                for t in v {
+                    prov.insert(t.clone(), layer);
+                }
+            }
             ListField::Delta { add, remove } => {
                 let mut out = acc.take().unwrap_or_default();
                 if let Some(r) = remove {
                     out.retain(|t| !r.contains(t));
+                    for t in r {
+                        prov.remove(t);
+                    }
                 }
                 if let Some(a) = add {
                     for t in a {
@@ -201,60 +268,109 @@ fn resolve_chain<'a>(chain: impl Iterator<Item = Option<&'a ListField>>) -> Vec<
                             out.push(t.clone());
                         }
                     }
+                    for t in a {
+                        prov.insert(t.clone(), layer);
+                    }
                 }
                 acc = Some(out);
             }
         }
     }
-    acc.unwrap_or_default()
+    (acc.unwrap_or_default(), prov)
 }
 
 fn merge_scope(
     layers: &[Option<&RulesFile>; 3],
+    layer_names: &[&'static str; 3],
     get: impl Fn(&RulesFile) -> &ScopeTable,
 ) -> MergedScope {
-    let defined: Vec<&ScopeTable> = layers.iter().flatten().map(|f| get(f)).collect();
-    let head = |pick: fn(&ScopeBuckets) -> Option<&ListField>| {
-        resolve_chain(defined.iter().map(|t| pick(&t.buckets)))
+    let defined: Vec<(&ScopeTable, &'static str)> = layers
+        .iter()
+        .zip(layer_names.iter())
+        .filter_map(|(f, l)| f.map(|f| (get(f), *l)))
+        .collect();
+    let head = |pick: fn(&ScopeBuckets) -> Option<&ListField>| -> (Vec<String>, Provenance) {
+        resolve_chain(defined.iter().map(|(t, l)| (pick(&t.buckets), *l)))
     };
     // 命令节并集（低 → 高收集；同节名字段级合并）。
     let mut commands = BTreeMap::new();
-    let mut names: Vec<&String> = defined.iter().flat_map(|t| t.commands.keys()).collect();
+    let mut names: Vec<&String> = defined
+        .iter()
+        .flat_map(|(t, _)| t.commands.keys())
+        .collect();
     names.sort();
     names.dedup();
     for name in names {
-        let secs: Vec<&CommandSection> = defined
+        let secs: Vec<(&CommandSection, &'static str)> = defined
             .iter()
-            .filter_map(|t| t.commands.get(name))
+            .filter_map(|(t, l)| t.commands.get(name).map(|s| (s, *l)))
             .collect();
         commands.insert(name.clone(), merge_command(&secs));
     }
+    let (script_allow, script_allow_prov) =
+        resolve_chain(defined.iter().map(|(t, l)| (t.script_allow.as_ref(), *l)));
+    let (allow, allow_prov) = head(|b| b.allow.as_ref());
+    let (confirm, confirm_prov) = head(|b| b.confirm.as_ref());
+    let (deny, deny_prov) = head(|b| b.deny.as_ref());
     MergedScope {
-        allow: head(|b| b.allow.as_ref()),
-        confirm: head(|b| b.confirm.as_ref()),
-        deny: head(|b| b.deny.as_ref()),
-        // script_allow 顶级列表不在 ScopeBuckets（与三桶不同命名空间）。
-        script_allow: resolve_chain(defined.iter().map(|t| t.script_allow.as_ref())),
+        allow,
+        confirm,
+        deny,
+        script_allow,
+        prov: ScopeProvenance {
+            allow: allow_prov,
+            confirm: confirm_prov,
+            deny: deny_prov,
+            script_allow: script_allow_prov,
+        },
         commands,
     }
 }
 
-fn merge_dims(secs: &[&CommandSection], pick: fn(&CommandSection) -> Option<&BucketSpec>) -> Dims {
-    let specs: Vec<_> = secs.iter().filter_map(|s| pick(s)).collect();
+fn merge_dims(
+    secs: &[(&CommandSection, &'static str)],
+    pick: fn(&CommandSection) -> Option<&BucketSpec>,
+) -> Dims {
+    let specs: Vec<_> = secs.iter().filter_map(|(s, _)| pick(s)).collect();
+    let layers: Vec<&'static str> = secs
+        .iter()
+        .filter_map(|(s, _)| pick(s).map(|_| ()))
+        .zip(secs.iter().map(|(_, l)| *l))
+        .map(|(_, l)| l)
+        .collect();
+    let (sub, sub_prov) = resolve_chain(
+        specs
+            .iter()
+            .map(|b| b.sub.as_ref())
+            .zip(layers.iter().copied()),
+    );
+    let (flag, flag_prov) = resolve_chain(
+        specs
+            .iter()
+            .map(|b| b.flag.as_ref())
+            .zip(layers.iter().copied()),
+    );
     Dims {
-        sub: resolve_chain(specs.iter().map(|b| b.sub.as_ref())),
-        flag: resolve_chain(specs.iter().map(|b| b.flag.as_ref())),
+        sub,
+        flag,
+        sub_prov,
+        flag_prov,
     }
 }
 
-fn merge_command(secs: &[&CommandSection]) -> MergedCommand {
+fn merge_command(secs: &[(&CommandSection, &'static str)]) -> MergedCommand {
     MergedCommand {
         allow: merge_dims(secs, |s| s.allow.as_ref()),
         confirm: merge_dims(secs, |s| s.confirm.as_ref()),
         deny: merge_dims(secs, |s| s.deny.as_ref()),
         // secs 低 → 高；从高往低找第一个定义（高层覆盖）。
-        default: secs.iter().rev().find_map(|s| s.default),
-        script_allow: secs.iter().rev().find_map(|s| s.script_allow),
+        default: secs.iter().rev().find_map(|(s, _)| s.default),
+        script_allow: secs.iter().rev().find_map(|(s, _)| s.script_allow),
+        default_layer: secs
+            .iter()
+            .rev()
+            .find(|(s, _)| s.default.is_some())
+            .map(|(_, l)| *l),
     }
 }
 
@@ -446,6 +562,42 @@ mod tests {
         );
         assert_eq!(m.global.allow, ["docker", "kubectl"]);
         assert!(m.local.allow.is_empty());
+    }
+
+    #[test]
+    fn provenance_tracks_effective_layer() {
+        // 继承：global 词条保留 global 标签；项目层新增词条标 project。
+        let m = merged(
+            Some("version = 1\n[local]\nallow = [\"a\", \"b\"]"),
+            None,
+            Some("version = 1\n[local]\nallow = { add = [\"c\"] }"),
+        );
+        assert_eq!(m.local.prov.allow["a"], "global");
+        assert_eq!(m.local.prov.allow["b"], "global");
+        assert_eq!(m.local.prov.allow["c"], "project");
+        // 数组覆盖：词条全部改标 project。
+        let m = merged(
+            Some("version = 1\n[local]\nallow = [\"a\"]"),
+            None,
+            Some("version = 1\n[local]\nallow = [\"b\"]"),
+        );
+        assert_eq!(m.local.prov.allow.get("a"), None);
+        assert_eq!(m.local.prov.allow["b"], "project");
+        // 节内维度与兜底档同样带层。
+        let m = merged(
+            None,
+            Some("version = 1\n[local.git]\ndeny.sub = [\"push\"]"),
+            Some("version = 1\n[local.git]\nallow.sub = [\"status\"]"),
+        );
+        assert_eq!(m.local.commands["git"].deny.sub_prov["push"], "user");
+        assert_eq!(m.local.commands["git"].allow.sub_prov["status"], "project");
+        // 兜底档跨层继承取高层标签。
+        let m = merged(
+            Some("version = 1\ndefault = \"deny\""),
+            None,
+            Some("version = 1\n[local]\nallow = [\"x\"]"),
+        );
+        assert_eq!(m.default_layer, Some("global"));
     }
 
     #[test]

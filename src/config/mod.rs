@@ -17,7 +17,10 @@ use std::path::{Path, PathBuf};
 pub use discover::{
     FoundLayers, discover_layers, find_project_root, find_project_root_from, home_dir,
 };
-pub use merge::{DEFAULT_PRECEDENCE, Dims, Layers, MergedCommand, MergedRules, MergedScope, merge};
+pub use merge::{
+    DEFAULT_PRECEDENCE, Dims, LayerLabels, Layers, MergedCommand, MergedRules, MergedScope,
+    Provenance, ScopeProvenance, merge, merge_with_labels,
+};
 pub use schema::{
     BucketSpec, CommandSection, ConfigError, ListField, RulesFile, SUPPORTED_VERSION, ScopeBuckets,
     ScopeTable,

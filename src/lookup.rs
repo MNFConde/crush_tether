@@ -23,7 +23,7 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 use crate::cmd_parse::{SimpleCommand, path_escapes};
-use crate::config::{Dims, MergedCommand, MergedRules, MergedScope};
+use crate::config::{Dims, MergedCommand, MergedRules, MergedScope, Provenance, ScopeProvenance};
 use crate::knowledge::{CanonMaps, KnowledgeBase};
 use crate::model::{Decision, Verdict};
 
@@ -34,10 +34,23 @@ pub struct RuleLookup {
     canon: CanonMaps,
 }
 
-/// 单命令查表结果：裁决 + 归一链（kb 日志字段；空 = 归一未生效）。
+/// 单命令查表结果：裁决 + 归一链（kb 日志字段）+ 命中溯源（source 字段）。
 pub struct Classification {
     pub verdict: Verdict,
     pub kb_chain: Vec<String>,
+    pub source: Option<EntrySource>,
+}
+
+/// 裁决日志 `source` 字段数据源（M4.3）：表裁决命中的条目与生效层。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EntrySource {
+    /// 生效配置层：global/user/project/explicit/default。
+    pub layer: &'static str,
+    /// 命中条目：`<bin>.<bucket>.<dim>`（命令节）或 `<bucket>`（头部裸列表）
+    /// 或 `default`（兜底档）。
+    pub entry: String,
+    /// 命中词元（bin 名 / 子命令 / flag）。
+    pub token: String,
 }
 
 /// 归一后的命令名字面（仅供查表；原始参数语义不变）。
@@ -84,13 +97,15 @@ impl RuleLookup {
             return Classification {
                 verdict: Verdict::confirm("empty command"),
                 kb_chain: Vec::new(),
+                source: None,
             };
         };
         let norm = self.normalize(bin0, cmd);
-        let verdict = self.lookup(&norm, cmd, project);
+        let (verdict, source) = self.lookup(&norm, cmd, project);
         Classification {
             verdict,
             kb_chain: norm.chain,
+            source,
         }
     }
 
@@ -160,10 +175,30 @@ impl RuleLookup {
         out
     }
 
-    fn lookup(&self, norm: &Normalized, cmd: &SimpleCommand, project: &Path) -> Verdict {
+    fn lookup(
+        &self,
+        norm: &Normalized,
+        cmd: &SimpleCommand,
+        project: &Path,
+    ) -> (Verdict, Option<EntrySource>) {
         // [global].allow 整命令豁免（含逃逸豁免；两表皆现时 global 优先）。
         if self.rules.global.allow.contains(&norm.bin) {
-            return Verdict::allow();
+            let layer = self
+                .rules
+                .global
+                .prov
+                .allow
+                .get(&norm.bin)
+                .copied()
+                .unwrap_or("global");
+            return (
+                Verdict::allow(),
+                Some(EntrySource {
+                    layer,
+                    entry: "allow".into(),
+                    token: norm.bin.clone(),
+                }),
+            );
         }
 
         // 命令节优先（跨层 global 节优先于 local 节）；同层裸列表被节遮蔽。
@@ -180,17 +215,25 @@ impl RuleLookup {
 
         // 头部裸列表（整命令入桶语法糖）：global 表先于 local 表；同表内按
         // precedence 取第一个命中桶（global.allow 豁免已在上方处理）。
-        for scope in [&self.rules.global, &self.rules.local] {
+        for (scope, prov) in [
+            (&self.rules.global, &self.rules.global.prov),
+            (&self.rules.local, &self.rules.local.prov),
+        ] {
             for decision in self.precedence {
-                let bucket = match decision {
-                    Decision::Allow => &scope.allow,
-                    Decision::Confirm => &scope.confirm,
-                    Decision::Deny => &scope.deny,
+                let (bucket_name, bucket, prov_map) = match decision {
+                    Decision::Allow => ("allow", &scope.allow, &prov.allow),
+                    Decision::Confirm => ("confirm", &scope.confirm, &prov.confirm),
+                    Decision::Deny => ("deny", &scope.deny, &prov.deny),
                 };
                 if !bucket.contains(&norm.bin) {
                     continue;
                 }
-                return match decision {
+                let source = EntrySource {
+                    layer: prov_map.get(&norm.bin).copied().unwrap_or("project"),
+                    entry: bucket_name.to_string(),
+                    token: norm.bin.clone(),
+                };
+                let verdict = match decision {
                     Decision::Deny => Verdict::deny(format!("{} blocked (deny list)", norm.bin)),
                     Decision::Confirm => Verdict::confirm(format!(
                         "{} requires confirmation (confirm list)",
@@ -200,17 +243,18 @@ impl RuleLookup {
                         // [local] 的承诺是「效果不出项目」：allow 命中带逃逸检查
                         //（用原始参数判，归一不改参数语义）。
                         if cmd.args().iter().any(|w| path_escapes(w, project)) {
-                            return Verdict::confirm("path escapes repository");
+                            Verdict::confirm("path escapes repository")
+                        } else {
+                            Verdict::allow()
                         }
-                        Verdict::allow()
                     }
                 };
+                return (verdict, Some(source));
             }
         }
         self.default_verdict(&norm.bin)
     }
 
-    /// 命令节裁决：多维度命中按 precedence 合成。
     fn classify_section(
         &self,
         norm: &Normalized,
@@ -218,7 +262,7 @@ impl RuleLookup {
         is_global: bool,
         cmd: &SimpleCommand,
         project: &Path,
-    ) -> Verdict {
+    ) -> (Verdict, Option<EntrySource>) {
         for decision in self.precedence {
             let dims = match decision {
                 Decision::Allow => &section.allow,
@@ -236,47 +280,102 @@ impl RuleLookup {
                 .iter()
                 .find(|f| dims.flag.contains(f))
                 .map(|f| format!("{} {f}", norm.bin));
-            let Some(hit) = sub_hit.or(flag_hit) else {
+            let (hit, dim, token, prov) = if let Some((hit, token)) = sub_hit.zip(norm.sub.as_ref())
+            {
+                (hit, "sub", token.clone(), &dims.sub_prov)
+            } else if let Some((hit, token)) = flag_hit.and_then(|h| {
+                norm.flags
+                    .iter()
+                    .find(|f| dims.flag.contains(f))
+                    .map(|f| (h, f.clone()))
+            }) {
+                (hit, "flag", token, &dims.flag_prov)
+            } else {
                 continue;
             };
-            return match decision {
+            let bucket = match decision {
+                Decision::Allow => "allow",
+                Decision::Confirm => "confirm",
+                Decision::Deny => "deny",
+            };
+            let source = EntrySource {
+                layer: prov.get(&token).copied().unwrap_or("project"),
+                entry: format!("{}.{}.{}", norm.bin, bucket, dim),
+                token,
+            };
+            let verdict = match decision {
                 Decision::Deny => Verdict::deny(format!("{hit} blocked")),
                 Decision::Confirm => Verdict::confirm(format!("{hit} requires confirmation")),
                 Decision::Allow => {
                     // [local] 的承诺是「效果不出项目」：allow 命中一律带逃逸
                     // 检查（原始参数）；[global] allow 豁免。
                     if !is_global && cmd.args().iter().any(|w| path_escapes(w, project)) {
-                        return Verdict::confirm("path escapes repository");
+                        Verdict::confirm("path escapes repository")
+                    } else {
+                        Verdict::allow()
                     }
-                    Verdict::allow()
                 }
             };
+            return (verdict, Some(source));
         }
 
         // 未命中：节内 default（已含跨层继承）→ 顶层 default → confirm。
-        match section.default.or(self.rules.default) {
-            Some(Decision::Allow) => Verdict::allow(),
-            Some(Decision::Confirm) => {
-                Verdict::confirm(format!("{} requires confirmation (default)", norm.bin))
+        let source = |layer| {
+            Some(EntrySource {
+                layer,
+                entry: format!("{}.default", norm.bin),
+                token: norm.bin.clone(),
+            })
+        };
+        if let Some(d) = section.default {
+            let layer = section.default_layer.unwrap_or("project");
+            return (self.default_verdict_value(d, &norm.bin), source(layer));
+        }
+        match self.rules.default {
+            Some(d) => {
+                let layer = self.rules.default_layer.unwrap_or("default");
+                (self.default_verdict_value(d, &norm.bin), source(layer))
             }
-            Some(Decision::Deny) => Verdict::deny(format!("{} blocked (default)", norm.bin)),
-            None => Verdict::confirm(format!(
-                "{} requires confirmation (no default configured)",
-                norm.bin
-            )),
+            None => (
+                Verdict::confirm(format!(
+                    "{} requires confirmation (no default configured)",
+                    norm.bin
+                )),
+                source("default"),
+            ),
         }
     }
 
-    fn default_verdict(&self, bin: &str) -> Verdict {
+    /// 兜底档裁决值（source 由调用方按层标注）。
+    fn default_verdict_value(&self, d: Decision, bin: &str) -> Verdict {
+        match d {
+            Decision::Allow => Verdict::allow(),
+            Decision::Confirm => Verdict::confirm(format!("{bin} requires confirmation (default)")),
+            Decision::Deny => Verdict::deny(format!("{bin} blocked (default)")),
+        }
+    }
+
+    fn default_verdict(&self, bin: &str) -> (Verdict, Option<EntrySource>) {
+        let layer = self.rules.default_layer.unwrap_or("default");
         match self.rules.default {
-            Some(Decision::Allow) => Verdict::allow(),
-            Some(Decision::Confirm) => {
-                Verdict::confirm(format!("{bin} requires confirmation (default)"))
-            }
-            Some(Decision::Deny) => Verdict::deny(format!("{bin} blocked (default)")),
-            None => Verdict::confirm(format!(
-                "{bin} requires confirmation (no default configured)"
-            )),
+            Some(d) => (
+                self.default_verdict_value(d, bin),
+                Some(EntrySource {
+                    layer,
+                    entry: "default".into(),
+                    token: bin.to_string(),
+                }),
+            ),
+            None => (
+                Verdict::confirm(format!(
+                    "{bin} requires confirmation (no default configured)"
+                )),
+                Some(EntrySource {
+                    layer: "default",
+                    entry: "default".into(),
+                    token: bin.to_string(),
+                }),
+            ),
         }
     }
 }
@@ -285,6 +384,7 @@ impl RuleLookup {
 fn canonicalize_rules(rules: MergedRules, canon: &CanonMaps) -> MergedRules {
     MergedRules {
         default: rules.default,
+        default_layer: rules.default_layer,
         precedence: rules.precedence,
         script_allow: rules.script_allow.map_names(|b| canon.canon_bin(b)),
         local: canonicalize_scope(rules.local, canon),
@@ -304,12 +404,23 @@ fn canonicalize_scope(scope: MergedScope, canon: &CanonMaps) -> MergedScope {
         };
         commands.insert(canon_key, merged);
     }
+    let prov = |p: &Provenance, f: fn(&CanonMaps, &str) -> String| -> Provenance {
+        p.iter()
+            .map(|(t, l)| (f(canon, t), *l))
+            .collect::<BTreeMap<_, _>>()
+    };
     MergedScope {
         allow: canon_unique(&scope.allow, canon),
         confirm: canon_unique(&scope.confirm, canon),
         deny: canon_unique(&scope.deny, canon),
         // 声明词条同走规范形（alias_of 声明 → 规范 bin 名对账）。
         script_allow: canon_unique(&scope.script_allow, canon),
+        prov: ScopeProvenance {
+            allow: prov(&scope.prov.allow, |c, t| c.canon_bin(t)),
+            confirm: prov(&scope.prov.confirm, |c, t| c.canon_bin(t)),
+            deny: prov(&scope.prov.deny, |c, t| c.canon_bin(t)),
+            script_allow: prov(&scope.prov.script_allow, |c, t| c.canon_bin(t)),
+        },
         commands,
     }
 }
@@ -317,6 +428,7 @@ fn canonicalize_scope(scope: MergedScope, canon: &CanonMaps) -> MergedScope {
 fn canonicalize_command(cmd: MergedCommand, bin: &str, canon: &CanonMaps) -> MergedCommand {
     let dims = |d: Dims| Dims {
         sub: d.sub,
+        sub_prov: d.sub_prov,
         flag: d
             .flag
             .iter()
@@ -324,6 +436,11 @@ fn canonicalize_command(cmd: MergedCommand, bin: &str, canon: &CanonMaps) -> Mer
             .collect::<Vec<_>>()
             .into_iter()
             .fold(Vec::new(), extend_unique),
+        flag_prov: d
+            .flag_prov
+            .iter()
+            .map(|(t, l)| (canon.canon_flag(bin, t), *l))
+            .collect(),
     };
     MergedCommand {
         allow: dims(cmd.allow),
@@ -331,6 +448,7 @@ fn canonicalize_command(cmd: MergedCommand, bin: &str, canon: &CanonMaps) -> Mer
         deny: dims(cmd.deny),
         default: cmd.default,
         script_allow: cmd.script_allow,
+        default_layer: cmd.default_layer,
     }
 }
 
@@ -353,8 +471,15 @@ fn fold_command(mut a: MergedCommand, b: MergedCommand) -> MergedCommand {
             .chain(dst.flag.iter())
             .cloned()
             .fold(Vec::new(), extend_unique);
+        for (t, l) in src.sub_prov {
+            dst.sub_prov.entry(t).or_insert(l);
+        }
+        for (t, l) in src.flag_prov {
+            dst.flag_prov.entry(t).or_insert(l);
+        }
     }
     a.default = a.default.or(b.default);
+    a.default_layer = a.default_layer.or(b.default_layer);
     a
 }
 
