@@ -7,8 +7,9 @@
 //!   文件/进程/网络 API。
 //! - 限流（定稿要求）：`max_operations` / `max_call_levels` /
 //!   `max_expr_depths` + 字符串/数组上限——死循环或 OOM 尝试被有界拦截。
-//! - 脚本契约：入口 `fn check(ctx) -> string`，返回 `""`（无意见，保留
-//!   查表裁决）/ `"allow"` / `"confirm"` / `"deny"`；其他返回值、编译错误、
+//! - 脚本契约：入口 `fn check(ctx) -> string`，返回 `decision::PASS`（即
+//!   空串，无意见，保留查表裁决）/ `"allow"` / `"confirm"` / `"deny"`（等价
+//!   词汇 `decision::` 常量见 [`decision`]）；其他返回值、编译错误、
 //!   运行时错误、限流触发一律由调用方映射为 fail-safe confirm。
 //! - AST 编译一次缓存于实例（check 每次全量、serve 复用同一实例）。
 
@@ -47,6 +48,28 @@ impl std::fmt::Display for ScriptError {
 
 impl std::error::Error for ScriptError {}
 
+/// 脚本词汇约定（design.md「脚本词汇约定」，M4.0 前置小改落地）：
+/// 决策值 = 只读模块常量 `decision::` 四值；`PASS` = 无意见（不表态、
+/// 交还查表基线），Rhai 侧映射空串（Lua 引擎映射 nil，P6）。
+/// 脚本可用限定名 `decision::ALLOW` 等，也可写等价裸字符串——最终校验
+/// 在引擎（双保险），变量遮蔽污染不了引擎侧词汇表。
+pub mod decision {
+    pub const ALLOW: &str = "allow";
+    pub const CONFIRM: &str = "confirm";
+    pub const DENY: &str = "deny";
+    pub const PASS: &str = "";
+}
+
+/// 把 `decision::` 四常量以只读静态模块注入脚本（限定名访问）。
+fn register_decision_module(engine: &mut Engine) {
+    let mut m = rhai::Module::new();
+    m.set_var("ALLOW", decision::ALLOW);
+    m.set_var("CONFIRM", decision::CONFIRM);
+    m.set_var("DENY", decision::DENY);
+    m.set_var("PASS", decision::PASS);
+    engine.register_static_module("decision", m.into());
+}
+
 /// 脚本引擎抽象（引擎开闭落点；Rhai 为 v1 默认实现）。
 pub trait RuleEngine {
     /// 单命令评估：`Ok(None)` = 脚本无意见（保留查表裁决）。
@@ -82,6 +105,7 @@ impl RhaiEngine {
         engine.set_max_string_size(10_000);
 
         register_primitives(&mut engine, project, kb);
+        register_decision_module(&mut engine);
 
         let ast = engine
             .compile(source)
@@ -147,10 +171,9 @@ fn build_context(
     );
     m.insert(
         "sub".into(),
-        match cmd.args().first() {
-            Some(s) => Dynamic::from(s.clone()),
-            None => Dynamic::UNIT,
-        },
+        // ctx 可选字段缺省 = 空字符串（词汇约定）：不向脚本暴露解释器
+        // 内部的 unit/nil 语义；谓词写 `ctx.sub != ""`。
+        Dynamic::from(cmd.args().first().cloned().unwrap_or_default()),
     );
     m.insert("words".into(), words.into());
     m.insert("args".into(), args.into());
@@ -510,6 +533,60 @@ mod tests {
         );
         assert_eq!(
             e.evaluate(&cmd("sh"), Decision::Allow, Path::new(PROJ), false)
+                .unwrap(),
+            None
+        );
+    }
+
+    #[test]
+    fn decision_module_constants_are_read_only_vocabulary() {
+        // decision:: 四常量与裸字符串等价（引擎双保险；词汇约定见 design.md）。
+        let e = compile(concat!(
+            "fn check(ctx) {",
+            "  if ctx.bin == \"sudo\" { decision::DENY }",
+            "  else if ctx.bin == \"rm\" { decision::CONFIRM }",
+            "  else { decision::PASS }",
+            "}"
+        ));
+        assert_eq!(
+            e.evaluate(&cmd("sudo x"), Decision::Allow, Path::new(PROJ), false)
+                .unwrap(),
+            Some(Decision::Deny)
+        );
+        assert_eq!(
+            e.evaluate(&cmd("rm x"), Decision::Allow, Path::new(PROJ), false)
+                .unwrap(),
+            Some(Decision::Confirm)
+        );
+        assert_eq!(
+            e.evaluate(&cmd("ls"), Decision::Allow, Path::new(PROJ), false)
+                .unwrap(),
+            None,
+            "PASS 映射无意见"
+        );
+        // 限定名是常量：脚本内重新赋值不得改变引擎侧词汇表。
+        let e = compile("fn check(ctx) { let DENY = decision::ALLOW; DENY }");
+        assert!(
+            e.evaluate(&cmd("ls"), Decision::Allow, Path::new(PROJ), false)
+                .is_err(),
+        );
+    }
+
+    #[test]
+    fn ctx_sub_defaults_to_empty_string_not_unit() {
+        // ctx 可选字段缺省 = 空字符串（词汇约定）：不暴露解释器 unit 语义。
+        let e = compile(concat!(
+            "fn check(ctx) {",
+            "  if ctx.sub == \"\" { decision::CONFIRM } else { decision::PASS }",
+            "}"
+        ));
+        assert_eq!(
+            e.evaluate(&cmd("ls"), Decision::Allow, Path::new(PROJ), false)
+                .unwrap(),
+            Some(Decision::Confirm)
+        );
+        assert_eq!(
+            e.evaluate(&cmd("git status"), Decision::Allow, Path::new(PROJ), false)
                 .unwrap(),
             None
         );
