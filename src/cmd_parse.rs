@@ -263,20 +263,8 @@ fn redirect_writes_file(node: tree_sitter::Node<'_>, source: &str) -> bool {
 // 仓库边界
 // ---------------------------------------------------------------------------
 
-/// 解析项目根（环境变量注入或 cwd 上溯）；路径逃逸检查基准。
-pub fn project_root() -> PathBuf {
-    if let Ok(dir) = std::env::var("CRUSH_PROJECT_DIR")
-        && !dir.is_empty()
-    {
-        return PathBuf::from(dir);
-    }
-    if let Ok(dir) = std::env::var("CLAUDE_PROJECT_DIR")
-        && !dir.is_empty()
-    {
-        return PathBuf::from(dir);
-    }
-    std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
-}
+// 项目根解析已收敛至 `config::discover::find_project_root`（环境变量注入或
+// cwd 上溯的单一实现；本模块不再持有副本）。
 
 /// 路径是否落在仓库树内（相对路径按仓库根解析；大小写不敏感用于 Windows）。
 pub fn inside_repo(path: &str, project_root: &Path) -> bool {

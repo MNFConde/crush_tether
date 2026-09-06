@@ -190,3 +190,36 @@ fn zcode_project_dir_alias_chain() {
         );
     }
 }
+
+#[test]
+fn command_falls_back_to_env_when_stdin_lacks_it() {
+    // design.md「输入」：stdin 缺命令时回退 env CRUSH_TOOL_INPUT_COMMAND。
+    let proj = project_with_rules("m5-env-cmd");
+    let payload = serde_json::json!({"tool_input": {}}).to_string();
+    let mut child = Command::new(BIN)
+        .args(["check", "--agent", "crush"])
+        .env("CRUSH_PROJECT_DIR", proj.path())
+        .env("USERPROFILE", proj.path())
+        .env("HOME", proj.path())
+        .env("CRUSH_TOOL_INPUT_COMMAND", "ls")
+        .env_remove("CRUSH_TETHER_CONFIG")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn check");
+    child
+        .stdin
+        .take()
+        .expect("stdin piped")
+        .write_all(payload.as_bytes())
+        .expect("write hook input");
+    let out = child.wait_with_output().expect("wait");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert_eq!(out.status.code(), Some(0));
+    assert_eq!(
+        stdout.trim(),
+        "{\"decision\":\"allow\"}",
+        "env 兜底命令应生效"
+    );
+}

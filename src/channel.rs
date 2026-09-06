@@ -52,28 +52,40 @@ impl Agent {
 
 /// 从 stdin JSON / 环境变量提取命令正文与项目根。
 ///
-/// - Crush：stdin `tool_input.command`，env `CRUSH_PROJECT_DIR`。
-/// - ClaudeCode：stdin `tool_input.command`；权限基准 stdin `cwd` 优先，
-///   回退 `CLAUDE_PROJECT_DIR`（design.md「ClaudeCode 契约（核实）」）。
-/// - zcode：同 ClaudeCode 形态，env 键 `ZCODE_PROJECT_DIR` 优先、
-///   `CLAUDE_PROJECT_DIR` 回退（模板变量双别名同构）。
+/// - 命令：stdin `tool_input.command`，缺失时回退 env
+///   `CRUSH_TOOL_INPUT_COMMAND`（design.md「输入」约定的 env 兜底）。
+/// - 项目根：Crush：env `CRUSH_PROJECT_DIR` 为唯一来源；ClaudeCode：
+///   stdin `cwd` 优先、回退 `CLAUDE_PROJECT_DIR`；zcode：env 首选
+///   （`ZCODE_PROJECT_DIR` 别名链）、stdin `cwd` 兜底。
 pub struct HookInput {
     pub command: String,
     pub project_dir: Option<String>,
 }
 
 pub fn read_hook_input(agent: Agent) -> Option<HookInput> {
+    let from_env_command = || {
+        std::env::var("CRUSH_TOOL_INPUT_COMMAND")
+            .ok()
+            .filter(|s| !s.is_empty())
+    };
     let mut buf = String::new();
-    std::io::stdin().read_to_string(&mut buf).ok()?;
-
-    let json: Value = serde_json::from_str(&buf).ok()?;
+    let stdin_ok = std::io::stdin().read_to_string(&mut buf).is_ok();
+    let json: Option<Value> = if stdin_ok && !buf.trim().is_empty() {
+        serde_json::from_str(&buf).ok()
+    } else {
+        None
+    };
     let command = json
-        .pointer("/tool_input/command")
+        .as_ref()
+        .and_then(|j| j.pointer("/tool_input/command"))
         .and_then(Value::as_str)
-        .map(String::from)?;
+        .map(String::from)
+        .filter(|s| !s.is_empty())
+        .or_else(from_env_command)?;
 
     let from_stdin = || {
-        json.get("cwd")
+        json.as_ref()
+            .and_then(|j| j.get("cwd"))
             .and_then(Value::as_str)
             .map(String::from)
             .filter(|s| !s.is_empty())

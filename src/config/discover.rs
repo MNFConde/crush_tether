@@ -95,13 +95,16 @@ fn load_knowledge(path: &Path) -> Option<KnowledgeBase> {
     }
 }
 
-/// 配置发现用的项目根：`CRUSH_PROJECT_DIR` 优先（hook 注入，最可靠来源）；
+/// 配置发现用的项目根（项目根解析的单一实现）：
+/// `CRUSH_PROJECT_DIR` → `CLAUDE_PROJECT_DIR`（hook 注入，最可靠来源）；
 /// 缺失时从 cwd 逐级上溯；都不命中 → cwd。
 pub fn find_project_root() -> PathBuf {
-    if let Ok(dir) = std::env::var("CRUSH_PROJECT_DIR")
-        && !dir.is_empty()
-    {
-        return PathBuf::from(dir);
+    for key in ["CRUSH_PROJECT_DIR", "CLAUDE_PROJECT_DIR"] {
+        if let Ok(dir) = std::env::var(key)
+            && !dir.is_empty()
+        {
+            return PathBuf::from(dir);
+        }
     }
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     find_project_root_from(&cwd)

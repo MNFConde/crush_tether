@@ -79,7 +79,7 @@ fn main() -> ExitCode {
 
     match mode.as_str() {
         "serve" => {
-            let project = project_arg.unwrap_or_else(crush_tether::cmd_parse::project_root);
+            let project = project_arg.unwrap_or_else(crush_tether::config::find_project_root);
             let idle = Duration::from_secs(idle_secs.unwrap_or(30));
             service::serve_main(project, engine, config_arg, idle)
         }
@@ -100,7 +100,7 @@ fn read_project(agent: Agent) -> Option<(String, PathBuf)> {
         .project_dir
         .as_deref()
         .map(PathBuf::from)
-        .unwrap_or_else(crush_tether::cmd_parse::project_root);
+        .unwrap_or_else(crush_tether::config::find_project_root);
     Some((input.command, project))
 }
 
