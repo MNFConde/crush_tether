@@ -104,6 +104,9 @@ fn validate_precedence(p: &[Decision]) -> Result<(), ConfigError> {
 pub struct ScopeTable {
     /// 头部裸列表桶：词条是整条命令的 bin 名（语法糖，同层被命令节遮蔽）。
     pub buckets: ScopeBuckets,
+    /// `script_allow` 顶级列表（M4.0 脚本条件放行声明，双形态之一；与三桶
+    /// 是不同命名空间，不进查表路径——只是脚本 allow 激活的对账白名单）。
+    pub script_allow: Option<ListField>,
     /// 命令节（`[local.git]` 等）；BTreeMap 保证遍历序确定（lint/输出可复现）。
     pub commands: BTreeMap<String, CommandSection>,
 }
@@ -127,6 +130,9 @@ pub struct CommandSection {
     pub deny: Option<BucketSpec>,
     /// 节内兜底档（如 `[local.npm] default = "allow"`）；跨层继承链在 M2.2 合并。
     pub default: Option<Decision>,
+    /// `script_allow = true` 命令节键（M4.0 声明双形态之二）：与该命令其他
+    /// 配置同址的显式声明；`false` = 高层显式取消低层声明。
+    pub script_allow: Option<bool>,
 }
 
 /// 命令节内一个桶的维度：`sub`（子命令）/ `flag`（flag 词条）。
@@ -186,8 +192,8 @@ impl<'de> Deserialize<'de> for ScopeTable {
 
             fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
                 f.write_str(
-                    "a scope table ([local]/[global]): allow/confirm/deny bare lists plus \
-                     per-command sections",
+                    "a scope table ([local]/[global]): allow/confirm/deny bare lists, an \
+                     optional script_allow list, plus per-command sections",
                 )
             }
 
@@ -201,6 +207,7 @@ impl<'de> Deserialize<'de> for ScopeTable {
                         "allow" => out.buckets.allow = Some(map.next_value()?),
                         "confirm" => out.buckets.confirm = Some(map.next_value()?),
                         "deny" => out.buckets.deny = Some(map.next_value()?),
+                        "script_allow" => out.script_allow = Some(map.next_value()?),
                         // 其余键一律按命令节解析：拼错的桶键或裸数组值在此报错，
                         // 杜绝拼写错误静默变成「新命令节」。
                         _ => {
@@ -229,8 +236,8 @@ impl<'de> Deserialize<'de> for CommandSection {
 
             fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
                 f.write_str(
-                    "a command section: allow/confirm/deny buckets (sub/flag) plus an \
-                     optional default",
+                    "a command section: allow/confirm/deny buckets (sub/flag), an optional \
+                     default, and an optional script_allow flag",
                 )
             }
 
@@ -238,7 +245,7 @@ impl<'de> Deserialize<'de> for CommandSection {
             where
                 A: MapAccess<'de>,
             {
-                const FIELDS: &[&str] = &["allow", "confirm", "deny", "default"];
+                const FIELDS: &[&str] = &["allow", "confirm", "deny", "default", "script_allow"];
                 let mut out = CommandSection::default();
                 while let Some(key) = map.next_key::<String>()? {
                     match key.as_str() {
@@ -246,6 +253,7 @@ impl<'de> Deserialize<'de> for CommandSection {
                         "confirm" => out.confirm = Some(map.next_value()?),
                         "deny" => out.deny = Some(map.next_value()?),
                         "default" => out.default = Some(map.next_value()?),
+                        "script_allow" => out.script_allow = Some(map.next_value()?),
                         _ => return Err(de::Error::unknown_field(&key, FIELDS)),
                     }
                 }
@@ -583,5 +591,35 @@ mod tests {
         }
         let msg = err_of("version = 1\ndefault = \"Allow\"");
         assert!(msg.contains("unknown variant `Allow`"), "{msg}");
+    }
+
+    #[test]
+    fn script_allow_top_level_list_parses_both_forms() {
+        let f = parse("version = 1\n[local]\nscript_allow = [\"ls\", \"docker\"]").unwrap();
+        assert_eq!(f.local.script_allow, Some(set(&["ls", "docker"])));
+
+        let f = parse("version = 1\n[local]\nscript_allow = { add = [\"jq\"] }").unwrap();
+        assert_eq!(
+            f.local.script_allow,
+            Some(ListField::Delta {
+                add: Some(vec!["jq".into()]),
+                remove: None,
+            })
+        );
+    }
+
+    #[test]
+    fn script_allow_command_section_flag_parses_bool() {
+        let f = parse("version = 1\n[local.ls]\nscript_allow = true").unwrap();
+        assert_eq!(f.local.commands["ls"].script_allow, Some(true));
+    }
+
+    #[test]
+    fn script_allow_rejects_wrong_value_types() {
+        // 命令节键必须是布尔（列表形态只属于作用域顶级）。
+        let msg = err_of("version = 1\n[local.ls]\nscript_allow = [\"x\"]");
+        assert!(msg.contains("invalid type"), "{msg}");
+        let msg = err_of("version = 1\n[local]\nscript_allow = true");
+        assert!(msg.contains("invalid type"), "{msg}");
     }
 }

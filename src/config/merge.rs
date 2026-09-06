@@ -6,7 +6,7 @@
 //! - 标量（`default` / `precedence`）写值即覆盖。
 //! - 命令节按字段级合并：高层节只写了 `deny.sub` 时，低层同节其余维度照常继承。
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use crate::config::discover::FoundLayers;
 use crate::config::schema::{
@@ -43,6 +43,8 @@ pub struct MergedRules {
     /// 顶层兜底档（三层皆未定义 → None，查表时落 confirm fail-safe）。
     pub default: Option<Decision>,
     pub precedence: Vec<Decision>,
+    /// script_allow 声明集（M4.0）。
+    pub script_allow: ScriptAllowDecls,
     pub local: MergedScope,
     pub global: MergedScope,
 }
@@ -53,6 +55,8 @@ pub struct MergedScope {
     pub allow: Vec<String>,
     pub confirm: Vec<String>,
     pub deny: Vec<String>,
+    /// 本作用域 `script_allow` 顶级列表的合并结果（D-02 链）。
+    pub script_allow: Vec<String>,
     pub commands: BTreeMap<String, MergedCommand>,
 }
 
@@ -63,6 +67,8 @@ pub struct MergedCommand {
     pub deny: Dims,
     /// 节内兜底档（含跨层继承链的最终结果）。
     pub default: Option<Decision>,
+    /// 节内 `script_allow` 键（高层定义即覆盖，`false` = 显式取消）。
+    pub script_allow: Option<bool>,
 }
 
 /// 命令节一个桶的两个维度词条集。
@@ -84,11 +90,86 @@ pub fn merge(layers: Layers<'_>) -> MergedRules {
         .flatten()
         .find_map(|f| f.precedence.clone())
         .unwrap_or_else(|| DEFAULT_PRECEDENCE.to_vec());
+    let local = merge_scope(&low_to_high, |f| &f.local);
+    let global = merge_scope(&low_to_high, |f| &f.global);
+    // script_allow 声明集：两形态汇入同一集合（顶级列表 ∪ 节键 true），
+    // 附声明所在表元数据；两表皆现 → global 胜（M2.3「更强的承诺」同规）。
+    let mut script_allow = ScriptAllowDecls::default();
+    for b in &local.script_allow {
+        script_allow.local.insert(b.clone());
+    }
+    for b in &global.script_allow {
+        script_allow.global.insert(b.clone());
+    }
+    for (name, c) in &local.commands {
+        if c.script_allow == Some(true) {
+            script_allow.local.insert(name.clone());
+        }
+    }
+    for (name, c) in &global.commands {
+        if c.script_allow == Some(true) {
+            script_allow.global.insert(name.clone());
+        }
+    }
     MergedRules {
         default,
         precedence,
-        local: merge_scope(&low_to_high, |f| &f.local),
-        global: merge_scope(&low_to_high, |f| &f.global),
+        script_allow,
+        local,
+        global,
+    }
+}
+
+/// script_allow 声明集（M4.0）：脚本 allow 激活的对账白名单，按 bin 名
+/// 索引、附声明所在表的元数据。声明不是规则、不进查表路径。
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ScriptAllowDecls {
+    local: BTreeSet<String>,
+    global: BTreeSet<String>,
+}
+
+/// 声明所在的作用域（定稿点作用域化逃逸检查的判据）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DeclScope {
+    /// local 声明：激活时对原始命令参数执行路径逃逸检查。
+    Local,
+    /// global 声明：豁免逃逸检查（两表皆现时 global 胜）。
+    Global,
+}
+
+impl ScriptAllowDecls {
+    /// bin 的声明作用域；未声明 = `None`（运行时 allow(name) 激活被拒）。
+    pub fn scope_of(&self, bin: &str) -> Option<DeclScope> {
+        if self.global.contains(bin) {
+            Some(DeclScope::Global)
+        } else if self.local.contains(bin) {
+            Some(DeclScope::Local)
+        } else {
+            None
+        }
+    }
+
+    /// 全部已声明 bin（lint 死声明检查用；去重后的并集视图）。
+    pub fn bins(&self) -> impl Iterator<Item = &str> {
+        self.global
+            .iter()
+            .chain(self.local.iter())
+            .map(String::as_str)
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.local.is_empty() && self.global.is_empty()
+    }
+
+    /// 以规范名重建声明集（查表层规范形化用：alias 名声明 → 规范 bin 名）。
+    pub fn map_names(self, f: impl Fn(&str) -> String) -> Self {
+        fn map_set(set: BTreeSet<String>, f: &impl Fn(&str) -> String) -> BTreeSet<String> {
+            set.into_iter().map(|s| f(&s)).collect()
+        }
+        Self {
+            local: map_set(self.local, &f),
+            global: map_set(self.global, &f),
+        }
     }
 }
 
@@ -142,6 +223,8 @@ fn merge_scope(
         allow: head(|b| b.allow.as_ref()),
         confirm: head(|b| b.confirm.as_ref()),
         deny: head(|b| b.deny.as_ref()),
+        // script_allow 顶级列表不在 ScopeBuckets（与三桶不同命名空间）。
+        script_allow: resolve_chain(defined.iter().map(|t| t.script_allow.as_ref())),
         commands,
     }
 }
@@ -161,6 +244,7 @@ fn merge_command(secs: &[&CommandSection]) -> MergedCommand {
         deny: merge_dims(secs, |s| s.deny.as_ref()),
         // secs 低 → 高；从高往低找第一个定义（高层覆盖）。
         default: secs.iter().rev().find_map(|s| s.default),
+        script_allow: secs.iter().rev().find_map(|s| s.script_allow),
     }
 }
 
@@ -352,5 +436,84 @@ mod tests {
         );
         assert_eq!(m.global.allow, ["docker", "kubectl"]);
         assert!(m.local.allow.is_empty());
+    }
+
+    #[test]
+    fn script_allow_top_list_merges_with_d02_semantics() {
+        let m = merged(
+            Some("version = 1\n[local]\nscript_allow = [\"a\", \"b\"]"),
+            None,
+            Some("version = 1\n[local]\nscript_allow = { remove = [\"b\"], add = [\"c\"] }"),
+        );
+        assert_eq!(m.local.script_allow, ["a", "c"]);
+        // 数组 = 覆盖，不粘低层。
+        let m = merged(
+            Some("version = 1\n[local]\nscript_allow = [\"a\"]"),
+            None,
+            Some("version = 1\n[local]\nscript_allow = [\"x\"]"),
+        );
+        assert_eq!(m.local.script_allow, ["x"]);
+    }
+
+    #[test]
+    fn script_allow_section_flag_inherits_and_revokes_across_layers() {
+        // 低层节键 true 继承；高层 false = 显式取消。
+        let m = merged(
+            None,
+            Some("version = 1\n[local.ls]\nscript_allow = true"),
+            Some("version = 1\n[local.ls]\nallow.sub = [\"x\"]"),
+        );
+        assert_eq!(m.local.commands["ls"].script_allow, Some(true));
+        let m = merged(
+            None,
+            Some("version = 1\n[local.ls]\nscript_allow = true"),
+            Some("version = 1\n[local.ls]\nscript_allow = false"),
+        );
+        assert_eq!(m.local.commands["ls"].script_allow, Some(false));
+    }
+
+    #[test]
+    fn script_allow_decls_union_two_forms_per_scope() {
+        let m = merged(
+            None,
+            None,
+            Some(concat!(
+                "version = 1\n",
+                "[local]\n",
+                "script_allow = [\"ls\", \"docker\"]\n",
+                "[local.git]\n",
+                "script_allow = true\n",
+            )),
+        );
+        assert_eq!(m.script_allow.scope_of("ls"), Some(DeclScope::Local));
+        assert_eq!(m.script_allow.scope_of("docker"), Some(DeclScope::Local));
+        assert_eq!(m.script_allow.scope_of("git"), Some(DeclScope::Local));
+        assert_eq!(m.script_allow.scope_of("curl"), None);
+    }
+
+    #[test]
+    fn script_allow_declared_in_both_scopes_global_wins() {
+        let m = merged(
+            Some("version = 1\n[local]\nscript_allow = [\"ls\"]"),
+            None,
+            Some("version = 1\n[global]\nscript_allow = [\"ls\"]"),
+        );
+        assert_eq!(
+            m.script_allow.scope_of("ls"),
+            Some(DeclScope::Global),
+            "两表皆声明 → global 胜（M2.3 同规）"
+        );
+    }
+
+    #[test]
+    fn script_allow_scopes_stay_independent() {
+        let m = merged(
+            Some("version = 1\n[global]\nscript_allow = [\"docker\"]"),
+            None,
+            Some("version = 1\n[local]\nscript_allow = [\"ls\"]"),
+        );
+        assert_eq!(m.script_allow.scope_of("docker"), Some(DeclScope::Global));
+        assert_eq!(m.script_allow.scope_of("ls"), Some(DeclScope::Local));
+        assert!(!m.script_allow.is_empty());
     }
 }

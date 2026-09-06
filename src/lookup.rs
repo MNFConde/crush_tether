@@ -281,6 +281,7 @@ fn canonicalize_rules(rules: MergedRules, canon: &CanonMaps) -> MergedRules {
     MergedRules {
         default: rules.default,
         precedence: rules.precedence,
+        script_allow: rules.script_allow.map_names(|b| canon.canon_bin(b)),
         local: canonicalize_scope(rules.local, canon),
         global: canonicalize_scope(rules.global, canon),
     }
@@ -302,6 +303,8 @@ fn canonicalize_scope(scope: MergedScope, canon: &CanonMaps) -> MergedScope {
         allow: canon_unique(&scope.allow, canon),
         confirm: canon_unique(&scope.confirm, canon),
         deny: canon_unique(&scope.deny, canon),
+        // 声明词条同走规范形（alias_of 声明 → 规范 bin 名对账）。
+        script_allow: canon_unique(&scope.script_allow, canon),
         commands,
     }
 }
@@ -322,6 +325,7 @@ fn canonicalize_command(cmd: MergedCommand, bin: &str, canon: &CanonMaps) -> Mer
         confirm: dims(cmd.confirm),
         deny: dims(cmd.deny),
         default: cmd.default,
+        script_allow: cmd.script_allow,
     }
 }
 
