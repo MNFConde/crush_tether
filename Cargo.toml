@@ -20,6 +20,7 @@ tree-sitter-bash = "0.25"
 # internals：仅用其公开 AST 语法树（script_allow 加载期字面量提取，M4.0）；
 # AST 结构随 rhai 版本可能变化，升级须 cargo test（机制 3 运行时双保险兜底）。
 rhai = { version = "1", features = ["internals"] }
+interprocess = "2"
 
 [profile.release]
 lto = true

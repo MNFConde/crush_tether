@@ -12,3 +12,4 @@ pub mod lint;
 pub mod lookup;
 pub mod model;
 pub mod script;
+pub mod service;

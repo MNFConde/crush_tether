@@ -55,8 +55,20 @@ pub fn run_check_env(
     command: &str,
     envs: &[(&str, &str)],
 ) -> CheckRun {
+    run_mode_env(project, "check", extra_args, command, envs)
+}
+
+/// 任意模式（check/hook/serve/benchmark）的子进程驱动：stdin 送 hook JSON，
+/// 环境隔离同 [`run_check_env`]。
+pub fn run_mode_env(
+    project: &Path,
+    mode: &str,
+    extra_args: &[&str],
+    command: &str,
+    envs: &[(&str, &str)],
+) -> CheckRun {
     let mut child = Command::new(BIN)
-        .args(["check", "--agent", "crush"])
+        .args([mode, "--agent", "crush"])
         .args(extra_args)
         .env("CRUSH_PROJECT_DIR", project)
         .env("USERPROFILE", project)
@@ -67,7 +79,7 @@ pub fn run_check_env(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .expect("spawn crush-tether check");
+        .unwrap_or_else(|e| panic!("spawn crush-tether {mode}: {e}"));
     let payload = format!("{{\"tool_input\":{{\"command\":\"{command}\"}}}}");
     child
         .stdin
@@ -75,7 +87,7 @@ pub fn run_check_env(
         .expect("stdin piped")
         .write_all(payload.as_bytes())
         .expect("write hook input");
-    let out = child.wait_with_output().expect("wait check process");
+    let out = child.wait_with_output().expect("wait process");
     CheckRun {
         stdout: String::from_utf8_lossy(&out.stdout).into_owned(),
         stderr: String::from_utf8_lossy(&out.stderr).into_owned(),
