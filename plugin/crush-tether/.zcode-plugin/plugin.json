@@ -1,0 +1,6 @@
+{
+  "name": "crush-tether",
+  "version": "0.1.0",
+  "description": "crush-tether bash permission gate for zcode (PreToolUse hook; requires crush-tether on PATH)",
+  "hooks": "hooks"
+}

@@ -2,6 +2,14 @@
 
 This file records substantive progress in reverse-chronological order — newest entry at the top, right below this line. Keep each entry short — summary and pointer only; conclusions settle into `cairn/<topic>.md`.
 
+## 2026-09-06 · M6.3 收官：M5.3 实机探针四项闭环 + 正式插件定稿
+
+- **探针四项观察**（新 zcode 会话 + 插件分发实测）：① stdin 载荷 = ClaudeCode 蛇形键与 zcode 驼峰键**双命名并存**（`toolInput`/`riskLevel`/`sideEffectScope`/`requestId` 等 zcode 增键），adapter 零改动可用；② `PermissionRequest` JSON 信封不被采纳（exit 2 可否决、exit 0 静默走原生确认）→ 挂点保持 `PreToolUse`（其三值 JSON 全部生效：allow 直通连 PermissionRequest 都不触发）；③ 用户最终选择**不回传**任何 hook（PostToolUse 只有执行结果）——「权限学习」候选的保守路线更稳；④ hook 错误（非 2 退出码）→ agent 侧 **fail-open 放行**（失效模式 #2 补齐：部署必查二进制可达）。
+- **意外发现**：工作区配置 hook 轨（`.zcode/config.json` + enabled:true）实测未生效，插件轨正常——疑 `process` 型混入 `statusMessage` 字段被丢弃（diagnosing 指南坑 #7）；交付只依赖插件轨，坑已登记 design.md。
+- **正式插件 `plugin/` 入库**：marketplace.json + crush-tether/.zcode-plugin/plugin.json + hooks/hooks.json（PreToolUse/Bash → `type:"process"` 直拉 `crush-tether hook --agent zcode`，PATH 解析，无 wrapper）；README「agent 接入」补三步安装 + 部署验收。
+- **收尾待用户拍板**：探针插件（crush-tether-probe）禁用；mdor 是否实挂 crush-tether。
+- Details: `doc/design.md`（zcode 契约定稿 + 失效模式表 #2 回填 + 更正登记 20）、`cairn/ROADMAP.md`（M5.3/P5/M6.3 勾选）。
+
 ## 2026-09-06 · M5.3 探针首获：serve spawn 句柄继承洞（M4.1 修复）
 
 - **M5.3 实机探针（工作区 hook 配置轨）首测即抓到 P4 阻断级缺陷**：node 系祖先（zcode hook runner 即是）下，hook 进程 49ms 完成裁决并退出，但其 stdout/stderr 管道 EOF 迟迟不来——runner 侧表现为 hook 挂死 31s（= serve idle 期）；超时型 runner 会掐死 hook、裁决丢失。bash（MSYS）下不可复现，纯文档自测无法发现。

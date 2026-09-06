@@ -336,7 +336,13 @@ pub trait Channel {
 ```
 
 **首发 adapter：Crush（一）→ ClaudeCode（二）→ zcode（三，2026-09-06 并入 P5/M5.3）**。其余 agent 留空壳，不首发。
-- **zcode**：hook 协议与 ClaudeCode 高度同构——模板变量 `${CLAUDE_PROJECT_DIR}`/`${ZCODE_PROJECT_DIR}` 双别名、`PreToolUse` 可返回 `allow`/`ask`/`deny` 三值决策（与三档一一映射）、exit 0/2 语义一致；支持 `type:"process"` 参数向量执行（Windows 免 shell 转义）。两点 zcode 文档未写死，实现期探针实测后再定型（不预设）：① stdin 输入载荷键名（是否同 ClaudeCode 信封）；② `PermissionRequest` 能否返回三值决策（能则改挂它，语义上更正的拦截点；否则用已验证的 `PreToolUse`）。交付形态取插件分发（`hooks/hooks.json` 自动启用 hook runner；配置文件里的 hooks 默认禁用）。
+- **zcode**：hook 协议与 ClaudeCode 高度同构——模板变量 `${CLAUDE_PROJECT_DIR}`/`${ZCODE_PROJECT_DIR}` 双别名、`PreToolUse` 可返回 `allow`/`ask`/`deny` 三值决策（与三档一一映射）、exit 0/2 语义一致；支持 `type:"process"` 参数向量执行（Windows 免 shell 转义）。**实机探针定型（2026-09-06，M5.3）**：
+  - **stdin 载荷**：ClaudeCode 蛇形键（`tool_input.command`/`cwd`/`hook_event_name`/`session_id` 等）与 zcode 驼峰键（`toolInput`/`sessionId`/`riskLevel`/`sideEffectScope`/`requestId`/`traceId` 等）**双命名并存**——adapter 按蛇形键读取即可，无需改动；
+  - **挂点保持 `PreToolUse`**：三值 JSON 全部实测生效（allow → 直通不进权限流程；ask → 转入确认流程；deny → 阻断）；`PermissionRequest` 仅在 PreToolUse 返回 ask 后才触发；
+  - **`PermissionRequest` 不改挂**：其 `hookSpecificOutput` JSON 信封实测**不被采纳**（exit 0 + JSON → 走原生确认；exit 2 → 否决；用户最终选择不回传任何 hook，PostToolUse 载荷也只有执行结果）——对权限门无增量价值；
+  - **hook 进程错误（非 2 退出码）→ agent 侧 fail-open（放行）**：实测 PreToolUse hook exit 3 命令照常执行——失效模式表 #2 的答案，「二进制已安装 + 路径可达」成为部署必查项（C 层验收必须实测 hook 触发）；
+  - **M4.1 修复**：探针首测抓到 serve spawn 句柄继承洞——node 系祖先（zcode hook runner 即是）下 hook 的 stdout/stderr 管道被 serve 复制持有，输出流 EOF 由 serve 存活期决定（31s），runner 侧表现为 hook 挂死超时；修复 = `spawn_serve` 前对自身 stdio 句柄清 `HANDLE_FLAG_INHERIT`（[更正登记](#更正登记对既有定稿) 20）；
+  - **交付形态实测通过** = 插件分发（`hooks/hooks.json` 自动启用 hook runner；本地目录 marketplace 安装 + hook 实际触发全链验证）。配置文件 hook 轨（工作区 `.zcode/config.json` + `hooks.enabled:true`）实测未生效（疑因 `process` 型混入 `statusMessage` 字段被丢弃或需会话重启重载，未深究）——交付不依赖该轨，但登记为坑：`process` 型 hook 严格只接受 `command`/`args`/`timeoutMs`。
 - **OpenCode**：延后至版本稳定（存在 V1 `permission`/`bash` 与 V2 `permissions`/`shell` 分叉、插件 in-process、命令改写 bug），**不先适配**。
 - 其他候选（Cursor / Continue.dev / Gemini CLI / Cline / Roo）仅列空壳，后续按需扩展。
 
@@ -369,7 +375,7 @@ hook 接入是权限门的「最后一米」——管线内部的 fail-safe 再�
 | # | 失效模式 | 兜底层 | 说明与验证 |
 |---|---|---|---|
 | 1 | 配置文件 hook 默认禁用被忘开（zcode 配置文件形态特有，须显式 `hooks.enabled: true` 才跑） | A | 插件贡献的 hook 自动启用 hook runner（zcode 配置指南核实）。验证：M5.3 探针「插件分发实际触发」（含启用路径）。 |
-| 2 | hook 二进制路径失效 / 被卸载（hook 进程根本起不来） | **待补** | 缺口如实登记：此时 agent 侧行为（放行 or 阻断）未验证——我方 fail-safe 只覆盖「进程起来后」的失效。探针待办：实测 zcode 对 hook 进程启动失败的语义；若放行，则「二进制已安装 + 路径可达」成为部署清单必查项。 |
+| 2 | hook 二进制路径失效 / 被卸载（hook 进程根本起不来） | **C（部署验收实测）** | **2026-09-06 zcode 实测定型**：hook 进程错误（非 2 退出码）→ agent 侧 **fail-open（放行）**——agent 不兜底，我方 fail-safe 只覆盖「进程起来后」的失效；因此「二进制已安装 + 路径可达」是部署必查项，且部署验收必须实测 hook 确实触发（本仓库 `.zcode/probe/` 探针即验收工具，新 agent 部署照搬此法）。 |
 | 3 | hook 进程已拉起，但内部崩溃 / 超时 / serve 端点不可达 | B | fail-safe confirm（裁决前任何异常落 confirm）+ connect-or-spawn 降级（serve 不可达 → 本进程跑全量管线，绝不无裁决放行）。既有单测与契约测试覆盖（M4.1、P1 起）。 |
 | 4 | Crush 类「配置即生效、无启用门槛」形态的静默失效（配错路径 / 拼写错，无任何机制提醒） | C | 无机制可堵，部署验收实测触发是唯一覆盖：M5.2 契约用例集（实现层）+ 部署后实测 hook 确实触发。 |
 | 5 | 用户手动禁用插件 / 删除配置 | — | 信任边界，不设防，如实声明。 |
@@ -676,6 +682,7 @@ allow.flag = { remove = ["-h"] }                 # 继承并移除（flag 也能
 17. 「script_allow 机制 1 = AST 静态提取」→ **2026-09-06 M6.1 补充**：Lua 侧无公开 AST，机制 1 退化为**注释剥离后的保守词法扫描**（识别 `allow("…")`/`allow('…')`；非引号实参拒载；行/块注释先剥离防误拒；字符串内含 `--` 的极端形态漏收不误拒）——机制 2/3（声明集对账拒载、运行时双保险）语义不变，审计面不缩小；rhai 侧仍为 AST 提取。同批：机制 1/2/3 对 Lua 生效、定稿点（逃逸检查/deny 终审）引擎无关复用。
 18. 「Lua 引擎定型：限流 = 指令数 hook……死循环/深递归/OOM 有界」→ **2026-09-06 补正（审查修复）**：hook 须为**全局形态**（`set_global_hook`）才覆盖脚本自建协程——初版用线程级 `set_hook`，协程内代码完全逃逸指令预算（探针实测：协程内 200 万次循环毫秒级完成、正常返回）。修复后主线程与协程均被计数；**语义边界**：`coroutine.resume` 类 pcall 吞协程内错误——超预算协程被终止（DoS 已阻止）但脚本不报错、继续走到返回值，不转化为 fail-safe confirm（rhai 侧限流错误直接中断脚本、Err → confirm，两引擎在此形态上有差异，安全性等价：循环均被有界终止）。
 19. DSL 节「安全原语（`writes_file`/`path_escapes`/`deny`）」清单 → **2026-09-06 如实化**：实际注册原语为 `path_escapes`/`inside_repo`/`kb_*` 知识库数据源族 + `allow("bin")` 受控激活通道（M4.0）；`writes_file`/`deny` 原语从未存在——写特征经 ctx 字段 `writes_redirect`/`pipe_to_shell` 暴露，deny 是脚本返回值不是原语。历史遗留措辞（P3 前草案期写入），非近期引入。
+20. serve 生命周期「detached spawn serve」（M4.1 实现 c127205）→ **2026-09-06 补正（M5.3 探针实机发现）**：Windows 下 `Command::spawn` 按句柄自身 inheritable 标志复制可继承句柄——node 系祖先（zcode hook runner）的 stdout/stderr 管道可继承，serve 复制到后 hook 的输出流 EOF 由 serve 存活期（idle 30s）决定，runner 侧表现为 hook 挂死 31s、超时型 runner 丢裁决（MSYS bash 的管道不可继承，故 bash 自测不可复现）。修复 = `spawn_serve` 前对自身 stdio 三句柄 `SetHandleInformation` 清 `HANDLE_FLAG_INHERIT`（943b205，windows-sys 钉 0.61）；实测 node 祖先下冷启动 31039ms → ~90ms。「detached」定稿语义不变，此为实现级补全。
 1. 「能声明表达的进 `rules.toml`」→ 收窄为「**无条件的纯查表**进 `rules.toml`，一切条件判断进脚本」。
 2. 「`[[rules]]` 规则链 + first-match-wins」→ **删除**，替换为「`[local]`/`[global]` 双表 + 每命令三桶查表 + 可调桶间优先级 `precedence`」。
 3. 「命令集合并集（只增不减，`exclude` 表剔除）」→ 2026-09-05 替换为 token 级合并，**2026-09-06 再修订为字段级继承**（数组覆盖 / inline table 增删；「挪桶即剔除」弃用——挪桶是改判不是删除）；无需 `exclude` 表（见 [D-02](decisions.md#d-02-字段级继承合并模型)）。

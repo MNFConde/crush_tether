@@ -58,7 +58,17 @@ crush-tether benchmark
 | ClaudeCode | `claudecode` | `CLAUDE_PROJECT_DIR` |
 | zcode | `zcode` | `${ZCODE_PROJECT_DIR}` → `${CLAUDE_PROJECT_DIR}` 回退 |
 
-stdin 传 hook JSON（命令取 `tool_input.command`，兜底 `CRUSH_TOOL_INPUT_COMMAND` 环境变量）。三档行为等价：allow 放行 / confirm 要求确认 / deny 阻断（exit 2）。zcode 插件分发形态已实现，实机 hook 触发验证挂部署时探针。
+stdin 传 hook JSON（命令取 `tool_input.command`，兜底 `CRUSH_TOOL_INPUT_COMMAND` 环境变量）。三档行为等价：allow 放行 / confirm 要求确认 / deny 阻断（exit 2）。
+
+### zcode 插件安装（实测可用，2026-09-06）
+
+前置：`crush-tether` 在 PATH 上（hook 以 `type:"process"` 参数向量直接拉起，不经 shell）。
+
+1. Settings → Plugin Management → Discover 页 **+** 号 → 本地目录 → 选择本仓库 `plugin/` 目录（内含 marketplace.json 与 crush-tether 插件）；
+2. 启用插件——插件贡献的 hook 自动启用 zcode 的 hook runner（配置文件 hooks 默认禁用的坑由此绕开）；
+3. 部署验收：任意会话跑一条 bash 命令，确认 `.crush-tether/decisions.jsonl` 出现 `mode:"serve"` 记录（hook 确实触发）。**agent 侧对 hook 失败采取 fail-open（放行）**，「二进制在 PATH 可达」是部署必查项。
+
+合同细节（stdin 双命名兼容、PermissionRequest 实测结论、挂点定型依据）见 `doc/design.md`「Agent 适配层」。
 
 ## 安全模型
 

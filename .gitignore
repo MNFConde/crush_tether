@@ -9,3 +9,6 @@
 # 运行时状态（引导生成的默认包 + 裁决日志），不入库
 /.crush-tether/
 
+
+# plugin/ 目录内被 hook 误触生成的运行时状态（plugin 被当项目根），不入库
+plugin/.crush-tether/

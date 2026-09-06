@@ -1,0 +1,11 @@
+{
+  "name": "crush-tether-marketplace",
+  "owner": { "name": "crush_tether" },
+  "plugins": [
+    {
+      "name": "crush-tether",
+      "description": "crush-tether bash permission gate for zcode (PreToolUse hook; requires crush-tether on PATH)",
+      "source": "./crush-tether"
+    }
+  ]
+}
