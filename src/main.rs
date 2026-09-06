@@ -30,11 +30,15 @@ fn main() -> ExitCode {
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "check" | "hook" | "serve" | "benchmark" => mode = arg,
-            "--agent" => {
-                if let Some(a) = args.next().as_deref().and_then(Agent::parse) {
-                    agent = a;
+            "--agent" => match args.next().as_deref().and_then(Agent::parse) {
+                Some(a) => agent = a,
+                None => {
+                    eprintln!(
+                        "crush-tether: unknown --agent value; falling back to crush \
+                         (supported: crush, claudecode, zcode)"
+                    );
                 }
-            }
+            },
             "--config" => match args.next() {
                 Some(p) => config_arg = Some(p),
                 None => {
@@ -63,7 +67,11 @@ fn main() -> ExitCode {
                     return fail_safe_confirm(agent);
                 }
             },
-            _ => {}
+            _ => {
+                // 未知参数告警不硬错（保兼容）：配置文件拼写错误是硬错误，
+                // CLI 拼错也不该静默改用缺省（fail-safe 哲学一致性）。
+                eprintln!("crush-tether: unknown argument `{arg}` ignored");
+            }
         }
     }
 

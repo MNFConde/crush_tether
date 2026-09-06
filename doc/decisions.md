@@ -168,7 +168,7 @@
 - 落盘 = `<project>/.crush-tether/decisions.jsonl` 追加写；serve 单点写 + hook 降级/check 自写（同一文件）。写入失败静默——日志永不影响裁决路径。
 - `ts` 用 UTC RFC3339（std 无本地时区能力，不为此引依赖）；人读视图由后续 `log` 子命令渲染。
 - 热重载信号在 serve 主线程的**请求间隙**消费（RuleSet 含 rhai Engine 非 Send，重编译留主线程）——改规则后的第一个请求触发重载，在途请求不受影响。
-- v1 `source.layer` 已实现全层溯源（global/user/project/explicit/default/script，经合并层 Provenance 映射携带）。
+- v1 `source.layer` 溯源经合并层 Provenance 映射携带，词表 global/user/project/explicit/default/script；**实现核实（2026-09-06 审查修复）**：explicit（`--config` 经 LayerLabels 换标签）/ script（激活改判时换源）已接线，default 两档可达，**global 值 v1 不可达**（全局层无发现路径，ROADMAP M2.2 已更正登记）——词表按「已定义、待全局层落地」理解。
 
 **依据**：审计自证是零内置策略的配套性质（kb/source 字段让「谁放行、依据什么」可追溯）；默认开与 fail-safe confirm 同方向（多留痕优于少留痕）；UTC 换取零依赖。
 

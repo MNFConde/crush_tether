@@ -101,13 +101,13 @@ check（兜底/冒烟）：同一二进制单发，不碰端点，本进程全�
 模块分层（依赖方向单向，编译期可见性强制）:
 
 ```text
-装配层  main.rs + cli/        子命令分发（hook / serve / check），仅此层知道三种角色
-适配层  channel/  service/    agent 契约适配；端点监听与 connect-or-spawn 客户端、热重载、idle 退出
-核心层  engine/  cmd_parse/   规则管线与裁决组合；tree-sitter-bash 解析与特征提取
-        config/               三层加载 merge、TOML/DSL 编译进 Arc<RuleSet>
-类型层  model/                Cmd / Verdict / Decision
+装配层  main.rs               子命令分发（hook / serve / check / benchmark），仅此层知道运行角色
+适配层  channel.rs  service.rs  agent 契约适配；RuleSet 装配、端点监听与 connect-or-spawn 客户端、热重载、idle 退出、裁决日志
+核心层  engine.rs  cmd_parse.rs  管线原语与裁决组合；tree-sitter-bash 解析与特征提取
+        config/  lookup.rs  script.rs  knowledge.rs  lint.rs   发现/合并/查表/脚本沙箱/知识库/双层 lint
+类型层  model.rs              Decision / Verdict / 组合语义
 
-依赖方向：model ← cmd_parse/engine/config ← channel/service ← cli
+依赖方向：model ← cmd_parse/engine/config/knowledge ← lookup/script/lint ← channel/service ← main
 ```
 
 ### 分类器输入/输出契约（hook 协议）
