@@ -465,17 +465,94 @@ fn register_primitives(engine: &mut Engine, project: PathBuf, kb: Option<Arc<Kno
     engine.register_fn("kb_present", move || -> bool { kb_present.is_some() });
 }
 
-/// 加载项目层脚本 `.crush-tether/rules.rhai`（缺失 = 无脚本层，TOML 自足）。
-pub fn load_project_script(
+/// 脚本层链（design.md「配置拆分」：脚本层同文件按优先级，项目脚本最后
+/// 执行可作最终裁决）：用户层先、项目层后，前一层输出为后一层输入。
+/// 层标签用于日志溯源（`script.file` 区分两层文件）。
+pub struct ScriptChain {
+    /// 依执行序排列（user → project）。
+    engines: Vec<(&'static str, RhaiEngine)>,
+}
+
+impl ScriptChain {
+    /// 依层序评估整条链；任一层出错整体 `Err`（调用方 fail-safe confirm）。
+    /// 返回（最终裁决，生效裁决所在层标签——激活或改判的层，
+    /// 累积的最后一个原因说明）。
+    pub fn evaluate(
+        &self,
+        cmd: &SimpleCommand,
+        initial: Decision,
+        project: &Path,
+        pipe_to_shell: bool,
+    ) -> Result<(Decision, Option<&'static str>, Option<String>), ScriptError> {
+        let mut current = initial;
+        let mut layer: Option<&'static str> = None;
+        let mut reason = None;
+        for (tag, engine) in &self.engines {
+            let outcome = engine.evaluate(cmd, current, project, pipe_to_shell)?;
+            let activate = matches!(outcome, ScriptOutcome::Activate(_));
+            let (d, r) = finalize(current, outcome, engine.decls(), cmd, project);
+            if activate || d != current {
+                layer = Some(tag);
+            }
+            if r.is_some() {
+                reason = r;
+            }
+            current = d;
+        }
+        Ok((current, layer, reason))
+    }
+
+    /// 全链 `allow("…")` 字面量并集（lint 死声明检查的数据源）。
+    pub fn allow_literals(&self) -> Vec<String> {
+        let mut out: Vec<String> = Vec::new();
+        for (_, e) in &self.engines {
+            for lit in e.allow_literals() {
+                if !out.contains(lit) {
+                    out.push(lit.clone());
+                }
+            }
+        }
+        out
+    }
+}
+
+/// 加载脚本层链：用户层 `~/.config/crush-tether/rules.rhai` 先、项目层
+/// `.crush-tether/rules.rhai` 后（缺失 = 跳过该层；两层皆缺 = None，TOML
+/// 自足）。任一层损坏（含 script_allow 对账拒载）→ `Err` → fail-safe
+/// confirm。
+pub fn load_script_chain(
     project: &Path,
+    home: Option<&Path>,
+    kb: Option<Arc<KnowledgeBase>>,
+    decls: ScriptAllowDecls,
+) -> Result<Option<ScriptChain>, ScriptError> {
+    let mut engines = Vec::new();
+    if let Some(h) = home {
+        let path = h.join(".config").join("crush-tether").join("rules.rhai");
+        if let Some(e) =
+            load_optional_engine(&path, project.to_path_buf(), kb.clone(), decls.clone())?
+        {
+            engines.push(("user", e));
+        }
+    }
+    let path = project.join(".crush-tether").join("rules.rhai");
+    if let Some(e) = load_optional_engine(&path, project.to_path_buf(), kb, decls)? {
+        engines.push(("project", e));
+    }
+    Ok((!engines.is_empty()).then(|| ScriptChain { engines }))
+}
+
+/// 单层脚本加载：不存在（NotFound）→ None；读取失败或编译/对账拒载 → Err。
+fn load_optional_engine(
+    path: &Path,
+    project: PathBuf,
     kb: Option<Arc<KnowledgeBase>>,
     decls: ScriptAllowDecls,
 ) -> Result<Option<RhaiEngine>, ScriptError> {
-    let path = project.join(".crush-tether").join("rules.rhai");
-    match std::fs::read_to_string(&path) {
+    match std::fs::read_to_string(path) {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(e) => Err(ScriptError::Io(e)),
-        Ok(source) => RhaiEngine::compile(&source, project.to_path_buf(), kb, decls).map(Some),
+        Ok(source) => RhaiEngine::compile(&source, project, kb, decls).map(Some),
     }
 }
 
@@ -712,13 +789,14 @@ mod tests {
 
     #[test]
     fn missing_script_file_is_none_not_error() {
-        let r = load_project_script(
+        let r = load_script_chain(
             Path::new("D:/code/tmp/definitely-absent"),
+            Some(Path::new("D:/code/tmp/definitely-absent")),
             None,
             ScriptAllowDecls::default(),
         )
         .unwrap();
-        assert!(r.is_none(), "TOML 自足：脚本缺失不是错误");
+        assert!(r.is_none(), "TOML 自足：两层脚本皆缺失不是错误");
     }
 
     #[test]

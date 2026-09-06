@@ -37,7 +37,6 @@ use serde::{Deserialize, Serialize};
 
 use crate::lookup::RuleLookup;
 use crate::model::{Decision, Verdict};
-use crate::script::RuleEngine;
 
 /// 端点名：`crush-tether-<16hex(hash(canonical(project), engine, config))>`。
 /// DefaultHasher::new() 定种（SipHash 固定 key），跨进程稳定；`--config`
@@ -100,7 +99,7 @@ fn parse_decision(s: &str) -> Option<Decision> {
 /// 装配完成的规则快照（M4.2 起被 `Arc` 包裹原子换指针）。
 pub struct RuleSet {
     lookup: RuleLookup,
-    script: Option<crate::script::RhaiEngine>,
+    script: Option<crate::script::ScriptChain>,
     /// 知识库 main 是否在位（日志 `kb` 字段：[] = 删光自证）。
     pub kb_present: bool,
     /// 项目层 rules.toml 的 lint 告警（`type:"load"` 事件行内容）。
@@ -115,6 +114,8 @@ pub struct DecisionTrace {
     pub source: Option<crate::lookup::EntrySource>,
     pub normalized: Option<String>,
     pub script_changed: bool,
+    /// 生效脚本层标签（"user"/"project"；日志 script.file 溯源数据源）。
+    pub script_layer: Option<&'static str>,
 }
 
 impl RuleSet {
@@ -197,10 +198,12 @@ impl RuleSet {
             }
         };
 
-        // 脚本层：项目 rules.rhai（缺失 = 无脚本层，TOML 自足）。编译/加载
-        // 失败（含 script_allow 对账拒载）必须告警 + fail-safe confirm。
-        let script = match crate::script::load_project_script(
+        // 脚本层链：用户层先、项目层最后（design.md「配置拆分」；缺失 =
+        // 无该层，TOML 自足）。任一层编译/加载失败（含 script_allow 对账
+        // 拒载）必须告警 + fail-safe confirm。
+        let script = match crate::script::load_script_chain(
             project,
+            home.as_deref(),
             kb.map(|k| Arc::new(k.clone())),
             lookup.script_allow().clone(),
         ) {
@@ -211,14 +214,19 @@ impl RuleSet {
                 ));
             }
         };
-        // lint（M2.5 双层）：项目层 rules.toml + 脚本提取集；只告警不拒绝，
-        // 告警进 serve 的 `type:"load"` 事件行。
+        // lint（M2.5 双层）：项目层 rules.toml + 全链脚本提取集并集；只告警
+        // 不拒绝，告警进 serve 的 `type:"load"` 事件行。
         let lint_warnings = match &found {
-            Ok(l) => match (&l.project, &script) {
-                (Some(f), Some(s)) => crate::lint::lint_file(f, kb, s.allow_literals()),
-                (Some(f), None) => crate::lint::lint_file(f, kb, &[]),
-                _ => Vec::new(),
-            },
+            Ok(l) => {
+                let script_literals = script
+                    .as_ref()
+                    .map(|s| s.allow_literals())
+                    .unwrap_or_default();
+                match &l.project {
+                    Some(f) => crate::lint::lint_file(f, kb, &script_literals),
+                    None => Vec::new(),
+                }
+            }
             Err(_) => Vec::new(),
         };
         Ok(RuleSet {
@@ -253,24 +261,18 @@ impl RuleSet {
                     }
                 }
                 let (decision, reason) = match &self.script {
-                    Some(script) => {
-                        match script.evaluate(cmd, v0.decision, project, pipe_to_shell) {
-                            // 定稿点：deny 终审 + allow 激活作用域化逃逸检查的唯一出口。
-                            Ok(outcome) => {
-                                let activate =
-                                    matches!(outcome, crate::script::ScriptOutcome::Activate(_));
-                                let (d, r) = crate::script::finalize(
-                                    v0.decision,
-                                    outcome,
-                                    script.decls(),
-                                    cmd,
-                                    project,
-                                );
-                                // script 字段自证：激活或改判（含 deny 终审拦截）留痕；
-                                // 生效裁决出自脚本 → source.layer 换为 script（D-07 词表）。
-                                if activate || d != v0.decision {
+                    Some(chain) => {
+                        match chain.evaluate(cmd, v0.decision, project, pipe_to_shell) {
+                            // 链式定稿点：deny 终审 + allow 激活作用域化逃逸
+                            // 检查的唯一出口（用户层先、项目层最后）。
+                            Ok((d, layer, r)) => {
+                                // script 字段自证：激活或改判（含 deny 终审拦截）
+                                // 留痕；生效裁决出自脚本 → source.layer 换为
+                                // script（D-07 词表），层标签供 file 区分两层。
+                                if let Some(tag) = layer {
                                     let mut t = trace.borrow_mut();
                                     t.script_changed = true;
+                                    t.script_layer = Some(tag);
                                     t.source = Some(crate::lookup::EntrySource {
                                         layer: "script",
                                         entry: "script".into(),
@@ -411,7 +413,11 @@ pub fn log_verdict(
         "kb": if ctx.kb_present { serde_json::json!(["main"]) } else { serde_json::json!([]) },
         "normalized": trace.normalized,
         "script": {
-            "file": if trace.script_changed { serde_json::json!("rules.rhai") } else { serde_json::Value::Null },
+            "file": match trace.script_layer {
+                Some("user") => serde_json::json!("~/.config/crush-tether/rules.rhai"),
+                Some(_) => serde_json::json!("rules.rhai"),
+                None => serde_json::Value::Null,
+            },
             "rule": serde_json::Value::Null,
         },
     });
