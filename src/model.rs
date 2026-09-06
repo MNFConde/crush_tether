@@ -7,8 +7,11 @@ use std::fmt;
 /// `Confirm` 在 JSON 层输出为「无意见」（不输出 decision），走 agent 正常权限提示。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Decision {
+    /// 放行（输出 JSON decision 或静默 exit 0）。
     Allow,
+    /// 需人工确认（crush 下静默走正常权限流程）。
     Confirm,
+    /// 阻断（exit 2）。
     Deny,
 }
 
@@ -46,11 +49,14 @@ impl fmt::Display for Decision {
 /// 一条简单命令的分类结果（含可选原因，用于 deny/confirm 说明）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Verdict {
+    /// 单命令裁决档。
     pub decision: Decision,
+    /// 原因说明（deny/confirm 的 stderr/日志文案）。
     pub reason: Option<String>,
 }
 
 impl Verdict {
+    /// 无原因的放行。
     pub fn allow() -> Self {
         Verdict {
             decision: Decision::Allow,
@@ -58,6 +64,7 @@ impl Verdict {
         }
     }
 
+    /// 带原因的确认。
     pub fn confirm(reason: impl Into<String>) -> Self {
         Verdict {
             decision: Decision::Confirm,
@@ -65,6 +72,7 @@ impl Verdict {
         }
     }
 
+    /// 带原因的阻断。
     pub fn deny(reason: impl Into<String>) -> Self {
         Verdict {
             decision: Decision::Deny,

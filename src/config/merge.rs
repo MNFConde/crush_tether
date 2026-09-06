@@ -26,8 +26,11 @@ pub type Provenance = BTreeMap<String, &'static str>;
 /// `--config` 显式覆盖把 project 层标为 `explicit`）。
 #[derive(Debug, Clone, Copy)]
 pub struct LayerLabels {
+    /// 全局层标签。
     pub global: &'static str,
+    /// 用户层标签。
     pub user: &'static str,
+    /// 项目层标签（显式覆盖场景替换为 `explicit`）。
     pub project: &'static str,
 }
 
@@ -43,8 +46,11 @@ impl Default for LayerLabels {
 
 /// 三层输入（低 → 高：global → user → project）；`None` = 该层缺。
 pub struct Layers<'a> {
+    /// 全局层输入。
     pub global: Option<&'a RulesFile>,
+    /// 用户层输入。
     pub user: Option<&'a RulesFile>,
+    /// 项目层输入（最高效力）。
     pub project: Option<&'a RulesFile>,
 }
 
@@ -67,39 +73,54 @@ pub struct MergedRules {
     pub default: Option<Decision>,
     /// 兜底档生效层。
     pub default_layer: Option<&'static str>,
+    /// 桶间优先级（deny > confirm > allow 默认序，可被配置覆盖）。
     pub precedence: Vec<Decision>,
     /// script_allow 声明集（M4.0）。
     pub script_allow: ScriptAllowDecls,
+    /// [local] 作用域合并结果。
     pub local: MergedScope,
+    /// [global] 作用域合并结果。
     pub global: MergedScope,
 }
 
+/// 作用域合并结果：三桶 + 命令节 + 溯源映射。
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct MergedScope {
     /// 头部裸列表桶（整命令词条）。
     pub allow: Vec<String>,
+    /// confirm 头部裸列表桶。
     pub confirm: Vec<String>,
+    /// deny 头部裸列表桶。
     pub deny: Vec<String>,
     /// 本作用域 `script_allow` 顶级列表的合并结果（D-02 链）。
     pub script_allow: Vec<String>,
     /// 词条 → 生效层（source.layer 数据源）。
     pub prov: ScopeProvenance,
+    /// 命令节（规范 bin 名 → 合并结果）。
     pub commands: BTreeMap<String, MergedCommand>,
 }
 
 /// 作用域头部桶的溯源映射。
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ScopeProvenance {
+    /// allow 桶词条溯源。
     pub allow: Provenance,
+    /// confirm 桶词条溯源。
     pub confirm: Provenance,
+    /// deny 桶词条溯源。
     pub deny: Provenance,
+    /// script_allow 声明溯源。
     pub script_allow: Provenance,
 }
 
+/// 命令节合并结果：三桶两维度 + 兜底档 + script_allow 键。
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct MergedCommand {
+    /// allow 桶（sub/flag 两维度）。
     pub allow: Dims,
+    /// confirm 桶。
     pub confirm: Dims,
+    /// deny 桶。
     pub deny: Dims,
     /// 节内兜底档（含跨层继承链的最终结果）。
     pub default: Option<Decision>,
@@ -112,10 +133,13 @@ pub struct MergedCommand {
 /// 命令节一个桶的两个维度词条集。
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Dims {
+    /// 子命令维度词条。
     pub sub: Vec<String>,
+    /// flag 维度词条。
     pub flag: Vec<String>,
-    /// 词条 → 生效层。
+    /// sub 词条 → 生效层。
     pub sub_prov: Provenance,
+    /// flag 词条 → 生效层。
     pub flag_prov: Provenance,
 }
 
@@ -214,6 +238,7 @@ impl ScriptAllowDecls {
     }
 
     /// 全部已声明 bin（lint 死声明检查用；去重后的并集视图）。
+    /// 全部已声明 bin 名（去重，local + global）。
     pub fn bins(&self) -> impl Iterator<Item = &str> {
         self.global
             .iter()
@@ -221,6 +246,7 @@ impl ScriptAllowDecls {
             .map(String::as_str)
     }
 
+    /// 声明集是否为空。
     pub fn is_empty(&self) -> bool {
         self.local.is_empty() && self.global.is_empty()
     }

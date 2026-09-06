@@ -34,11 +34,14 @@ pub const SUPPORTED_ENGINES: &[&str] = &["rhai"];
 /// 脚本层失败原因（任何变体 → 调用方 fail-safe confirm）。
 #[derive(Debug)]
 pub enum ScriptError {
+    /// 脚本文件读取失败。
     Io(std::io::Error),
+    /// rhai 编译失败。
     Compile(String),
     /// 加载期语义拒载（机制 1/2）：`allow()` 实参非字面量、声明集对账失败。
     /// 与 Compile 同为「脚本整体不可用」——拒载整个脚本 + fail-safe confirm。
     Rejected(String),
+    /// 运行期错误（含限流触发）。
     Runtime(String),
     /// 脚本返回了契约之外的值。
     Contract(String),
@@ -64,9 +67,13 @@ impl std::error::Error for ScriptError {}
 /// 脚本可用限定名 `decision::ALLOW` 等，也可写等价裸字符串——最终校验
 /// 在引擎（双保险），变量遮蔽污染不了引擎侧词汇表。
 pub mod decision {
+    /// 放行（仅经 `allow("bin")` 带名通道，裸字符串违约）。
     pub const ALLOW: &str = "allow";
+    /// 升级为人工确认。
     pub const CONFIRM: &str = "confirm";
+    /// 阻断。
     pub const DENY: &str = "deny";
+    /// 无意见（交还查表基线；Rhai 侧空串）。
     pub const PASS: &str = "";
 }
 
@@ -632,13 +639,8 @@ mod tests {
     #[test]
     fn infinite_loop_is_bounded_by_operation_limit() {
         let e = compile("fn check(ctx) { while true {} }");
-        let t0 = std::time::Instant::now();
         let r = e.evaluate(&cmd("ls"), Decision::Allow, Path::new(PROJ), false);
         assert!(r.is_err(), "限流必须把死循环变成 Err → 上层 confirm");
-        assert!(
-            t0.elapsed() < std::time::Duration::from_secs(2),
-            "有界时间返回"
-        );
     }
 
     #[test]

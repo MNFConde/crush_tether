@@ -36,8 +36,11 @@ pub struct RuleLookup {
 
 /// 单命令查表结果：裁决 + 归一链（kb 日志字段）+ 命中溯源（source 字段）。
 pub struct Classification {
+    /// 单命令裁决。
     pub verdict: Verdict,
+    /// 归一链（日志 kb/normalized 字段；空 = 未归一）。
     pub kb_chain: Vec<String>,
+    /// 命中溯源（日志 source 字段）。
     pub source: Option<EntrySource>,
 }
 
@@ -575,9 +578,9 @@ mod tests {
     #[test]
     fn head_buckets_decide_by_list_membership() {
         let l = lookup(BASE);
-        assert!(classify(&l, "ls").decision == Decision::Allow);
-        assert!(classify(&l, "curl").decision == Decision::Confirm);
-        assert!(classify(&l, "sudo x").decision == Decision::Deny);
+        assert_eq!(classify(&l, "ls").decision, Decision::Allow);
+        assert_eq!(classify(&l, "curl").decision, Decision::Confirm);
+        assert_eq!(classify(&l, "sudo x").decision, Decision::Deny);
     }
 
     #[test]
@@ -594,8 +597,8 @@ mod tests {
             "deny.sub = [\"push\"]\n",
         );
         let l = lookup(src);
-        assert!(classify(&l, "git status").decision == Decision::Allow);
-        assert!(classify(&l, "git push").decision == Decision::Deny);
+        assert_eq!(classify(&l, "git status").decision, Decision::Allow);
+        assert_eq!(classify(&l, "git push").decision, Decision::Deny);
         assert!(
             classify(&l, "git fetchall").decision == Decision::Confirm,
             "落节内 default，不被头部 confirm 捕获"
@@ -606,16 +609,22 @@ mod tests {
     fn multi_dimension_hits_synth_by_precedence() {
         // show 命中 allow.sub，--output 命中 confirm.flag → confirm 胜出。
         let l = lookup(BASE);
-        assert!(classify(&l, "git show --output=x").decision == Decision::Confirm);
-        assert!(classify(&l, "git show -o out.txt").decision == Decision::Confirm);
-        assert!(classify(&l, "git show").decision == Decision::Allow);
+        assert_eq!(
+            classify(&l, "git show --output=x").decision,
+            Decision::Confirm
+        );
+        assert_eq!(
+            classify(&l, "git show -o out.txt").decision,
+            Decision::Confirm
+        );
+        assert_eq!(classify(&l, "git show").decision, Decision::Allow);
     }
 
     #[test]
     fn deny_flag_beats_confirm_sub() {
         let l = lookup(BASE);
-        assert!(classify(&l, "git reset").decision == Decision::Confirm);
-        assert!(classify(&l, "git reset --hard").decision == Decision::Deny);
+        assert_eq!(classify(&l, "git reset").decision, Decision::Confirm);
+        assert_eq!(classify(&l, "git reset --hard").decision, Decision::Deny);
     }
 
     #[test]
@@ -630,13 +639,16 @@ mod tests {
             "confirm.flag = [\"--output\"]\n",
         );
         let l = lookup(src);
-        assert!(classify(&l, "git show --output=x").decision == Decision::Allow);
+        assert_eq!(
+            classify(&l, "git show --output=x").decision,
+            Decision::Allow
+        );
     }
 
     #[test]
     fn local_allow_hits_carry_escape_check() {
         let l = lookup(BASE);
-        assert!(classify(&l, "ls").decision == Decision::Allow);
+        assert_eq!(classify(&l, "ls").decision, Decision::Allow);
         assert!(
             classify(&l, "ls /outside/x").decision == Decision::Confirm,
             "[local] allow 命中带路径逃逸检查"
@@ -645,7 +657,7 @@ mod tests {
             classify(&l, "git status /outside/x").decision == Decision::Confirm,
             "节内 allow.sub 命中同样带逃逸检查"
         );
-        assert!(classify(&l, "git status").decision == Decision::Allow);
+        assert_eq!(classify(&l, "git status").decision, Decision::Allow);
     }
 
     #[test]
@@ -679,28 +691,28 @@ mod tests {
     #[test]
     fn section_default_overrides_top_default() {
         let l = lookup(BASE);
-        assert!(classify(&l, "npm publish").decision == Decision::Confirm);
+        assert_eq!(classify(&l, "npm publish").decision, Decision::Confirm);
         assert!(
             classify(&l, "npm run server").decision == Decision::Allow,
             "节内 default=allow 覆盖顶层 confirm"
         );
-        assert!(classify(&l, "npm unknown-thing").decision == Decision::Allow);
+        assert_eq!(classify(&l, "npm unknown-thing").decision, Decision::Allow);
     }
 
     #[test]
     fn unmatched_bin_falls_to_top_default_then_fail_safe() {
         let l = lookup(BASE);
-        assert!(classify(&l, "mystery-cli x").decision == Decision::Confirm);
+        assert_eq!(classify(&l, "mystery-cli x").decision, Decision::Confirm);
 
         // 无 default：fail-safe confirm（不误放行）。
         let l = lookup("version = 1\n[local]\nallow = [\"ls\"]");
-        assert!(classify(&l, "mystery-cli").decision == Decision::Confirm);
+        assert_eq!(classify(&l, "mystery-cli").decision, Decision::Confirm);
     }
 
     #[test]
     fn empty_rules_fail_safe_to_confirm() {
         let l = lookup("version = 1");
-        assert!(classify(&l, "ls").decision == Decision::Confirm);
+        assert_eq!(classify(&l, "ls").decision, Decision::Confirm);
     }
 
     #[test]
@@ -717,7 +729,7 @@ mod tests {
         );
         let v =
             crate::engine::decide_with("ls && sudo rm x", &project, &|c, p, _| l.classify(c, p));
-        assert!(v.decision == Decision::Deny, "任一 deny → 组合 deny");
+        assert_eq!(v.decision, Decision::Deny, "任一 deny → 组合 deny");
         let v = crate::engine::decide_with("ls && curl example.com", &project, &|c, p, _| {
             l.classify(c, p)
         });
@@ -767,7 +779,7 @@ mod tests {
         let rules = "version = 1\ndefault = \"confirm\"\n[local]\nallow = [\"pip\"]";
         let l = lookup_kb(rules, KB_MAIN);
         let c = l.classify_traced(&cmd("pip3 --version"), Path::new(PROJ));
-        assert!(c.verdict.decision == Decision::Allow);
+        assert_eq!(c.verdict.decision, Decision::Allow);
         assert_eq!(c.kb_chain, ["pip3", "pip"], "归一链记录改写路径");
 
         let l_plain = lookup(rules);
@@ -782,9 +794,9 @@ mod tests {
         // npm exec/x foo 与 pnpm dlx y → npx …（bin+子命令 → 目标 bin）。
         let rules = "version = 1\n[local]\nconfirm = [\"npx\"]";
         let l = lookup_kb(rules, KB_MAIN);
-        assert!(classify(&l, "npm exec foo").decision == Decision::Confirm);
-        assert!(classify(&l, "npm x foo").decision == Decision::Confirm);
-        assert!(classify(&l, "pnpm dlx y").decision == Decision::Confirm);
+        assert_eq!(classify(&l, "npm exec foo").decision, Decision::Confirm);
+        assert_eq!(classify(&l, "npm x foo").decision, Decision::Confirm);
+        assert_eq!(classify(&l, "pnpm dlx y").decision, Decision::Confirm);
         // 归一只改名字：目标 bin 无配置时按 default 走，不放大权限。
         let rules2 = "version = 1\ndefault = \"confirm\"\n[local]\nallow = [\"npm\"]";
         let l2 = lookup_kb(rules2, KB_MAIN);
@@ -804,12 +816,12 @@ mod tests {
             "confirm.flag = [\"-f\"]\n",
         );
         let l = lookup_kb(rules, KB_MAIN);
-        assert!(classify(&l, "git add").decision == Decision::Allow);
+        assert_eq!(classify(&l, "git add").decision, Decision::Allow);
         assert!(
             classify(&l, "git add --force").decision == Decision::Confirm,
             "配置只写规范形 -f，--force 经归一命中"
         );
-        assert!(classify(&l, "git add -f").decision == Decision::Confirm);
+        assert_eq!(classify(&l, "git add -f").decision, Decision::Confirm);
 
         // 反向单边：配置写别名 --force，命令用 -f 也命中。
         let rules_rev = concat!(
@@ -820,7 +832,7 @@ mod tests {
             "confirm.flag = [\"--force\"]\n",
         );
         let l_rev = lookup_kb(rules_rev, KB_MAIN);
-        assert!(classify(&l_rev, "git add -f").decision == Decision::Confirm);
+        assert_eq!(classify(&l_rev, "git add -f").decision, Decision::Confirm);
     }
 
     #[test]
@@ -859,6 +871,6 @@ mod tests {
         let l = lookup(BASE);
         let c = l.classify_traced(&cmd("ls"), Path::new(PROJ));
         assert_eq!(c.kb_chain, Vec::<String>::new(), "kb:[] = 归一未生效");
-        assert!(c.verdict.decision == Decision::Allow);
+        assert_eq!(c.verdict.decision, Decision::Allow);
     }
 }

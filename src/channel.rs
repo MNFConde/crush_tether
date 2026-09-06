@@ -12,7 +12,9 @@ use crate::model::{Decision, Verdict};
 /// 支持的 agent 适配器。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Agent {
+    /// Crush：stdin JSON + `CRUSH_PROJECT_DIR`，allow/deny JSON 输出。
     Crush,
+    /// ClaudeCode：stdin JSON `cwd` 基准 + `permissionDecision` 信封。
     ClaudeCode,
     /// zcode（M5.3）：hook 协议与 ClaudeCode 同构——信封薄变体复用，
     /// 输入侧按 `ZCODE_PROJECT_DIR`/`CLAUDE_PROJECT_DIR`/stdin `cwd` 容差链
@@ -58,10 +60,14 @@ impl Agent {
 ///   stdin `cwd` 优先、回退 `CLAUDE_PROJECT_DIR`；zcode：env 首选
 ///   （`ZCODE_PROJECT_DIR` 别名链）、stdin `cwd` 兜底。
 pub struct HookInput {
+    /// 待裁决命令正文（stdin `tool_input.command`，env 兜底）。
     pub command: String,
+    /// 项目目录（agent 注入；None = 调用方按项目根解析兜底）。
     pub project_dir: Option<String>,
 }
 
+/// 读 hook 输入（stdin JSON / env）；读不到命令 → `None`（调用方保守
+/// confirm 走 agent 正常权限流程）。
 pub fn read_hook_input(agent: Agent) -> Option<HookInput> {
     let from_env_command = || {
         std::env::var("CRUSH_TOOL_INPUT_COMMAND")
@@ -110,6 +116,8 @@ pub fn read_hook_input(agent: Agent) -> Option<HookInput> {
     })
 }
 
+/// 按契约输出裁决并返回 exit code：allow/confirm = 0（confirm 对 crush
+/// 静默）、deny = 2。
 pub fn emit(verdict: &Verdict, agent: Agent) -> u8 {
     let hook_envelope = |decision: &str| {
         println!(

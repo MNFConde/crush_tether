@@ -74,10 +74,14 @@ pub fn endpoint_name(project: &Path, engine: &str, config: Option<&str>) -> Stri
 /// 请求行：`{id, op:"check", command, agent}` / `{id, op:"ping"}`。
 #[derive(Debug, Serialize, Deserialize)]
 pub struct RequestLine {
+    /// 请求序号（v1 一连接一请求恒 1）。
     pub id: u64,
+    /// `"check"`（出裁决）或 `"ping"`（存活探测）。
     pub op: String,
+    /// 待裁决命令正文。
     #[serde(default)]
     pub command: String,
+    /// 调用方 agent 名（日志溯源）。
     #[serde(default)]
     pub agent: String,
 }
@@ -85,9 +89,12 @@ pub struct RequestLine {
 /// 响应行：`verdict = None` 表示无裁决（ping 应答）。
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ResponseLine {
+    /// 对应请求的序号。
     pub id: u64,
+    /// 裁决（ping 应答/出错时为 None）。
     #[serde(default)]
     pub verdict: Option<VerdictDto>,
+    /// 带内报错（畸形请求/未知 op）。
     #[serde(default)]
     pub error: Option<String>,
 }
@@ -95,7 +102,9 @@ pub struct ResponseLine {
 /// 裁决传输形态（decision ∈ allow/confirm/deny）。
 #[derive(Debug, Serialize, Deserialize)]
 pub struct VerdictDto {
+    /// 裁决档（词汇单源见 `Decision::parse`）。
     pub decision: String,
+    /// 原因说明。
     #[serde(default)]
     pub reason: Option<String>,
 }
@@ -111,7 +120,12 @@ fn parse_decision(s: &str) -> Option<Decision> {
 #[derive(Debug)]
 pub enum RuleSetError {
     /// 显式 `--config` 文件加载失败。
-    ExplicitConfig { path: PathBuf, source: String },
+    ExplicitConfig {
+        /// 显式配置路径。
+        path: PathBuf,
+        /// 底层加载失败原因。
+        source: String,
+    },
     /// 三层发现路径加载失败。
     Config(String),
     /// 脚本层 rules.rhai 编译 / script_allow 对账拒载。
@@ -160,8 +174,11 @@ pub struct RuleSet {
 /// 单命令裁决的溯源信息（日志 source/normalized/script 字段数据源）。
 #[derive(Debug, Default, Clone)]
 pub struct DecisionTrace {
+    /// 表裁决命中溯源（脚本改判时换为 layer=script）。
     pub source: Option<crate::lookup::EntrySource>,
+    /// 归一链（日志 normalized 字段）。
     pub normalized: Option<String>,
+    /// 脚本激活/改判留痕。
     pub script_changed: bool,
     /// 生效脚本层标签（"user"/"project"；日志 script.file 溯源数据源）。
     pub script_layer: Option<&'static str>,
@@ -409,7 +426,9 @@ fn log_jsonl(project: &Path, value: &serde_json::Value) {
 
 /// 裁决日志的装配上下文（调用方运行形态 + 快照可观测切片）。
 pub struct LogContext<'a> {
+    /// 运行模式（check/hook/serve/benchmark）。
     pub mode: &'a str,
+    /// 调用方 agent 名。
     pub agent: &'a str,
     /// 知识库 main 是否在位（日志 `kb` 字段：[] = 删光自证）。
     pub kb_present: bool,

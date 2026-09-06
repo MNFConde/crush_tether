@@ -114,8 +114,11 @@ pub struct ScopeTable {
 /// 作用域表的头部裸列表三桶。
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ScopeBuckets {
+    /// allow 头部裸列表。
     pub allow: Option<ListField>,
+    /// confirm 头部裸列表。
     pub confirm: Option<ListField>,
+    /// deny 头部裸列表。
     pub deny: Option<ListField>,
 }
 
@@ -138,16 +141,22 @@ pub struct CommandSection {
 /// 命令节内一个桶的维度：`sub`（子命令）/ `flag`（flag 词条）。
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct BucketSpec {
+    /// 子命令维度词条。
     pub sub: Option<ListField>,
+    /// flag 维度词条。
     pub flag: Option<ListField>,
 }
 
 /// 列表值双形态（D-02）：`Set` = 数组覆盖定义；`Delta` = 继承低层并增删。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ListField {
+    /// 数组形态：覆盖定义（本份就是全部）。
     Set(Vec<String>),
+    /// inline table 形态：继承低层并增删。
     Delta {
+        /// 增量追加词条。
         add: Option<Vec<String>>,
+        /// 剔除词条（flag 桶支持）。
         remove: Option<Vec<String>>,
     },
 }

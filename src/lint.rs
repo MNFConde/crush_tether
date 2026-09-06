@@ -20,16 +20,20 @@ use crate::model::Decision;
 /// 告警级别：结构错误/死配置 = 告警；改进建议 = 提示。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LintSeverity {
+    /// 结构错误/死配置。
     Warning,
+    /// 改进建议。
     Suggestion,
 }
 
 /// 一条 lint 结果。
 #[derive(Debug, Clone)]
 pub struct Lint {
+    /// 告警级别。
     pub severity: LintSeverity,
     /// 机器可读代号（load 事件行/测试断言用）。
     pub code: &'static str,
+    /// 人读描述。
     pub message: String,
 }
 

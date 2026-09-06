@@ -13,9 +13,26 @@ fn hook(project: &Path, command: &str) -> (String, i32) {
     (r.stdout, r.code)
 }
 
-fn wait_reload() {
-    // debounce 600ms + 通知传播 + 余量。
-    std::thread::sleep(Duration::from_millis(1500));
+/// 轮询 hook 直到满足条件（watcher debounce + 事件传播在慢 CI 上时间
+/// 不定，固定 sleep 会 flaky）。
+fn wait_until(project: &Path, mut pred: impl FnMut(&str, i32) -> bool, what: &str) {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let (out, code) = hook(project, "ls");
+        if pred(&out, code) {
+            return;
+        }
+        assert!(Instant::now() < deadline, "超时：{what}");
+        std::thread::sleep(Duration::from_millis(200));
+    }
+}
+
+fn deny(out: &str, code: i32) -> bool {
+    out.trim().is_empty() && code == 2
+}
+
+fn allow(out: &str, _code: i32) -> bool {
+    out.trim() == "{\"decision\":\"allow\"}"
 }
 
 #[test]
@@ -34,28 +51,24 @@ fn hot_reload_picks_up_rule_changes_without_restart() {
         "version = 1\ndefault = \"confirm\"\n[local]\ndeny = [\"ls\"]\n",
     )
     .expect("write deny rules");
-    wait_reload();
-    let (out, code) = hook(proj.path(), "ls");
-    assert!(out.trim().is_empty() && code == 2, "改规则即生效 → deny");
+    wait_until(proj.path(), deny, "改规则即生效 → deny");
 
-    // 坏文件期间：重载失败保留旧快照 → 仍 deny（绝不半更新、绝不误放行）。
+    // 坏文件期间：无论重载是否已尝试，任何请求都只能看到旧快照 deny
+    //（重载失败保留旧快照，绝不半更新、绝不误放行）。
     std::fs::write(&rules, "not toml {{{{").expect("write broken rules");
-    wait_reload();
     let (out, code) = hook(proj.path(), "ls");
     assert!(
         out.trim().is_empty() && code == 2,
         "坏文件保留旧快照 → 仍 deny"
     );
 
-    // 修复为 allow → 再生效。
+    // 修复为 allow → 再生效（debounce 可能聚并前两次写入，最终态生效）。
     std::fs::write(
         &rules,
         "version = 1\ndefault = \"confirm\"\n[local]\nallow = [\"ls\"]\n",
     )
     .expect("write allow rules");
-    wait_reload();
-    let (out, _code) = hook(proj.path(), "ls");
-    assert_eq!(out.trim(), "{\"decision\":\"allow\"}", "修复后回到 allow");
+    wait_until(proj.path(), allow, "修复后回到 allow");
 }
 
 #[test]
@@ -76,16 +89,9 @@ fn hot_reload_waits_for_write_quiescence() {
         std::thread::sleep(Duration::from_millis(100));
     }
     // 在 debounce 窗口内的请求仍用旧快照（默认包 allow），随后新快照生效。
-    let deadline = Instant::now() + Duration::from_secs(6);
-    loop {
-        let (out, code) = hook(proj.path(), "ls");
-        if out.trim().is_empty() && code == 0 {
-            break; // confirm 生效 → 新快照已换上
-        }
-        assert!(
-            Instant::now() < deadline,
-            "debounce 后新快照应生效（confirm 静默）"
-        );
-        std::thread::sleep(Duration::from_millis(300));
-    }
+    wait_until(
+        proj.path(),
+        |out, code| out.trim().is_empty() && code == 0,
+        "debounce 后新快照应生效（confirm 静默）",
+    );
 }

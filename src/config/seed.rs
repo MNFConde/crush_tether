@@ -85,27 +85,7 @@ mod tests {
     use crate::script::RuleEngine;
     use std::path::PathBuf;
 
-    struct TempDir(PathBuf);
-
-    impl TempDir {
-        fn new(tag: &str) -> Self {
-            let d =
-                std::env::temp_dir().join(format!("crush-tether-m26-{}-{tag}", std::process::id()));
-            let _ = std::fs::remove_dir_all(&d);
-            std::fs::create_dir_all(&d).expect("create temp dir");
-            TempDir(d)
-        }
-
-        fn path(&self) -> &Path {
-            &self.0
-        }
-    }
-
-    impl Drop for TempDir {
-        fn drop(&mut self) {
-            let _ = std::fs::remove_dir_all(&self.0);
-        }
-    }
+    use crate::testutil::TempDir;
 
     #[test]
     fn templates_parse_with_own_loader() {
@@ -119,7 +99,7 @@ mod tests {
 
     #[test]
     fn seeds_all_pack_files_then_is_idempotent() {
-        let proj = TempDir::new("seed");
+        let proj = TempDir::new("m26", "seed");
         assert_eq!(seed_defaults_if_absent(proj.path()).unwrap(), 3);
         let rules_path = proj.path().join(".crush-tether").join("rules.toml");
         let before = std::fs::read_to_string(&rules_path).unwrap();
@@ -173,7 +153,7 @@ mod tests {
 
     #[test]
     fn existing_files_are_never_touched() {
-        let proj = TempDir::new("respect");
+        let proj = TempDir::new("m26", "respect");
         let dir = proj.path().join(".crush-tether");
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(
@@ -195,7 +175,7 @@ mod tests {
 
     #[test]
     fn concurrent_seeding_converges_to_same_bytes() {
-        let proj = TempDir::new("race");
+        let proj = TempDir::new("m26", "race");
         let root: PathBuf = proj.path().to_path_buf();
         let handles: Vec<_> = (0..8)
             .map(|_| {

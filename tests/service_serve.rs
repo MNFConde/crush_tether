@@ -12,37 +12,41 @@ mod common;
 
 use std::time::{Duration, Instant};
 
-use common::{KillOnDrop, TempDir, run_mode_env, spawn_serve};
+use common::{TempDir, run_mode_env, spawn_serve};
 
 const CHECK_INTERVAL: Duration = Duration::from_millis(100);
-
-fn try_wait_all(children: &mut [&mut KillOnDrop]) -> bool {
-    children
-        .iter_mut()
-        .all(|c| c.0.try_wait().expect("try_wait").is_some())
-}
 
 #[test]
 fn thundering_herd_converges_to_single_instance() {
     let proj = TempDir::new("m41-herd");
-    // c1/c2/c3 之一是赢家；c2/c3 已确认退出。c1 持有候选赢家，Drop 时回收。
-    let _c1 = spawn_serve(proj.path(), "2", None);
-    let mut c2 = spawn_serve(proj.path(), "2", None);
-    let mut c3 = spawn_serve(proj.path(), "2", None);
+    // 不变量：并发冷启动后「恰好一个存活」，其余静默退出 0——赢家由独占
+    // bind 竞争决定，测试不预设是哪一个。
+    let mut herd = [
+        spawn_serve(proj.path(), "10", None),
+        spawn_serve(proj.path(), "10", None),
+        spawn_serve(proj.path(), "10", None),
+    ];
 
-    // 输者（除赢家外的两个）应在有界时间内静默退出。
+    // 恰好两个退出（输者应有界退出）。
     let deadline = Instant::now() + Duration::from_secs(10);
-    while Instant::now() < deadline {
-        if try_wait_all(&mut [&mut c2, &mut c3]) {
+    loop {
+        let mut exited = 0;
+        for c in herd.iter_mut() {
+            if c.0.try_wait().expect("try_wait").is_some() {
+                exited += 1;
+            }
+        }
+        if exited == 2 {
             break;
         }
+        assert!(Instant::now() < deadline, "两个输者应有界退出");
         std::thread::sleep(CHECK_INTERVAL);
     }
-    let code2 = c2.0.try_wait().expect("try_wait").and_then(|s| s.code());
-    let code3 = c3.0.try_wait().expect("try_wait").and_then(|s| s.code());
-    assert_eq!(code2, Some(0), "输者静默退出 0");
-    assert_eq!(code3, Some(0), "输者静默退出 0");
-
+    for c in herd.iter_mut() {
+        if let Some(status) = c.0.try_wait().expect("try_wait") {
+            assert_eq!(status.code(), Some(0), "输者静默退出 0");
+        }
+    }
     // 赢家存活着服务本项目：hook 路径连上并出裁决（ls → 默认包 allow）。
     let r = run_mode_env(proj.path(), "hook", &[], "ls", &[]);
     assert_eq!(

@@ -31,7 +31,9 @@ pub const SUPPORTED_VERSION: u64 = 1;
 /// 一份完整的 `knowledge.toml`。
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct KnowledgeBase {
+    /// 配置文件格式（schema）版本。
     pub version: u64,
+    /// 命令名 → 知识条目。
     pub bins: BTreeMap<String, BinEntry>,
 }
 
@@ -60,7 +62,9 @@ pub struct BinEntry {
 pub struct SubEntry {
     /// 子命令级别名：bin+子命令 → 目标 bin（`npm exec` → `npx`）。
     pub alias_of: Option<String>,
+    /// 有写的可能（lint 建议）。
     pub may_write: Option<bool>,
+    /// 带这些 flag 才会写（lint 建议）。
     pub write_flags: Option<Vec<String>>,
     /// 这些 token 出现即写形态（默认 rules.rhai 数据源）。
     pub write_tokens: Option<Vec<String>>,
@@ -218,10 +222,12 @@ pub struct CanonMaps {
 }
 
 impl CanonMaps {
+    /// 空映射（知识库缺席时的降级形态：一切词条按原样查）。
     pub fn empty() -> Self {
         Self::default()
     }
 
+    /// bin 别名 → 规范形（未登记返回原名）。
     pub fn canon_bin(&self, bin: &str) -> String {
         self.bin
             .get(bin)
@@ -229,6 +235,7 @@ impl CanonMaps {
             .unwrap_or_else(|| bin.to_string())
     }
 
+    /// flag 别名 → 规范形（same_flag 闭包；未登记返回原词）。
     pub fn canon_flag(&self, bin: &str, flag: &str) -> String {
         self.flag
             .get(bin)

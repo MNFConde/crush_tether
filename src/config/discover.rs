@@ -20,7 +20,9 @@ use crate::knowledge::KnowledgeBase;
 pub struct FoundLayers {
     /// v1 恒 None（无发现路径），为后期设计留位。
     pub global: Option<RulesFile>,
+    /// 用户层规则（`~/.config/crush-tether/rules.toml`）。
     pub user: Option<RulesFile>,
+    /// 项目层规则（`<project>/.crush-tether/rules.toml`）。
     pub project: Option<RulesFile>,
     /// 知识库 main：项目层 `.crush-tether/knowledge.toml`（v1 单文件，随默认
     /// 配置生成落盘）。`Arc` 共享：RuleSet 装配的多处消费免深克隆。
@@ -138,31 +140,11 @@ mod tests {
     use crate::config::schema::ListField;
     use crate::model::Decision;
 
-    struct TempDir(PathBuf);
-
-    impl TempDir {
-        fn new(tag: &str) -> Self {
-            let d =
-                std::env::temp_dir().join(format!("crush-tether-m22-{}-{tag}", std::process::id()));
-            let _ = std::fs::remove_dir_all(&d);
-            std::fs::create_dir_all(&d).expect("create temp dir");
-            TempDir(d)
-        }
-
-        fn path(&self) -> &Path {
-            &self.0
-        }
-    }
-
-    impl Drop for TempDir {
-        fn drop(&mut self) {
-            let _ = std::fs::remove_dir_all(&self.0);
-        }
-    }
+    use crate::testutil::TempDir;
 
     #[test]
     fn project_root_walks_up_to_nearest_marker() {
-        let root = TempDir::new("walkup");
+        let root = TempDir::new("m22", "walkup");
         let nested = root.path().join("a").join("b");
         std::fs::create_dir_all(&nested).unwrap();
         std::fs::create_dir_all(root.path().join(".git")).unwrap();
@@ -172,7 +154,7 @@ mod tests {
 
     #[test]
     fn project_root_walks_up_to_crush_tether_dir() {
-        let root = TempDir::new("walkup-ct");
+        let root = TempDir::new("m22", "walkup-ct");
         let nested = root.path().join("x");
         std::fs::create_dir_all(&nested).unwrap();
         std::fs::create_dir_all(root.path().join(".crush-tether")).unwrap();
@@ -182,7 +164,7 @@ mod tests {
 
     #[test]
     fn project_root_falls_back_to_start_without_marker() {
-        let plain = TempDir::new("plain");
+        let plain = TempDir::new("m22", "plain");
         let nested = plain.path().join("deep");
         std::fs::create_dir_all(&nested).unwrap();
 
@@ -191,8 +173,8 @@ mod tests {
 
     #[test]
     fn discover_layers_reads_user_and_project_layers() {
-        let home = TempDir::new("home");
-        let proj = TempDir::new("proj");
+        let home = TempDir::new("m22", "home");
+        let proj = TempDir::new("m22", "proj");
         let user_cfg = home.path().join(".config").join("crush-tether");
         std::fs::create_dir_all(&user_cfg).unwrap();
         std::fs::write(
@@ -221,15 +203,15 @@ mod tests {
 
     #[test]
     fn discover_layers_all_absent_when_no_files() {
-        let home = TempDir::new("home-empty");
-        let proj = TempDir::new("proj-empty");
+        let home = TempDir::new("m22", "home-empty");
+        let proj = TempDir::new("m22", "proj-empty");
         let found = discover_layers(Some(proj.path()), Some(home.path())).unwrap();
         assert!(found.all_absent());
     }
 
     #[test]
     fn discover_layers_skips_layer_without_home() {
-        let proj = TempDir::new("proj-nohome");
+        let proj = TempDir::new("m22", "proj-nohome");
         let found = discover_layers(Some(proj.path()), None).unwrap();
         assert!(found.user.is_none());
         assert!(found.all_absent());
@@ -238,7 +220,7 @@ mod tests {
     #[test]
     fn discover_layers_broken_file_is_error_not_absence() {
         // 损坏 ≠ 缺失（D-03）：存在但解析失败 → 整体 Err，调用方 fail-safe。
-        let proj = TempDir::new("proj-broken");
+        let proj = TempDir::new("m22", "proj-broken");
         let proj_cfg = proj.path().join(".crush-tether");
         std::fs::create_dir_all(&proj_cfg).unwrap();
         std::fs::write(proj_cfg.join("rules.toml"), "version = 1\nalow = []").unwrap();
