@@ -2,6 +2,15 @@
 
 This file records substantive progress in reverse-chronological order — newest entry at the top, right below this line. Keep each entry short — summary and pointer only; conclusions settle into `cairn/<topic>.md`.
 
+## 2026-09-06 · M4.0 落地：script_allow 全链路（声明文法 + 五件套 + lint + 词汇约定）
+
+- 五笔提交：4555cc1（默认包缺口，前置）→ f466b25（decision:: 四常量含 PASS + ctx.sub 空串约定）→ 64ef27b（声明文法双形态 + 声明集合并，两表皆现 global 胜）→ f8496d0（allow("bin") 原语 + 五件套 + finalize 定稿点）→ b88f70d（lint 三条）。端到端 `tests/script_allow.rs`：local 逃逸→confirm / global 逃逸→allow / 拒载 fail-safe / deny 终审，全绿。
+- **实现教训 1**：`return allow("x")` 会被 rhai 优化器折叠为语句级 `Stmt::FnCall`，该形态不再作为 Expr 节点被 `AST::walk` 访问——提取集必须对 `ASTNode::Stmt(Stmt::FnCall)` 单独布点（探针实证，否则字面量提取静默漏报）。
+- **实现教训 2**：字符串拼接实参（`"c"+"url"`）被常量折叠为字面量后进入提取集——静态提取与运行值恒一致（审计面不缩小），「拼接 → 拒载」的原始直觉按折叠后语义执行。
+- **实现教训 3**：字面量提取启用 rhai `internals` feature（`AST::walk` 含函数体；`ScriptFuncPayload` 未在根导出，手写遍历器无法覆盖函数体）。rhai 锁版钉死，升级须回归（机制 3 运行时双保险兜底）。
+- **已知边界**：定稿点逃逸检查与查表层同原语（命令参数词元），重定向目标不在词元内——脚本激活 + 重定向逃逸目标的组合由脚本侧激活条件把关（正当用例即「写重定向到仓库内放行」）。
+- Details: `src/script.rs`（finalize/extract）、`src/config/{schema,merge}.rs`、`src/lint.rs`、`tests/script_allow.rs`、design.md 更正登记 11。
+
 ## 2026-09-06 · 默认包缺口补齐（M3.3 挂账消解，M4.0 前置 docs 小步）
 
 - 知识库 `[git]` 补 `sub.remote`/`sub.tag` 的 `write_tokens`（忠实平移 guard.py `GIT_ACTION`；裸创建 `git tag <名>` 原工具同样不算写，故不引入 write_arg_count）；`[local]` 补 deny 裸列表四族（sudo/dd/shutdown/mkfs.*——guard.py `DESTRUCTIVE` 收窄，`rm` 保留 confirm 档，reboot/halt/parted 留项目自补）。用户拍板推荐值。
