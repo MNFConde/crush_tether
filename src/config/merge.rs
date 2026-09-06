@@ -136,8 +136,7 @@ pub fn merge_with_labels(layers: Layers<'_>, labels: LayerLabels) -> MergedRules
         .iter()
         .zip(layer_names.iter())
         .rev()
-        .find(|(f, _)| f.is_some())
-        .and_then(|(f, l)| f.as_ref().map(|_| *l));
+        .find_map(|(f, l)| f.and_then(|f| f.default).map(|_| *l));
     let precedence = low_to_high
         .iter()
         .rev()
