@@ -7,10 +7,14 @@
 //!   文件/进程/网络 API。
 //! - 限流（定稿要求）：`max_operations` / `max_call_levels` /
 //!   `max_expr_depths` + 字符串/数组上限——死循环或 OOM 尝试被有界拦截。
-//! - 脚本契约：入口 `fn check(ctx) -> string`，返回 `decision::PASS`（即
-//!   空串，无意见，保留查表裁决）/ `"allow"` / `"confirm"` / `"deny"`（等价
-//!   词汇 `decision::` 常量见 [`decision`]）；其他返回值、编译错误、
-//!   运行时错误、限流触发一律由调用方映射为 fail-safe confirm。
+//! - 脚本契约：入口 `fn check(ctx)` 返回**决策值**——`decision::` 四常量
+//!   （类型化 [`ScriptDecision`]，构造封闭；`PASS` = 无意见，保留查表裁决，
+//!   Lua 侧映射 nil）或等价裸字符串（返回边界统一解析，双保险，见
+//!   [`decision`]）；直接返回 allow 值（常量或字符串）一律违约。其他返回
+//!   值、编译错误、运行时错误、限流触发一律由调用方映射为 fail-safe
+//!   confirm。
+//! - ctx 彻底封装（M6.1）：传给脚本的是自定义类型 [`ScriptCtx`]，字段经
+//!   只读 getter 以属性语法暴露（`ctx.bin`），不暴露裸 map/unit。
 //! - **script_allow（M4.0，受控放行）**：脚本只能激活用户在 `rules.toml`
 //!   `script_allow` 声明过的 bin——`allow("bin")` 原语 + 加载期字面量提取 /
 //!   声明集对账拒载 / 运行时双保险 / 定稿点作用域化逃逸检查（[`finalize`]）
@@ -61,24 +65,70 @@ impl std::fmt::Display for ScriptError {
 
 impl std::error::Error for ScriptError {}
 
-/// 脚本词汇约定（design.md「脚本词汇约定」，M4.0 前置小改落地）：
-/// 决策值 = 只读模块常量 `decision::` 四值；`PASS` = 无意见（不表态、
-/// 交还查表基线），Rhai 侧映射空串（Lua 引擎映射 nil，P6）。
-/// 脚本可用限定名 `decision::ALLOW` 等，也可写等价裸字符串——最终校验
-/// 在引擎（双保险），变量遮蔽污染不了引擎侧词汇表。
-pub mod decision {
-    /// 放行（仅经 `allow("bin")` 带名通道，裸字符串违约）。
-    pub const ALLOW: &str = "allow";
+/// 脚本侧决策值（M6.1 枚举化）：四变体、构造封闭——脚本侧只能拿到
+/// `decision::` 常量、`ctx.verdict` 字段或经 [`ScriptDecision::parse`]
+/// 解析的裸字符串，拼不出第四种值；非法值在边界（解析/返回）即报错。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScriptDecision {
+    /// 放行（仅经 `allow("bin")` 带名通道，脚本直接返回 = 契约违约）。
+    Allow,
     /// 升级为人工确认。
-    pub const CONFIRM: &str = "confirm";
+    Confirm,
     /// 阻断。
-    pub const DENY: &str = "deny";
-    /// 无意见（交还查表基线；Rhai 侧空串）。
-    pub const PASS: &str = "";
+    Deny,
+    /// 无意见（不表态、交还查表基线；Lua 侧映射 nil 等价）。
+    Pass,
 }
 
-/// 把 `decision::` 四常量以只读静态模块注入脚本（限定名访问）。
-fn register_decision_module(engine: &mut Engine) {
+impl ScriptDecision {
+    /// 等价裸字符串 → 决策值（返回边界统一解析，双保险；词汇与
+    /// [`crate::model::Decision`] 同源，`PASS` 的脚本侧空串写法在此收口）。
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "" => Some(Self::Pass),
+            "allow" => Some(Self::Allow),
+            "confirm" => Some(Self::Confirm),
+            "deny" => Some(Self::Deny),
+            _ => None,
+        }
+    }
+}
+
+/// 脚本词汇约定（design.md「脚本词汇约定」）：决策值 = 只读模块常量
+/// `decision::` 四值（类型化为 [`ScriptDecision`]）。脚本可用限定名
+/// `decision::ALLOW` 等，也可写等价裸字符串——最终校验在引擎（双保险），
+/// 变量遮蔽污染不了引擎侧词汇表。
+pub mod decision {
+    use super::ScriptDecision;
+
+    /// 放行（仅经 `allow("bin")` 带名通道，裸返回违约）。
+    pub const ALLOW: ScriptDecision = ScriptDecision::Allow;
+    /// 升级为人工确认。
+    pub const CONFIRM: ScriptDecision = ScriptDecision::Confirm;
+    /// 阻断。
+    pub const DENY: ScriptDecision = ScriptDecision::Deny;
+    /// 无意见（交还查表基线）。
+    pub const PASS: ScriptDecision = ScriptDecision::Pass;
+}
+
+/// 注册脚本侧词汇类型：`ScriptDecision`（== / != 对类型化值与裸字符串
+/// 双向可用）+ `decision::` 四常量只读静态模块。
+fn register_decision_types(engine: &mut Engine) {
+    engine.register_type_with_name::<ScriptDecision>("Decision");
+    engine.register_fn("==", |a: ScriptDecision, b: ScriptDecision| a == b);
+    engine.register_fn("!=", |a: ScriptDecision, b: ScriptDecision| a != b);
+    engine.register_fn("==", |a: ScriptDecision, b: &str| {
+        Some(a) == ScriptDecision::parse(b)
+    });
+    engine.register_fn("!=", |a: ScriptDecision, b: &str| {
+        Some(a) != ScriptDecision::parse(b)
+    });
+    engine.register_fn("==", |a: &str, b: ScriptDecision| {
+        ScriptDecision::parse(a) == Some(b)
+    });
+    engine.register_fn("!=", |a: &str, b: ScriptDecision| {
+        ScriptDecision::parse(a) != Some(b)
+    });
     let mut m = rhai::Module::new();
     m.set_var("ALLOW", decision::ALLOW);
     m.set_var("CONFIRM", decision::CONFIRM);
@@ -147,7 +197,8 @@ impl RhaiEngine {
         engine.set_max_string_size(10_000);
 
         register_primitives(&mut engine, project, kb);
-        register_decision_module(&mut engine);
+        register_decision_types(&mut engine);
+        register_ctx_type(&mut engine);
         register_allow(&mut engine, decls.clone());
 
         let ast = engine
@@ -196,7 +247,7 @@ impl RuleEngine for RhaiEngine {
         pipe_to_shell: bool,
     ) -> Result<ScriptOutcome, ScriptError> {
         let mut scope = rhai::Scope::new();
-        let ctx = build_context(cmd, verdict, project, pipe_to_shell);
+        let ctx = ScriptCtx::new(cmd, verdict, project, pipe_to_shell);
         let result: Dynamic = self
             .engine
             .call_fn(&mut scope, &self.ast, "check", (ctx,))
@@ -205,25 +256,35 @@ impl RuleEngine for RhaiEngine {
         if let Some(a) = result.clone().try_cast::<AllowActivation>() {
             return Ok(ScriptOutcome::Activate(a.0));
         }
+        // 类型化决策值（decision:: 常量或与其同型的返回值）。
+        if let Some(d) = result.clone().try_cast::<ScriptDecision>() {
+            return script_outcome_of(d);
+        }
+        // 双保险：等价裸字符串在返回边界统一解析。
         let s = result
             .into_string()
             .map_err(|_| ScriptError::Contract("check() must return a decision value".into()))?;
-        match s.as_str() {
-            "" => Ok(ScriptOutcome::Pass),
-            // allow 契约：放行必须走带名通道（allow("bin")，引擎才有的对账）；
-            // 裸 "allow" 字符串仍是契约违约，fail-safe confirm。
-            "allow" => Err(ScriptError::Contract(
-                "scripts cannot return a bare `allow` (use the declared allow(\"bin\") \
-                 channel; bare strings cannot be reconciled)"
-                    .into(),
-            )),
-            "confirm" => Ok(ScriptOutcome::Adjust(Decision::Confirm)),
-            "deny" => Ok(ScriptOutcome::Adjust(Decision::Deny)),
-            other => Err(ScriptError::Contract(format!(
-                "check() returned `{other}`; expected one of \"\", confirm, deny, \
+        script_outcome_of(ScriptDecision::parse(&s).ok_or_else(|| {
+            ScriptError::Contract(format!(
+                "check() returned `{s}`; expected one of \"\", confirm, deny, \
                  allow(\"bin\")"
-            ))),
-        }
+            ))
+        })?)
+    }
+}
+
+/// 决策值 → 评估产出（唯一出口；allow 契约：放行必须走 `allow("bin")`
+/// 带名通道——引擎才有的对账，脚本直接返回 allow 值一律违约）。
+fn script_outcome_of(d: ScriptDecision) -> Result<ScriptOutcome, ScriptError> {
+    match d {
+        ScriptDecision::Pass => Ok(ScriptOutcome::Pass),
+        ScriptDecision::Allow => Err(ScriptError::Contract(
+            "scripts cannot return a bare `allow` (use the declared allow(\"bin\") \
+             channel; bare values cannot be reconciled)"
+                .into(),
+        )),
+        ScriptDecision::Confirm => Ok(ScriptOutcome::Adjust(Decision::Confirm)),
+        ScriptDecision::Deny => Ok(ScriptOutcome::Adjust(Decision::Deny)),
     }
 }
 
@@ -372,41 +433,64 @@ fn extract_allow_literals(ast: &rhai::AST) -> Result<Vec<String>, ScriptError> {
     }
 }
 
-/// 构造脚本可见的命令上下文（只读特征；原始词元，归一不在此层）。
-/// rhai 的 Dynamic 对字符串取 owned 拷贝，不与命令借用纠缠。
-fn build_context(
-    cmd: &SimpleCommand,
-    verdict: Decision,
-    project: &Path,
+/// 脚本可见的命令上下文（M6.1 ctx 彻底封装）：自定义类型，不向脚本暴露
+/// 裸 map/unit——字段经只读 getter 以属性语法暴露（`ctx.bin` 即 getter
+/// 调用糖），脚本不可写。字段集 = design.md「脚本层职责边界」ctx 表。
+#[derive(Debug, Clone)]
+pub struct ScriptCtx {
+    bin: String,
+    sub: String,
+    words: Vec<String>,
+    args: Vec<String>,
+    verdict: ScriptDecision,
+    writes_redirect: bool,
     pipe_to_shell: bool,
-) -> rhai::Map {
-    let mut m = rhai::Map::new();
-    let words: Vec<Dynamic> = cmd.words.iter().map(|w| Dynamic::from(w.clone())).collect();
-    let args: Vec<Dynamic> = cmd
-        .args()
-        .iter()
-        .map(|w| Dynamic::from(w.clone()))
-        .collect();
-    m.insert(
-        "bin".into(),
-        Dynamic::from(cmd.bin().unwrap_or("").to_string()),
-    );
-    m.insert(
-        "sub".into(),
-        // ctx 可选字段缺省 = 空字符串（词汇约定）：不向脚本暴露解释器
-        // 内部的 unit/nil 语义；谓词写 `ctx.sub != ""`。
-        Dynamic::from(cmd.args().first().cloned().unwrap_or_default()),
-    );
-    m.insert("words".into(), words.into());
-    m.insert("args".into(), args.into());
-    m.insert("verdict".into(), Dynamic::from(verdict.to_string()));
-    m.insert("writes_redirect".into(), Dynamic::from(cmd.writes_redirect));
-    m.insert("pipe_to_shell".into(), Dynamic::from(pipe_to_shell));
-    m.insert(
-        "project".into(),
-        Dynamic::from(project.to_string_lossy().to_string()),
-    );
-    m
+    project: String,
+}
+
+impl ScriptCtx {
+    /// 构造脚本可见的命令上下文（只读特征；原始词元，归一不在此层）。
+    /// `sub` 可选字段缺省 = 空字符串（词汇约定）：不向脚本暴露解释器内部
+    /// 的 unit/nil 语义；谓词写 `ctx.sub != ""`。
+    pub fn new(
+        cmd: &SimpleCommand,
+        verdict: Decision,
+        project: &Path,
+        pipe_to_shell: bool,
+    ) -> Self {
+        Self {
+            bin: cmd.bin().unwrap_or("").to_string(),
+            sub: cmd.args().first().cloned().unwrap_or_default(),
+            words: cmd.words.clone(),
+            args: cmd.args().to_vec(),
+            verdict: match verdict {
+                Decision::Allow => ScriptDecision::Allow,
+                Decision::Confirm => ScriptDecision::Confirm,
+                Decision::Deny => ScriptDecision::Deny,
+            },
+            writes_redirect: cmd.writes_redirect,
+            pipe_to_shell,
+            project: project.to_string_lossy().to_string(),
+        }
+    }
+}
+
+/// 注册 ctx 封装类型：只读 getter 暴露字段（属性语法 = getter 糖）；数组
+/// 字段每次访问克隆（脚本侧拿到的是不可变副本）。
+fn register_ctx_type(engine: &mut Engine) {
+    engine.register_type_with_name::<ScriptCtx>("Ctx");
+    engine.register_get("bin", |c: &mut ScriptCtx| c.bin.clone());
+    engine.register_get("sub", |c: &mut ScriptCtx| c.sub.clone());
+    engine.register_get("project", |c: &mut ScriptCtx| c.project.clone());
+    engine.register_get("verdict", |c: &mut ScriptCtx| c.verdict);
+    engine.register_get("writes_redirect", |c: &mut ScriptCtx| c.writes_redirect);
+    engine.register_get("pipe_to_shell", |c: &mut ScriptCtx| c.pipe_to_shell);
+    engine.register_get("words", |c: &mut ScriptCtx| -> rhai::Array {
+        c.words.iter().map(|w| Dynamic::from(w.clone())).collect()
+    });
+    engine.register_get("args", |c: &mut ScriptCtx| -> rhai::Array {
+        c.args.iter().map(|w| Dynamic::from(w.clone())).collect()
+    });
 }
 
 /// 注册 Rust 侧安全原语：纯函数、无 IO；知识库数据源经 `Arc` 共享只读事实。
@@ -896,6 +980,37 @@ mod tests {
         );
         assert_eq!(
             e.evaluate(&cmd("git status"), Decision::Allow, Path::new(PROJ), false)
+                .unwrap(),
+            ScriptOutcome::Pass
+        );
+    }
+
+    #[test]
+    fn typed_verdict_compares_both_directions_and_unknown_words() {
+        // 类型化 ctx.verdict 与 decision:: 常量、裸字符串双向 == / != ；
+        // 未知词比较 = false，不报错（比较是查询不是构造）。
+        let e = compile(concat!(
+            "fn check(ctx) {",
+            "  if ctx.verdict == decision::DENY { decision::DENY }",
+            "  else if ctx.verdict != \"confirm\" { decision::CONFIRM }",
+            "  else if ctx.verdict == \"bogus\" { decision::DENY }",
+            "  else { decision::PASS }",
+            "}"
+        ));
+        assert_eq!(
+            e.evaluate(&cmd("ls"), Decision::Deny, Path::new(PROJ), false)
+                .unwrap(),
+            ScriptOutcome::Adjust(Decision::Deny)
+        );
+        // != 裸字符串分支：查表 allow 升 confirm。
+        assert_eq!(
+            e.evaluate(&cmd("ls"), Decision::Allow, Path::new(PROJ), false)
+                .unwrap(),
+            ScriptOutcome::Adjust(Decision::Confirm)
+        );
+        // Confirm 命中 else：== "bogus"（未知词）为 false 不报错。
+        assert_eq!(
+            e.evaluate(&cmd("ls"), Decision::Confirm, Path::new(PROJ), false)
                 .unwrap(),
             ScriptOutcome::Pass
         );
