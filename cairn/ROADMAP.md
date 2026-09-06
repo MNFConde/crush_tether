@@ -58,6 +58,8 @@
   - **M6.3 mdor 侧退役**（Open Questions 1，待用户确认节奏；M5.3 zcode 实机探针按 2026-09-06 裁定挪至本项一并处理）：删 crush-guard 目录、回滚 `[project.scripts]`。
     - 验收：mdor 侧无 crush-guard 残留；本仓库为唯一实现。
   - （**P6 后体验专项候选**，2026-09-06 登记）**编辑器支持**：taplo JSON schema（rules.toml 全键含 script_allow）/ `crush-tether script-stubs` 生成补全桩（EmmyLua 注解喂 lua-language-server；Rhai 走工作区文件索引）/ SchemaStore 发布。纯开发期工具，不进运行时路径，不触碰零内置策略。
+  - （**P6 后候选**，2026-09-06 讨论，未立项）**权限学习**：裁决日志（M4.3）+ PostToolUse 执行记录交叉推断「用户批准过的 confirm 命令」→ 保守路线先行（`suggest` 命令离线生成规则建议、人确认后写入）；自动落盘路线须先探针 zcode `PermissionRequest` 是否回传用户最终选择、PostToolUse 载荷可否还原命令。安全红线：deny 永不参与学习；落盘条目收窄到最小作用域（bin+sub）；带「来源=学习」标记可审计可回滚。事实底座：`PermissionRequest` 事件为 zcode 独有（ClaudeCode 无同语义事件、Crush 未记录），跨 agent 一致的信号源 = PostToolUse。
+  - （**P6 后候选**，2026-09-06 登记）**新 agent 接入对照表**：接入任何新 agent（OpenCode / Codex 等）时，逐行对照 design.md「Hook 接入失效模式与保障边界」表走验收清单（失效模式 × 三层兜底责任 × 验证方法），不重新推导。
 
 ## 推进节奏（2026-09-06 细化时钉死）
 

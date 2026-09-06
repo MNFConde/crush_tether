@@ -2,6 +2,13 @@
 
 This file records substantive progress in reverse-chronological order — newest entry at the top, right below this line. Keep each entry short — summary and pointer only; conclusions settle into `cairn/<topic>.md`.
 
+## 2026-09-06 · 文档批：hook 接入失效模式表 + 权限学习候选登记
+
+- **失效模式入档**（用户指定：为后续功能做铺垫）：design.md Agent 适配层节新增「Hook 接入失效模式与保障边界（定稿）」——五条失效模式 × 三层兜底责任（A agent 侧机制 / B 我方管线内部 / C 部署验收实测），作为新 agent 接入的验收对照表；唯一待补洞 = #2（hook 二进制起不来时 agent 侧行为未验证，zcode 探针待办）。
+- **权限学习候选登记**（仅候选，未立项）：裁决日志 + PostToolUse 交叉推断用户批准 → suggest 保守路线先行；安全红线三条（deny 不学习 / 最小作用域 / 来源标记）。事实底座：`PermissionRequest` 为 zcode 独有事件（ClaudeCode 无同语义、Crush 未记录），跨 agent 一致信号源 = PostToolUse。
+- **事实纪律**：zcode enabled 门槛与插件自动启用引配置指南；ClaudeCode/Crush 启用门槛标注「未核实」不写成既成事实。
+- Details: `doc/design.md`（Agent 适配层节新小节）、`cairn/ROADMAP.md`（P6 后候选两条）。
+
 ## 2026-09-06 · 审查后修复：lua 协程限流覆盖与文档残留清理
 
 - **审查发现（探针实测）**：mlua `set_hook` 仅挂主线程，脚本自建协程（C 层 `coroutine.create`）完全逃逸指令预算——协程内 200 万次循环毫秒级完成、正常返回 Pass；「限流同等」验收声明对协程不成立。

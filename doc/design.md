@@ -360,6 +360,22 @@ pub trait Channel {
 - 规则：`deny > defer > ask > allow`；exit 2 会覆盖 JSON。
 - **Crush 兼容**：Crush 接受 Claude 的 `hookSpecificOutput` 信封，仅 `updated_input` 语义不同（Crush 浅合并 vs Claude 全替换）。ClaudeCode adapter 可复用 Crush 大部分输出逻辑，仅改 env/输入键名与 `updated_input` 语义。
 
+#### Hook 接入失效模式与保障边界（定稿）
+
+hook 接入是权限门的「最后一米」——管线内部的 fail-safe 再完备，hook 没被拉起来就全盘失效。本节把各 agent 接入形态的失效模式与兜底责任固定成表，作为**后续新 agent 接入的验收对照表**：每接入一个新 agent（OpenCode / Codex 等），逐行核对「该失效模式在其形态下是否存在、由哪层兜住、怎么验证」，不重新推导。
+
+兜底责任分三层：**A. agent 侧机制**（agent 提供的保障，如插件自动启用）；**B. 我方管线内部**（fail-safe confirm / connect-or-spawn 降级）；**C. 部署验收实测**（无机制可堵时的唯一覆盖手段）。每条失效模式至少一层覆盖，下表 #2 是唯一待补的洞。
+
+| # | 失效模式 | 兜底层 | 说明与验证 |
+|---|---|---|---|
+| 1 | 配置文件 hook 默认禁用被忘开（zcode 配置文件形态特有，须显式 `hooks.enabled: true` 才跑） | A | 插件贡献的 hook 自动启用 hook runner（zcode 配置指南核实）。验证：M5.3 探针「插件分发实际触发」（含启用路径）。 |
+| 2 | hook 二进制路径失效 / 被卸载（hook 进程根本起不来） | **待补** | 缺口如实登记：此时 agent 侧行为（放行 or 阻断）未验证——我方 fail-safe 只覆盖「进程起来后」的失效。探针待办：实测 zcode 对 hook 进程启动失败的语义；若放行，则「二进制已安装 + 路径可达」成为部署清单必查项。 |
+| 3 | hook 进程已拉起，但内部崩溃 / 超时 / serve 端点不可达 | B | fail-safe confirm（裁决前任何异常落 confirm）+ connect-or-spawn 降级（serve 不可达 → 本进程跑全量管线，绝不无裁决放行）。既有单测与契约测试覆盖（M4.1、P1 起）。 |
+| 4 | Crush 类「配置即生效、无启用门槛」形态的静默失效（配错路径 / 拼写错，无任何机制提醒） | C | 无机制可堵，部署验收实测触发是唯一覆盖：M5.2 契约用例集（实现层）+ 部署后实测 hook 确实触发。 |
+| 5 | 用户手动禁用插件 / 删除配置 | — | 信任边界，不设防，如实声明。 |
+
+ClaudeCode / Crush 实机部署形态是否存在类似 zcode 的启用门槛：**未核实**，实机验证时一并确认后回填本表。
+
 ## 配置格式与脚本边界（v1 定稿）
 
 > [!IMPORTANT]
