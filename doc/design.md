@@ -343,6 +343,7 @@ pub trait Channel {
   - **hook 进程错误（非 2 退出码）→ agent 侧 fail-open（放行）**：实测 PreToolUse hook exit 3 命令照常执行——失效模式表 #2 的答案，「二进制已安装 + 路径可达」成为部署必查项（C 层验收必须实测 hook 触发）；
   - **M4.1 修复**：探针首测抓到 serve spawn 句柄继承洞——node 系祖先（zcode hook runner 即是）下 hook 的 stdout/stderr 管道被 serve 复制持有，输出流 EOF 由 serve 存活期决定（31s），runner 侧表现为 hook 挂死超时；修复 = `spawn_serve` 前对自身 stdio 句柄清 `HANDLE_FLAG_INHERIT`（[更正登记](#更正登记对既有定稿) 20）；
   - **交付形态实测通过** = 插件分发（`hooks/hooks.json` 自动启用 hook runner；本地目录 marketplace 安装 + hook 实际触发全链验证）。配置文件 hook 轨（工作区 `.zcode/config.json` + `hooks.enabled:true`）实测未生效（疑因 `process` 型混入 `statusMessage` 字段被丢弃或需会话重启重载，未深究）——交付不依赖该轨，但登记为坑：`process` 型 hook 严格只接受 `command`/`args`/`timeoutMs`。
+  - **与 zcode 原生权限档位的叠加（2026-09-07 实测/推断分层）**：hook 评估先于原生权限判定并可覆盖之——**实测**：完全访问（yolo）模式下 hook ask 仍强制弹出确认（`PermissionRequest` 载荷 `mode:"yolo"` + `reason:"Tool requires approval by PreToolUse hook"`）；**同构语义推断（未实测）**：确认模式下 hook allow 跳过原生弹窗；**未实测**：计划模式与 hook 的交叉。连带结论：hook ask 无状态 + 用户选择不回传 → zcode 原生「以后都放行」对本门 confirm 类命令**结构性失效**——项目侧对应物 = `rules.toml` 白名单（手工、可审计）与权限学习候选（自动，见 ROADMAP P6 后候选）。hook 只挂 `Bash`，其余工具（Edit/Write 等）原生档位行为不受影响。
 - **OpenCode**：延后至版本稳定（存在 V1 `permission`/`bash` 与 V2 `permissions`/`shell` 分叉、插件 in-process、命令改写 bug），**不先适配**。
 - 其他候选（Cursor / Continue.dev / Gemini CLI / Cline / Roo）仅列空壳，后续按需扩展。
 
@@ -375,12 +376,24 @@ hook 接入是权限门的「最后一米」——管线内部的 fail-safe 再�
 | # | 失效模式 | 兜底层 | 说明与验证 |
 |---|---|---|---|
 | 1 | 配置文件 hook 默认禁用被忘开（zcode 配置文件形态特有，须显式 `hooks.enabled: true` 才跑） | A | 插件贡献的 hook 自动启用 hook runner（zcode 配置指南核实）。验证：M5.3 探针「插件分发实际触发」（含启用路径）。 |
-| 2 | hook 二进制路径失效 / 被卸载（hook 进程根本起不来） | **C（部署验收实测）** | **2026-09-06 zcode 实测定型**：hook 进程错误（非 2 退出码）→ agent 侧 **fail-open（放行）**——agent 不兜底，我方 fail-safe 只覆盖「进程起来后」的失效；因此「二进制已安装 + 路径可达」是部署必查项，且部署验收必须实测 hook 确实触发（本仓库 `.zcode/probe/` 探针即验收工具，新 agent 部署照搬此法）。 |
+| 2 | hook 二进制路径失效 / 被卸载（hook 进程根本起不来） | **C（部署验收实测）** | **2026-09-06 zcode 实测定型**：hook 进程错误（非 2 退出码）→ agent 侧 **fail-open（放行）**——agent 不兜底，我方 fail-safe 只覆盖「进程起来后」的失效；因此「二进制已安装 + 路径可达」是部署必查项，且部署验收必须实测 hook 确实触发（探针方法见[hook 探针方法（定稿）](#hook-探针方法定稿)，参考实现 = `script/hook_probe.py`，M7.2）。 |
 | 3 | hook 进程已拉起，但内部崩溃 / 超时 / serve 端点不可达 | B | fail-safe confirm（裁决前任何异常落 confirm）+ connect-or-spawn 降级（serve 不可达 → 本进程跑全量管线，绝不无裁决放行）。既有单测与契约测试覆盖（M4.1、P1 起）。 |
 | 4 | Crush 类「配置即生效、无启用门槛」形态的静默失效（配错路径 / 拼写错，无任何机制提醒） | C | 无机制可堵，部署验收实测触发是唯一覆盖：M5.2 契约用例集（实现层）+ 部署后实测 hook 确实触发。 |
 | 5 | 用户手动禁用插件 / 删除配置 | — | 信任边界，不设防，如实声明。 |
 
 ClaudeCode / Crush 实机部署形态是否存在类似 zcode 的启用门槛：**未核实**，实机验证时一并确认后回填本表。
+
+#### hook 探针方法（定稿）
+
+部署验收与新 agent 接入对照表都要实测「hook 真的被拉起来、裁决真的被采纳」，探针是与 agent 无关的标准方法。**方法论语言无关**——示例实现用过的解释器只是当时本机可用工具的选择，不是依赖：
+
+1. **dump wrapper**：hook 注册一个 wrapper 进程（任何解释器/语言均可），把 stdin 载荷原样落盘（JSONL 追加），再原样转发给 `crush-tether hook --agent <slug>` 并回传其 stdout 与退出码——观测到的是 agent 真实下发的载荷与我方引擎的原话裁决；
+2. **控制文件切模式**：wrapper 每次调用读小控制文件决定行为（如 perm 回包内容 / 退出码覆写 / fail 模拟退出码），换实验不改注册、不重启会话；
+3. **来源标记**：多注册来源（配置文件轨 vs 插件轨）各打标记进 dump，确认哪一层真的在触发（zcode 实测：插件轨触发、配置轨未生效，即靠此法区分）；
+4. **exit / close 双事件观测**：排查「hook 挂死」类问题先区分**进程退出**与**输出流关闭**两个时刻（node 下即 `exit` vs `close` 事件）——句柄被孙进程继承时二者分离，这是 M4.1 句柄继承洞（更正登记 20）的定位手法；
+5. **idle 缩放实验**：把 serve 的 `--idle-exit` 调小，若某等待时长同步缩短，即证明持有者是 serve 的存活期——因果坐实而不靠猜。
+
+注册面要点：zcode 插件 `hooks/hooks.json` 用 `type:"process"`（`command`/`args`/`timeoutMs` 三字段严格，勿混入 `statusMessage`）+ `${ZCODE_PLUGIN_ROOT}` 相对路径；dump/控制目录用参数传入而非写死。参考实现：`script/hook_probe.py`（M7.2，python，经 `uv run python` 调用、零第三方依赖）。
 
 ## 配置格式与脚本边界（v1 定稿）
 

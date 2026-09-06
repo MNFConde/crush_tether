@@ -2,6 +2,13 @@
 
 This file records substantive progress in reverse-chronological order — newest entry at the top, right below this line. Keep each entry short — summary and pointer only; conclusions settle into `cairn/<topic>.md`.
 
+## 2026-09-07 · 登记 P7 体验与适配专项 + zcode 原生权限叠加结论
+
+- **P7 登记（四项均待授权，ROADMAP）**：M7.0 写目标感知逃逸检查（用户策略「读默认都通过、写默认只许仓内」——现状 `[local]` 逃逸检查参数级、输入输出不分，读外翻 confirm、`[global]` 豁免整体有洞，正解 = 逃逸检查只看写效果路径）；M7.1 规则测试工具（explain / batch / 断言式用例 / **用户面 REPL**——定位是放开给用户调试自己的规则配置与脚本）；M7.2 探针 python 化（`script/hook_probe.py`，uv 管理无全局 python，方法语言无关入 design.md「hook 探针方法（定稿）」）；M7.3 多 agent 实机兼容性实测 + 特性降级矩阵（不支持的能力默认不生效、绝不报错）。
+- **zcode 原生权限四档 × hook 三值叠加（实测/推断分层入 design.md）**：hook ask 覆盖 yolo（实测）；hook allow 跳过确认模式弹窗（同构语义推断未实测）；计划模式交叉未实测；原生「以后都放行」对本门 confirm 类命令结构性失效（hook ask 无状态 + 用户选择不回传）→ 权限学习候选动机补强。
+- **工具链口径（教训修正）**：本机 python 由 **uv 管理**（`uv run python` 调用），PATH 上的 `python` 是商店占位别名、不存在默认 python 环境——此前「python 坏了」的表述不准确；agent 脚本杂活可用路径 = `uv run python` 或 node，且 agent 工作方式会直接撞权限门 confirm 兜底（node/go run 类任意代码执行被刻意排除在 allow 外）。
+- Details: `cairn/ROADMAP.md`（P7 块 + 权限学习动机）、`doc/design.md`（zcode 叠加段 + 探针方法节 + #2 指针）、`README.md`（默认包画像）。
+
 ## 2026-09-06 · M6.3 收官：M5.3 实机探针四项闭环 + 正式插件定稿
 
 - **探针四项观察**（新 zcode 会话 + 插件分发实测）：① stdin 载荷 = ClaudeCode 蛇形键与 zcode 驼峰键**双命名并存**（`toolInput`/`riskLevel`/`sideEffectScope`/`requestId` 等 zcode 增键），adapter 零改动可用；② `PermissionRequest` JSON 信封不被采纳（exit 2 可否决、exit 0 静默走原生确认）→ 挂点保持 `PreToolUse`（其三值 JSON 全部生效：allow 直通连 PermissionRequest 都不触发）；③ 用户最终选择**不回传**任何 hook（PostToolUse 只有执行结果）——「权限学习」候选的保守路线更稳；④ hook 错误（非 2 退出码）→ agent 侧 **fail-open 放行**（失效模式 #2 补齐：部署必查二进制可达）。

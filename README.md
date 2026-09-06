@@ -35,6 +35,8 @@ cargo install --path .  # 或装入 PATH
 
 规则文件**损坏 ≠ 缺失**：解析失败 → 告警 + fail-safe confirm、原文件不动、不覆盖重生成。lint 只告警不拒绝加载。格式细则见 design.md「配置格式与脚本边界（定稿）」。
 
+**默认包裁决画像**（以生成的 `rules.toml` 为准，可自行挪档）：读类命令与项目内安全写（`git add`/`commit`、`touch`/`mkdir`、`cargo build`/`test`、`npm run` 等）放行；写重定向、写 flag、包管理器安装、`rm`/`curl`/`wget` 等确认；`sudo`/`mkfs`/`git push`/`reset --hard` 等阻断；**未匹配命令一律确认兜底**（`node -e`、`go run` 等任意代码执行刻意不入 allow 表）。改完即热重载生效，无需重启。
+
 ## 运行模式
 
 ```sh
