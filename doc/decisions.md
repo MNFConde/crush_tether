@@ -183,4 +183,24 @@
 
 ---
 
+## D-08 audit 警告口径：接受 smartstring unmaintained 并名册化
+
+| 状态 | 日期 | 规范位置 |
+|---|---|---|
+| 已决策 | 2026-09-06 | design.md「依赖钉版」注记；本条为论证源 |
+
+**背景**：M6.2 验收写「`cargo audit` 零告警」，实测退出 0 但带 1 条 allowed warning——RUSTSEC-2026-0249（`smartstring` unmaintained，2026-05-03 仓库归档，无 CVE）。它是 rhai 1.26 的**非可选传递依赖**（`ImmutableString` 底层存储），无 feature 开关可摘除。用户追问影响面后裁定。
+
+**决策**：
+
+- **接受该警告并名册化**，M6.2 验收落地口径 = 「audit 无漏洞、已知警告有名册」。清零路径（换 rhai / `[patch.crates-io]` 指向上游修复 PR fork）均不成比例：前者重写脚本层，后者把供应链信任换到失联作者的非官方 fork。
+- **风险定性**：UB 风险触发面限于解析/执行规则脚本的字符串处理，而规则文件是项目所有者自有输入——不构成提权或绕过门禁的攻击路径；rhai 维护者立场「一直无实际问题」（rhai#816 开放中，讨论 compact_str 替换，无时间表）。
+- **监控点**：rhai 发布移除 smartstring 的版本时升级 rhai 即消警告；升级 rhai 须回归（toolchain 纪律同款）。
+
+**依据**：威胁模型匹配（自有配置 ≠ 攻击者输入）+ 依赖冻结（rhai/工具链均钉版，暴露面不随时间扩大）；警告保留可见优于静默 ignore（audit.toml 不加豁免，名册靠本条与 design.md 注记）。
+
+**影响**：M6.2 验收口径修正（ROADMAP 注记）；design.md 依赖钉版清单补 smartstring 注记。
+
+---
+
 *本文件为决策记录，随实现推进持续更新；既有定稿出现修订时逐步补录为 ADR。*

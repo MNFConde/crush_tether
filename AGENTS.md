@@ -1,6 +1,6 @@
 # AGENTS.md
 
-crush_tether —— Crush 命令级 bash 权限门（Rust 实现 crush-guard 独立化/重写）。当前状态：**P0–P5 已落地**（分类核心 + 配置 v1 全链：三层发现/字段级继承合并/双表三桶查表/知识库归一/双层 lint/默认包生成；Rhai 脚本层 + script_allow 受控放行五件套；serve 服务化：命名端点/connect-or-spawn/热重载/JSONL 裁决日志（D-07）；三 adapter：Crush/ClaudeCode/zcode；2026-09-06 设计-实现一致性审查修复完成），仅余 P6（M6.1 Lua 引擎/M6.2 质量收口/M6.3 mdor 退役）见 [cairn/ROADMAP.md](cairn/ROADMAP.md)；格式规范见 [doc/design.md](doc/design.md)，决策论证见 [doc/decisions.md](doc/decisions.md)。
+crush_tether —— Crush 命令级 bash 权限门（Rust 实现 crush-guard 独立化/重写）。当前状态：**P0–P6（M6.1/M6.2）已落地**（分类核心 + 配置 v1 全链：三层发现/字段级继承合并/双表三桶查表/知识库归一/双层 lint/默认包生成；脚本层双引擎：Rhai 默认 + Lua（mlua），ctx 封装与决策枚举化定型（M6.1），script_allow 受控放行五件套；serve 服务化：命名端点/connect-or-spawn/热重载/JSONL 裁决日志（D-07）；三 adapter：Crush/ClaudeCode/zcode；README 已落地），仅余 M6.3（mdor 退役 + M5.3 实机探针，待用户确认节奏）见 [cairn/ROADMAP.md](cairn/ROADMAP.md)；格式规范见 [doc/design.md](doc/design.md)，决策论证见 [doc/decisions.md](doc/decisions.md)。
 
 > 本项目使用 Project Cairn 组织项目知识：Cairn 全套规则（初始化配置/阅读顺序/文档职责/冲突仲裁/知识库消费反射/知识沉淀规则）见 `cairn/AGENTS.md`。
 > 本机装有 project-cairn skill 且仓库存在 `cairn/` 时生效；否则视为不适用，跳过。

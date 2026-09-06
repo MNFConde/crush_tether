@@ -1,11 +1,11 @@
 ---
 type: project_topic
 status: active
-summary: guard.py → Rust 重写的实现要点与踩坑：tree-sitter-bash AST 结构差异、路径归一化、管道 sink 判定策略。
-tags: [crush_tether, rust, tree-sitter, migration]
+summary: guard.py → Rust 重写的实现要点与踩坑：tree-sitter-bash AST 结构差异、路径归一化、管道 sink 判定策略；脚本引擎接入（rhai/mlua）的沙箱与 API 坑。
+tags: [crush_tether, rust, tree-sitter, migration, rhai, mlua]
 contains: [lesson, decision]
 created: 2026-09-04
-updated: 2026-09-04
+updated: 2026-09-06
 related: [doc/design.md, tests/guard_regression.rs]
 authoring_mode: ai_generated
 ---
@@ -27,6 +27,14 @@ authoring_mode: ai_generated
 - **管道 sink（curl|sh）判定不能只依赖 flatten 序**：list（`;`、`&&`）会切断管道相邻性，「相邻命令即管道两侧」会误报；改为按原始文本按 `;`/`&`/换行切段、段内按 `|` 拆，仅段内下游首词命中 shell/解释器才 deny。`||`（逻辑或）与 `|` 的区分由切分后算子形态自然解决。
 - **clippy 常见三连**：`from_str` 撞 `FromStr` trait（改名 parse）；`trim().split_whitespace()` 冗余；match 臂内 `if child.kind() ==` 可折叠为独立臂。首次 `cargo clippy -D warnings` 就开，别攒。
 - **tree-sitter 0.25 + tree-sitter-bash 0.25 配对**：`tree_sitter_bash::LANGUAGE.into()` 得 `Language`；`node.utf8_text()` 返回 `&[u8]` 切片需 `as_bytes`。
+
+### 脚本引擎接入（M6.1，2026-09-06）
+
+- **教训：mlua 0.12 已无 `sandbox` feature**（记忆/旧文档差异）——沙箱由 `Lua::new_with` 安全模式 + **显式库白名单**（coroutine/table/math/string/utf8）+ base 危险全局消毒（`dofile`/`loadfile`/`load`/`print` 置 nil，mlua 不代劳）组合实现。注意 `StdLib::ALL_SAFE` **包含 IO/OS/PACKAGE**，不能直接当安全集用。
+- **教训：mlua 对象不保活 Lua state**——`LuaEngine` 只存 `check: Function` 而不存 `Lua` 字段时，compile 返回后 state 被销毁，evaluate 报「Lua instance is destroyed」；state 必须随实例字段锚定。
+- **教训：mlua 0.12 只有 IntoLua 的 UserData 毯式实现，没有 FromLua**——`__eq` 等元方法第二参收 `AnyUserData` 后手动 `borrow::<T>()`（借用失败视为不等，因为 Lua 的 `__eq` 不跨 userdata 类型保证同型）。
+- **教训：rhai 1.x 的 getter API 是 `register_get`**（不是旧名 `register_getter`），闭包首参收 `&mut T`（`Mut<T>`）。rhai 属性访问本质是方法调用糖——自定义类型 + getter 可让脚本侧 `ctx.bin` 语法零改动地完成「暴露裸 map → 封装类型」迁移。
+- **教训：Rust `concat!` 无分隔拼接**，多行脚本文本用例里 `"return nil"+\"end\"` 拼成 `nilend` 语法错误——多行脚本文本的每行要么带前导空格要么以 `\n` 结尾（与 commit.md 6.5 的追加型编辑静默丢失同族：拼接点出错不报错）。
 
 ## 决策记录
 

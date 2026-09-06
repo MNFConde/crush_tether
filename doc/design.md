@@ -61,7 +61,7 @@ crush_tether/
 │   ├── channel.rs        # agent 适配层（Crush / ClaudeCode / zcode 契约；stdin JSON/env → 裁决输出）
 │   ├── config/           # 发现（含项目根解析单一实现）/ schema / 字段级继承合并 / 归一 / seed 模板
 │   ├── lookup.rs         # rules.toml 查表（多命中合成 + 溯源）
-│   ├── script.rs         # rules.rhai 沙箱（RhaiEngine + ScriptChain 层链 + 定稿点）
+│   ├── script/           # 脚本层沙箱（RuleEngine trait + ScriptChain 层链 + 定稿点；mod.rs=rhai、lua.rs=lua 引擎）
 │   ├── knowledge.rs      # 命令知识库（bucket 框架；alias_of/same_flag 归一数据源）
 │   ├── lint.rs           # 双层 lint（结构类 + 语义类；只告警不拒绝）
 │   └── service.rs        # RuleSet 装配 + serve（端点/热重载/idle 退出）+ hook client + 裁决日志
@@ -104,7 +104,7 @@ check（兜底/冒烟）：同一二进制单发，不碰端点，本进程全�
 装配层  main.rs               子命令分发（hook / serve / check / benchmark），仅此层知道运行角色
 适配层  channel.rs  service.rs  agent 契约适配；RuleSet 装配、端点监听与 connect-or-spawn 客户端、热重载、idle 退出、裁决日志
 核心层  engine.rs  cmd_parse.rs  管线原语与裁决组合；tree-sitter-bash 解析与特征提取
-        config/  lookup.rs  script.rs  knowledge.rs  lint.rs   发现/合并/查表/脚本沙箱/知识库/双层 lint
+        config/  lookup.rs  script/  knowledge.rs  lint.rs   发现/合并/查表/脚本沙箱/知识库/双层 lint
 类型层  model.rs              Decision / Verdict / 组合语义
 
 依赖方向：model ← cmd_parse/engine/config/knowledge ← lookup/script/lint ← channel/service ← main
@@ -191,7 +191,7 @@ crush-tether benchmark [--engine rhai --config <file>]            # 双跑对比
 - **端点名**：`crush-tether-<hash(canonical(project_dir), engine标签, --config 覆盖路径)>`（engine/`--config` 取自 CLI 参数；`--config` 缺省不进 hash）。**一项目一 serve**：配置/热重载/裁决域天然按项目隔离（显式 `--config` 覆盖视作独立裁决域），进程内无需多项目缓存与逐出；同项目**所有 agent/会话**共用同一 serve（裁决与 agent 无关，Channel 适配留在一次性 hook 进程）。
 - **单实例**：serve 启动第一动作 = **独占创建端点**（bind / 第一管道实例创建），同一 syscall 同步裁定唯一性与角色：成功 = 本项目唯一服务；失败 = 已存在 → 本进程静默退出（输者转 connect 重试，非报错退出）。同项目多会话并发冷启动的惊群由此消解，无锁无 pidfile。崩溃残留：Windows 管道与 abstract socket 活在内核命名空间，进程死即消失，天然免疫；文件系统 socket 需「bind 失败但 connect ECONNREFUSED → unlink + rebind」有界重试。
 - **协议**：复用 hook 的 JSON envelope 作行单元：请求 `{id, op:"check", command, agent}` / `{id, op:"ping"}`；响应 `{id, verdict:{decision, reason}, error}`（`error` = 畸形请求/未知 op 的带内报错；`agent` 供日志溯源）。`id` 客户端生成单调递增，严格逐请求应答，无乱序（v1 一连接一请求下恒为 1，字段为将来复用连接保留）。连接生命周期 = 一次请求（短命 hook 进程），无长连接池、无会话态。
-- 依赖钉版（全景清单；版本约束的唯一事实源 = 根 `Cargo.toml`）：tree-sitter 0.25 / tree-sitter-bash 0.25 / serde 1 / serde_json 1 / toml 0.9 / rhai 1（P3 引入，`internals` feature——AST 字面量提取）/ interprocess 2.4（P4 引入，命名端点）/ notify 8（P4 引入，热重载监听）；`mlua` 待 P6（Lua 引擎）引入。
+- 依赖钉版（全景清单；版本约束的唯一事实源 = 根 `Cargo.toml`）：tree-sitter 0.25 / tree-sitter-bash 0.25 / serde 1 / serde_json 1 / toml 0.9 / rhai 1（P3 引入，`internals` feature——AST 字面量提取；传递依赖 `smartstring` unmaintained 见 [D-08](decisions.md#d-08-audit-警告口径接受-smartstring-unmaintained-并名册化)，接受并名册化）/ interprocess 2.4（P4 引入，命名端点）/ notify 8（P4 引入，热重载监听）/ mlua 0.12（M6.1 引入，`lua54` + `vendored` feature——Lua 引擎）。
 - **连接感知**：全靠内核事件，建立 = `accept()` 返回 / `ConnectNamedPipe` 完成，断开 = read 得 EOF（`0`）/ `ERROR_BROKEN_PIPE`；本机端点不存在 TCP 式半开连接（同机进程死 = 内核关 fd = 对端立即 EOF），无需心跳。
 - **Windows 忙实例**：第二客户端 `CreateFile` 得 `ERROR_PIPE_BUSY` → `WaitNamedPipe` 重试后重连（客户端标准模式）。
 - **安全**：端点 ACL 限当前用户（Windows 管道默认 DACL / unix socket 0600）。同用户其他进程可伪造请求，但裁决只输出 allow/confirm/deny 且 deny/confirm 均为安全侧，伪造最多把危险命令转人工确认，无可放大面。
@@ -240,6 +240,7 @@ crush-tether benchmark [--engine rhai --config <file>]            # 双跑对比
 
 - 默认 `--engine rhai`；`--engine lua` 可选。两者实现同一 `RuleEngine` trait，由 Rust 提供**不可绕过的安全原语**（`writes_file`/`path_escapes`/`deny`），DSL 只能组合判定、不能绕过。
 - 安全防护：脚本须设 `max_operations`/`max_call_levels`/`max_expr_depth` 限流，防死循环/OOM。
+- **Lua 引擎定型（2026-09-06 M6.1 落地）**：mlua 0.12（Lua 5.4 vendored）。沙箱 = `new_with` 安全模式 + 库白名单（coroutine/table/math/string/utf8，无 io/os/package/debug/ffi）+ base 危险全局消毒（`dofile`/`loadfile`/`load`/`print` 置 nil）；限流 = 指令数 hook（20 万条预算，对齐 rhai `max_operations` 量级）+ `set_memory_limit`（16MB，OOM 防线）——与 rhai 限流同语义（死循环/深递归/OOM 有界 → fail-safe confirm）。词汇约定：ctx/decision 与 rhai 共用同一封装类型（`ScriptCtx` userdata 只读字段；`decision` 表四常量 userdata + `__eq`）；**返回 nil = PASS**（词汇约定 Lua 侧映射）；裸字符串经返回边界统一解析（双保险）。script_allow：机制 2/3 同语义，机制 1 为注释剥离后的保守词法扫描（[更正登记](#更正登记对既有定稿) 17）。脚本文件按引擎选择：`rules.rhai`/`rules.lua`（默认包生成随引擎）。
 
 ### 命令建模与规则（定稿）
 

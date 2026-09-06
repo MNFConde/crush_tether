@@ -2,6 +2,16 @@
 
 This file records substantive progress in reverse-chronological order — newest entry at the top, right below this line. Keep each entry short — summary and pointer only; conclusions settle into `cairn/<topic>.md`.
 
+## 2026-09-06 · M6.1+M6.2 收口：Lua 引擎落地，P0–P6 仅余 M6.3
+
+- **M6.1 三件套一批定型**（b5c3ec8 接口层 / 3d9b7bc Lua 引擎 / 34ebf13 script_allow Lua 侧）：ctx 封装（ScriptCtx 自定义类型 + 只读 getter，**脚本侧 `ctx.bin` 属性语法保留**，用户拍板，模板零改动）+ 决策枚举化（ScriptDecision 四变体构造封闭，裸字符串返回边界统一解析，双保险保留）+ LuaEngine（mlua 0.12 lua54+vendored）实现同一 RuleEngine trait，ScriptChain 泛化 Box<dyn>。
+- **沙箱与限流**：mlua 无 sandbox feature → StdLib 白名单 + new_with 安全模式 + base 危险全局消毒；限流 = 指令数 hook（20 万条）+ set_memory_limit（16MB），与 rhai 同语义。返回 nil = PASS（词汇约定 nil 等价验收点达成）。
+- **script_allow Lua 侧**：机制 2/3 同语义；机制 1 = 注释剥离后保守词法扫描（防注释内 allow 误拒；字符串含 `--` 漏收不误拒）——design.md 更正登记 17。
+- **引擎感知装配**：脚本文件按引擎选择 rules.rhai/rules.lua；默认包生成随引擎（default-rules.lua 四谓词与 rhai 双跑对账测试）；本层缺失但有他引擎脚本文件 → stderr 告警；端点名 hash 本已含 engine。
+- **M6.2**：README 落地（中文，安装/配置/四模式/agent 接入/安全模型）；audit 口径修正 = D-08（smartstring unmaintained 经 rhai 传递依赖，用户裁定接受并名册化，监控点 = rhai 移除该依赖即升级）。
+- **教训**：mlua 对象不保活 Lua state（实例字段锚定）；StdLib::ALL_SAFE 含 IO/OS 不可直接用；rhai getter 是 register_get（闭包收 &mut T）；concat! 无分隔拼接制造 `nilend`（多行脚本文本行尾带 \n）。详见 `cairn/rust-rewrite-notes.md`。
+- Details: `doc/design.md`（DSL 引擎节 Lua 定型、更正登记 17、依赖钉版）、`doc/decisions.md` D-08、`README.md`、`src/script/{mod,lua}.rs`、`tests/script_lua.rs`。
+
 ## 2026-09-06 · 设计-实现一致性审查修复（13 笔提交，P6 前收口）
 
 - **审查**：双探索代理 + 人工复核（代理结论被修正 3 处：merge_with_labels 是 merge 的默认包装非未调用；check 自写日志 D-07 正文已载；default 档溯源 lookup 侧已接线——过度延伸的「default 未接线」撤回）。结论：M2 管线与 script_allow 五件套一致性最好，偏差集中在 P4 收尾承诺、文档滞后与测试基建。
