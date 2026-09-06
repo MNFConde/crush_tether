@@ -2,8 +2,10 @@
 //!
 //! - **结构类**（无需知识库）：同 token 多桶、同 bin 裸列表与命令节并存、
 //!   被 precedence 压死的死词条。
-//! - **语义类**（读知识库）：allow `may_write` 命令建议、别名归一后永不命中
-//!   的等价冗余、`same_flag` 等价类跨桶冲突、未知子命令拼写提示。
+//! - **语义类**（读知识库）：allow `may_write` 命令建议、allow `write_flags`
+//!   写形态建议（D-06 lint+脚本数据源组消费）、allow `delegates` 委托提示
+//!   （D-06 lint 提示组消费）、别名归一后永不命中的等价冗余、`same_flag`
+//!   等价类跨桶冲突、未知子命令拼写提示。
 //!
 //! lint 对象是**单份文件**（「同文件」语义）；分层合并后的跨层检查由效力
 //! 顺序语义天然裁决，不在 lint 范围。拼写提示为配置内互查（槽位封闭集没有
@@ -93,7 +95,7 @@ pub fn lint_file(
             }
         }
 
-        // 语义类：命令级（头部 allow may_write；别名等价冗余）。
+        // 语义类：命令级（头部 allow may_write/write_flags/delegates；别名等价冗余）。
         for (decision, bucket, toks) in &head {
             for t in toks {
                 if *decision == Decision::Allow && may_write_bin(kb, t) {
@@ -104,6 +106,32 @@ pub fn lint_file(
                              allowing it permits arbitrary writes"
                         ),
                     ));
+                }
+                if *decision == Decision::Allow {
+                    // write_flags 消费（D-06 lint+脚本数据源组）：带这些 flag
+                    // 才会写——allow 它 = 允许这些写形态。
+                    if let Some(flags) = write_flags_bin(kb, t) {
+                        out.push(suggestion(
+                            "allow-write-flags",
+                            format!(
+                                "`{t}` writes files with flags {flags:?} \
+                                 ({scope_label}.{bucket}); allowing it permits those \
+                                 write forms"
+                            ),
+                        ));
+                    }
+                    // delegates 消费（D-06 lint 提示组）：allow 它 = 允许执行
+                    // 被委托物中定义的任意命令。
+                    if let Some(target) = delegates_bin(kb, t) {
+                        out.push(suggestion(
+                            "allow-delegates",
+                            format!(
+                                "`{t}` delegates to `{target}` ({scope_label}.{bucket}); \
+                                 allowing it permits executing whatever the delegated \
+                                 file defines"
+                            ),
+                        ));
+                    }
                 }
                 if let Some(c) = non_self_canon_bin(&canon, t)
                     && toks.contains(&c)
@@ -167,7 +195,7 @@ pub fn lint_file(
             // 其余桶词条永不命中且多半违背作者本意）。
             lint_same_flag_cross_bucket(&mut out, &canon, bin, &slots);
 
-            // 语义类：节内 allow.sub 的 may_write 建议。
+            // 语义类：节内 allow.sub 的 may_write / write_flags 建议。
             for (decision, dim, toks) in &slots {
                 if *decision != Decision::Allow || *dim != "sub" {
                     continue;
@@ -179,6 +207,16 @@ pub fn lint_file(
                             format!(
                                 "`{bin} {t}` is known to possibly write \
                                  ({scope_label}.{bin}.allow.sub)"
+                            ),
+                        ));
+                    }
+                    if let Some(flags) = write_flags_sub(kb, bin, t) {
+                        out.push(suggestion(
+                            "allow-write-flags",
+                            format!(
+                                "`{bin} {t}` writes files with flags {flags:?} \
+                                 ({scope_label}.{bin}.allow.sub); allowing it permits \
+                                 those write forms"
                             ),
                         ));
                     }
@@ -441,11 +479,31 @@ fn may_write_bin(kb: Option<&KnowledgeBase>, bin: &str) -> bool {
         .unwrap_or(false)
 }
 
+fn write_flags_bin<'a>(kb: Option<&'a KnowledgeBase>, bin: &str) -> Option<&'a [String]> {
+    kb.and_then(|k| k.bins.get(bin))
+        .and_then(|e| e.write_flags.as_deref())
+}
+
+fn delegates_bin<'a>(kb: Option<&'a KnowledgeBase>, bin: &str) -> Option<&'a str> {
+    kb.and_then(|k| k.bins.get(bin))
+        .and_then(|e| e.delegates.as_deref())
+}
+
 fn may_write_sub(kb: Option<&KnowledgeBase>, bin: &str, sub: &str) -> bool {
     kb.and_then(|k| k.bins.get(bin))
         .and_then(|e| e.subs.get(sub))
         .and_then(|e| e.may_write)
         .unwrap_or(false)
+}
+
+fn write_flags_sub<'a>(
+    kb: Option<&'a KnowledgeBase>,
+    bin: &str,
+    sub: &str,
+) -> Option<&'a [String]> {
+    kb.and_then(|k| k.bins.get(bin))
+        .and_then(|e| e.subs.get(sub))
+        .and_then(|e| e.write_flags.as_deref())
 }
 
 fn non_self_canon_bin(canon: &CanonMaps, t: &str) -> Option<String> {
@@ -767,5 +825,43 @@ mod tests {
         // 无 deny 条目 → 无提示。
         let f = file("version = 1\ndefault = \"confirm\"\n[local]\nscript_allow = [\"ls\"]");
         assert!(lint_file(&f, None, &["ls".to_string()]).is_empty());
+    }
+
+    #[test]
+    fn allow_write_flags_suggestion() {
+        let k = kb(concat!(
+            "version = 1\n",
+            "[curl]\n",
+            "may_write = true\n",
+            "write_flags = [\"-o\", \"--output\"]",
+        ));
+        let f = file("version = 1\ndefault = \"confirm\"\n[local]\nallow = [\"curl\"]");
+        let lints = lint_file(&f, Some(&k), &[]);
+        assert!(codes(&lints).contains(&"allow-write-flags"), "{lints:?}");
+        // confirm 桶不提示（提示只针对 allow 承诺）。
+        let f2 = file("version = 1\ndefault = \"confirm\"\n[local]\nconfirm = [\"curl\"]");
+        assert!(!codes(&lint_file(&f2, Some(&k), &[])).contains(&"allow-write-flags"));
+        // 节内 allow.sub 同样检查。
+        let k2 = kb("version = 1\n[git]\nsub.checkout = { write_flags = [\"-b\"] }");
+        let f3 = file(concat!(
+            "version = 1\n",
+            "default = \"confirm\"\n",
+            "[local.git]\n",
+            "allow.sub = [\"checkout\"]",
+        ));
+        let lints = lint_file(&f3, Some(&k2), &[]);
+        assert!(codes(&lints).contains(&"allow-write-flags"), "{lints:?}");
+    }
+
+    #[test]
+    fn allow_delegates_hint() {
+        let k = kb("version = 1\n[make]\ndelegates = \"Makefile\"");
+        let f = file("version = 1\ndefault = \"confirm\"\n[local]\nallow = [\"make\"]");
+        let lints = lint_file(&f, Some(&k), &[]);
+        let hint = lints.iter().find(|l| l.code == "allow-delegates").unwrap();
+        assert!(hint.message.contains("Makefile"), "{}", hint.message);
+        // confirm 桶不提示。
+        let f2 = file("version = 1\ndefault = \"confirm\"\n[local]\nconfirm = [\"make\"]");
+        assert!(!codes(&lint_file(&f2, Some(&k), &[])).contains(&"allow-delegates"));
     }
 }
