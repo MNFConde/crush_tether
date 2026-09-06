@@ -378,6 +378,11 @@ allow   = ["ls", "cat", "grep", "rg", "find", "head", "tail", "wc", "pwd", "echo
   "gofmt", "black", "ruff", "dprint", "make", "just", "pytest",
   "touch", "mkdir"]
 confirm = ["rm", "pip", "pip3", "npx", "curl", "wget"]
+deny    = ["sudo", "dd", "shutdown", "mkfs", "mkfs.ext2", "mkfs.ext3",
+  "mkfs.ext4", "mkfs.vfat", "mkfs.fat", "mkfs.xfs", "mkfs.btrfs", "mkfs.ntfs"]
+  # deny：系统级破坏/提权硬阻断（guard.py DESTRUCTIVE 收窄为四族；声明层无前缀
+  # 匹配，mkfs.* 逐字枚举；rm 有日常可逆用途保留 confirm 档，reboot/halt/parted
+  # 等项目可按需自行补 deny 桶）
 
 [local.git]
 allow.sub    = ["status", "log", "diff", "show", "branch", "--version", "remote",
@@ -457,6 +462,8 @@ write_flags = ["-o", "--output"] # 属性：带这些 flag 会写文件
 
 [git]
 sub.branch     = { write_tokens = ["-d", "-D", "-m", "-M", "--delete", "--move", "--create"] }
+sub.remote     = { write_tokens = ["add", "set-url", "remove", "rename", "set-head", "set-branches"] }
+sub.tag        = { write_tokens = ["-d", "--delete", "-a", "-s", "-m", "-f", "-u", "--annotate"] }
 sub.config     = { write_arg_count = 2 }   # 位置参数 ≥2 即写形态
 flag."--force" = { same_flag = "-f" }      # 联系：flag 等价
 flag."--hard"  = { irreversible = true }   # 属性：破坏性参数
@@ -635,6 +642,7 @@ allow.flag = { remove = ["-h"] }                 # 继承并移除（flag 也能
 10. 「脚本 allow 契约：允许显式枚举 allow」（原「新增待定稿」方向）→ **2026-09-06 定稿为「脚本 v1 无放行权」**：返回 `allow` 一律契约违约（fail-safe confirm）。理由：图灵完备脚本上「禁无条件兜底」无法机械校验，结构性禁止给出可保证的安全性质；`[global]` 整命令放行特例由 TOML 承载。带条件的脚本 allow 登记为后续扩展，须先设计机械校验（见[脚本层职责边界](#脚本层职责边界定稿)）。
 11. 「脚本 v1 无放行权」（第 10 条）的后续扩展**设计已定稿（2026-09-06）**：[脚本条件放行（script_allow，定稿）](#脚本条件放行script_allow定稿)——注册式 + 声明对账的受控开口，allow 契约由「绝对禁止」演进为「放行面 = 用户声明集 ∩ 脚本条件命中」，deny 终审与裸 `"allow"` 违约不变；实现登记 **M4.0**（独立里程碑，启动需用户授权），脚本词汇约定修订（decision 常量四值 / ctx 空串约定）随其前置小改落地。
 12. 「筛查管线 `Parse → Flatten → Extract → Match(逐规则) → Verdict` 与 `pub trait Rule` 规则链接口」→ **2026-09-06 重画为双阶段管线**（① TOML 查表一般层 → ② 脚本评估特殊层 → ③ 定稿唯一放行出口 → ④ 组合裁决），`Rule` trait 由规则注入式 `engine::decide_with` + `script::RuleEngine` 替代；三个安全性质（定稿点唯一 / 逃逸检查挂定稿点 / deny 终审）随形状显式钉死。见[筛查管线与编译期组装（定稿）](#筛查管线与编译期组装定稿)。
+13. 「默认包缺口（M3.3 变更记录登记的宽松断言）」→ **2026-09-06 补齐**（用户拍板推荐值）：①知识库 `[git]` 补 `sub.remote`/`sub.tag` 的 `write_tokens`（忠实平移 guard.py `GIT_ACTION` 数据，裸创建 `git tag <名>` 原工具同样不视为写）；②`[local]` 补 `deny` 裸列表（sudo/dd/shutdown/mkfs 族——guard.py `DESTRUCTIVE` 收窄为四族，`rm` 保留 confirm 档、reboot/halt/parted 等留项目自补）。M3.3 变更记录中 remote/tag 与 mkfs/dd/shutdown/sudo 两行宽松断言随之消解。
 1. 「能声明表达的进 `rules.toml`」→ 收窄为「**无条件的纯查表**进 `rules.toml`，一切条件判断进脚本」。
 2. 「`[[rules]]` 规则链 + first-match-wins」→ **删除**，替换为「`[local]`/`[global]` 双表 + 每命令三桶查表 + 可调桶间优先级 `precedence`」。
 3. 「命令集合并集（只增不减，`exclude` 表剔除）」→ 2026-09-05 替换为 token 级合并，**2026-09-06 再修订为字段级继承**（数组覆盖 / inline table 增删；「挪桶即剔除」弃用——挪桶是改判不是删除）；无需 `exclude` 表（见 [D-02](decisions.md#d-02-字段级继承合并模型)）。

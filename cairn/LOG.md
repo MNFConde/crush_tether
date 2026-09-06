@@ -2,6 +2,12 @@
 
 This file records substantive progress in reverse-chronological order — newest entry at the top, right below this line. Keep each entry short — summary and pointer only; conclusions settle into `cairn/<topic>.md`.
 
+## 2026-09-06 · 默认包缺口补齐（M3.3 挂账消解，M4.0 前置 docs 小步）
+
+- 知识库 `[git]` 补 `sub.remote`/`sub.tag` 的 `write_tokens`（忠实平移 guard.py `GIT_ACTION`；裸创建 `git tag <名>` 原工具同样不算写，故不引入 write_arg_count）；`[local]` 补 deny 裸列表四族（sudo/dd/shutdown/mkfs.*——guard.py `DESTRUCTIVE` 收窄，`rm` 保留 confirm 档，reboot/halt/parted 留项目自补）。用户拍板推荐值。
+- design.md 更正登记 13 + 两处示例修订；模板逐字节同步（钉死测试过）；回归用例补 9 条断言、变更记录两行标记消解（allow 45 / confirm 30 / deny 14）。全门禁过。
+- Details: `doc/design.md` 更正登记 13、`src/config/templates/*`、`tests/guard_regression.rs`、`tests/config_design_example.rs`。
+
 ## 2026-09-06 · zcode adapter 并入 P5（M5.3 登记）
 
 - 评估结论：zcode hook 协议与 ClaudeCode 高度同构（`${CLAUDE_PROJECT_DIR}` 双别名、`PreToolUse` 三值决策 allow/ask/deny 与三档一一映射、exit 0/2 一致、`type:"process"` 免 shell），M5.1 信封可薄变体复用。用户拍板并入 M5.3。

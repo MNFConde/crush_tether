@@ -17,6 +17,8 @@ write_flags = ["-o", "--output"] # 属性：带这些 flag 会写文件
 
 [git]
 sub.branch     = { write_tokens = ["-d", "-D", "-m", "-M", "--delete", "--move", "--create"] }
+sub.remote     = { write_tokens = ["add", "set-url", "remove", "rename", "set-head", "set-branches"] }
+sub.tag        = { write_tokens = ["-d", "--delete", "-a", "-s", "-m", "-f", "-u", "--annotate"] }
 sub.config     = { write_arg_count = 2 }   # 位置参数 ≥2 即写形态
 flag."--force" = { same_flag = "-f" }      # 联系：flag 等价
 flag."--hard"  = { irreversible = true }   # 属性：破坏性参数

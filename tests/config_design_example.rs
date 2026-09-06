@@ -79,6 +79,29 @@ fn design_md_rules_example_parses() {
                 .collect()
         ))
     );
+    // [local] deny 裸列表（2026-09-06 补系统级破坏/提权四族，更正登记 13）
+    assert_eq!(
+        f.local.buckets.deny.as_ref(),
+        Some(&ListField::Set(
+            [
+                "sudo",
+                "dd",
+                "shutdown",
+                "mkfs",
+                "mkfs.ext2",
+                "mkfs.ext3",
+                "mkfs.ext4",
+                "mkfs.vfat",
+                "mkfs.fat",
+                "mkfs.xfs",
+                "mkfs.btrfs",
+                "mkfs.ntfs"
+            ]
+            .iter()
+            .map(|s| s.to_string())
+            .collect()
+        ))
+    );
     match f.local.buckets.allow.as_ref().expect("[local].allow") {
         ListField::Set(v) => {
             assert!(v.contains(&"ls".to_string()) && v.contains(&"touch".to_string()));
@@ -144,6 +167,22 @@ fn design_md_knowledge_example_parses() {
     );
     let git = &kb.bins["git"];
     assert!(git.subs["branch"].write_tokens.is_some());
+    // remote/tag 写形态数据（2026-09-06 补齐，更正登记 13）
+    assert_eq!(
+        git.subs["remote"].write_tokens.as_deref().unwrap_or(&[]),
+        [
+            "add",
+            "set-url",
+            "remove",
+            "rename",
+            "set-head",
+            "set-branches"
+        ]
+    );
+    assert_eq!(
+        git.subs["tag"].write_tokens.as_deref().unwrap_or(&[]),
+        ["-d", "--delete", "-a", "-s", "-m", "-f", "-u", "--annotate"]
+    );
     assert_eq!(git.subs["config"].write_arg_count, Some(2));
     assert_eq!(git.flags["--force"].same_flag.as_deref(), Some("-f"));
     assert_eq!(git.flags["--hard"].irreversible, Some(true));

@@ -12,6 +12,11 @@ allow   = ["ls", "cat", "grep", "rg", "find", "head", "tail", "wc", "pwd", "echo
   "gofmt", "black", "ruff", "dprint", "make", "just", "pytest",
   "touch", "mkdir"]
 confirm = ["rm", "pip", "pip3", "npx", "curl", "wget"]
+deny    = ["sudo", "dd", "shutdown", "mkfs", "mkfs.ext2", "mkfs.ext3",
+  "mkfs.ext4", "mkfs.vfat", "mkfs.fat", "mkfs.xfs", "mkfs.btrfs", "mkfs.ntfs"]
+  # deny：系统级破坏/提权硬阻断（guard.py DESTRUCTIVE 收窄为四族；声明层无前缀
+  # 匹配，mkfs.* 逐字枚举；rm 有日常可逆用途保留 confirm 档，reboot/halt/parted
+  # 等项目可按需自行补 deny 桶）
 
 [local.git]
 allow.sub    = ["status", "log", "diff", "show", "branch", "--version", "remote",
