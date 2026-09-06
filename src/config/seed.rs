@@ -137,6 +137,7 @@ mod tests {
             DEFAULT_RULES_RHAI,
             std::path::PathBuf::from("D:/code/tmp/proj"),
             None,
+            Default::default(),
         )
         .expect("default rules.rhai compiles");
         let c = |s: &str| {
@@ -151,22 +152,22 @@ mod tests {
         assert_eq!(
             e.evaluate(&c("find . -delete"), Decision::Allow, p, false)
                 .unwrap(),
-            Some(Decision::Confirm)
+            crate::script::ScriptOutcome::Adjust(Decision::Confirm)
         );
         // 3) 管道 sink → deny
         assert_eq!(
             e.evaluate(&c("sh"), Decision::Allow, p, true).unwrap(),
-            Some(Decision::Deny)
+            crate::script::ScriptOutcome::Adjust(Decision::Deny)
         );
         // 4) 写特征升级：allow + 写重定向 → confirm；无写特征不升级
         assert_eq!(
             e.evaluate(&c("ls"), Decision::Allow, p, false).unwrap(),
-            None
+            crate::script::ScriptOutcome::Pass
         );
         assert_eq!(
             e.evaluate(&c("ls > out.txt"), Decision::Allow, p, false)
                 .unwrap(),
-            Some(Decision::Confirm)
+            crate::script::ScriptOutcome::Adjust(Decision::Confirm)
         );
     }
 

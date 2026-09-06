@@ -139,11 +139,12 @@ fn main() -> ExitCode {
     };
 
     // 脚本层：项目 rules.rhai（缺失 = 无脚本层，TOML 自足）。脚本承载条件
-    // 判断并可产生裁决，故编译/加载失败必须告警 + fail-safe confirm，不能
-    // 静默跳过（与知识库的降级策略相反）。
+    // 判断并可产生裁决，故编译/加载失败（含 script_allow 对账拒载）必须
+    // 告警 + fail-safe confirm，不能静默跳过（与知识库的降级策略相反）。
     let script = match crush_tether::script::load_project_script(
         &project,
         kb.map(|k| Arc::new(k.clone())),
+        lookup.script_allow().clone(),
     ) {
         Ok(s) => s,
         Err(e) => {
@@ -153,25 +154,41 @@ fn main() -> ExitCode {
     };
 
     let verdict = engine::decide_with(&input.command, &project, &|cmd, project, pipe_to_shell| {
-        let mut v = lookup.classify(cmd, project);
-        if let Some(script) = &script {
-            match script.evaluate(cmd, v.decision, project, pipe_to_shell) {
-                Ok(Some(d)) => {
-                    if d != v.decision {
-                        v = Verdict {
-                            decision: d,
-                            reason: Some("adjusted by rules.rhai".into()),
-                        };
-                    }
-                }
-                Ok(None) => {}
+        let v0 = lookup.classify(cmd, project);
+        let (decision, reason) = match &script {
+            Some(script) => match script.evaluate(cmd, v0.decision, project, pipe_to_shell) {
+                // 定稿点：deny 终审 + allow 激活作用域化逃逸检查的唯一出口。
+                Ok(outcome) => crush_tether::script::finalize(
+                    v0.decision,
+                    outcome,
+                    script.decls(),
+                    cmd,
+                    project,
+                ),
                 Err(e) => {
                     eprintln!("crush-tether: script evaluation failed: {e}; fail-safe confirm");
-                    v = Verdict::confirm("script evaluation failed; fail-safe");
+                    (
+                        crush_tether::model::Decision::Confirm,
+                        Some("script evaluation failed; fail-safe".into()),
+                    )
                 }
-            }
+            },
+            None => (v0.decision, None),
+        };
+        match (reason, decision != v0.decision) {
+            (Some(reason), true) => Verdict {
+                decision,
+                reason: Some(reason),
+            },
+            (Some(reason), false) => Verdict {
+                decision,
+                reason: v0.reason.or(Some(reason)),
+            },
+            (None, _) => Verdict {
+                decision,
+                reason: v0.reason,
+            },
         }
-        v
     });
 
     ExitCode::from(channel::emit(&verdict, agent) as u8)

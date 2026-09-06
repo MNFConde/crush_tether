@@ -138,6 +138,16 @@ pub enum DeclScope {
 }
 
 impl ScriptAllowDecls {
+    /// 登记一条 local 声明（测试/装配辅助）。
+    pub fn declare_local(&mut self, bin: &str) {
+        self.local.insert(bin.to_string());
+    }
+
+    /// 登记一条 global 声明（测试/装配辅助）。
+    pub fn declare_global(&mut self, bin: &str) {
+        self.global.insert(bin.to_string());
+    }
+
     /// bin 的声明作用域；未声明 = `None`（运行时 allow(name) 激活被拒）。
     pub fn scope_of(&self, bin: &str) -> Option<DeclScope> {
         if self.global.contains(bin) {

@@ -11,14 +11,20 @@
 //!   空串，无意见，保留查表裁决）/ `"allow"` / `"confirm"` / `"deny"`（等价
 //!   词汇 `decision::` 常量见 [`decision`]）；其他返回值、编译错误、
 //!   运行时错误、限流触发一律由调用方映射为 fail-safe confirm。
+//! - **script_allow（M4.0，受控放行）**：脚本只能激活用户在 `rules.toml`
+//!   `script_allow` 声明过的 bin——`allow("bin")` 原语 + 加载期字面量提取 /
+//!   声明集对账拒载 / 运行时双保险 / 定稿点作用域化逃逸检查（[`finalize`]）
+//!   / deny 终审（design.md「脚本条件放行（script_allow，定稿）」五件套）。
+//!   裸 `"allow"` 字符串仍是契约违约。
 //! - AST 编译一次缓存于实例（check 每次全量、serve 复用同一实例）。
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use rhai::{Dynamic, Engine};
+use rhai::{ASTNode, Dynamic, Engine, EvalAltResult, Expr, Position, Stmt};
 
 use crate::cmd_parse::SimpleCommand;
+use crate::config::merge::{DeclScope, ScriptAllowDecls};
 use crate::knowledge::KnowledgeBase;
 use crate::model::Decision;
 
@@ -30,6 +36,9 @@ pub const SUPPORTED_ENGINES: &[&str] = &["rhai"];
 pub enum ScriptError {
     Io(std::io::Error),
     Compile(String),
+    /// 加载期语义拒载（机制 1/2）：`allow()` 实参非字面量、声明集对账失败。
+    /// 与 Compile 同为「脚本整体不可用」——拒载整个脚本 + fail-safe confirm。
+    Rejected(String),
     Runtime(String),
     /// 脚本返回了契约之外的值。
     Contract(String),
@@ -40,6 +49,7 @@ impl std::fmt::Display for ScriptError {
         match self {
             ScriptError::Io(e) => write!(f, "io error: {e}"),
             ScriptError::Compile(e) => write!(f, "compile error: {e}"),
+            ScriptError::Rejected(e) => write!(f, "script rejected: {e}"),
             ScriptError::Runtime(e) => write!(f, "runtime error: {e}"),
             ScriptError::Contract(e) => write!(f, "contract violation: {e}"),
         }
@@ -70,31 +80,54 @@ fn register_decision_module(engine: &mut Engine) {
     engine.register_static_module("decision", m.into());
 }
 
+/// `allow("bin")` 的激活标记（自定义类型）：只能由 `allow` 原语构造，作为
+/// `check()` 返回值流入定稿点；脚本无法伪造（裸字符串 "allow" 仍契约违约）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AllowActivation(pub String);
+
 /// 脚本引擎抽象（引擎开闭落点；Rhai 为 v1 默认实现）。
 pub trait RuleEngine {
-    /// 单命令评估：`Ok(None)` = 脚本无意见（保留查表裁决）。
-    /// `pipe_to_shell` 为管线原语计算的管道拓扑特征（整条命令行级）。
+    /// 单命令评估。`pipe_to_shell` 为管线原语计算的管道拓扑特征（整条
+    /// 命令行级）。`allow(name)` 激活只产出 [`ScriptOutcome::Activate`]，
+    /// 放行与否由定稿点（[`finalize`]）裁决——脚本自身无放行权。
     fn evaluate(
         &self,
         cmd: &SimpleCommand,
         verdict: Decision,
         project: &Path,
         pipe_to_shell: bool,
-    ) -> Result<Option<Decision>, ScriptError>;
+    ) -> Result<ScriptOutcome, ScriptError>;
+}
+
+/// 单命令脚本评估结果（管线第 2 步产出，第 3 步定稿点消费）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ScriptOutcome {
+    /// 无意见（`decision::PASS`）：保留查表裁决。
+    Pass,
+    /// 脚本升级裁决（confirm / deny）；定稿点对查表 deny 终审不可翻。
+    Adjust(Decision),
+    /// `allow(name)` 激活：放行面 = 用户声明集 ∩ 脚本条件命中，由定稿点
+    /// 按声明作用域元数据复查后放行。
+    Activate(String),
 }
 
 /// Rhai 引擎实例：`Engine` + 编译缓存的 AST + 原语闭包捕获的上下文。
 pub struct RhaiEngine {
     engine: Engine,
     ast: rhai::AST,
+    /// 声明集副本（定稿点作用域化逃逸检查的判据）。
+    decls: ScriptAllowDecls,
 }
 
 impl RhaiEngine {
     /// 编译脚本并装配沙箱（限流 + 原语注册）；编译错误在此暴露。
+    /// `decls` 为 `rules.toml` `script_allow` 声明集（机制 2 对账 + 机制 3
+    /// 运行时校验 + 定稿点作用域判据）。
     pub fn compile(
         source: &str,
         project: PathBuf,
         kb: Option<Arc<KnowledgeBase>>,
+        decls: ScriptAllowDecls,
     ) -> Result<Self, ScriptError> {
         let mut engine = Engine::new();
         // 限流（防死循环 / 深递归 / OOM）。
@@ -106,11 +139,32 @@ impl RhaiEngine {
 
         register_primitives(&mut engine, project, kb);
         register_decision_module(&mut engine);
+        register_allow(&mut engine, decls.clone());
 
         let ast = engine
             .compile(source)
             .map_err(|e| ScriptError::Compile(e.to_string()))?;
-        Ok(Self { engine, ast })
+
+        // 机制 1：加载期 AST 字面量提取（非字面量实参 → 拒载）。
+        let extracted = extract_allow_literals(&ast)?;
+        // 机制 2：声明集对账——提取集 − 声明集 ≠ ∅ → 拒载（脚本作者无法
+        // 替用户决定放行谁）。
+        for name in &extracted {
+            if decls.scope_of(name).is_none() {
+                return Err(ScriptError::Rejected(format!(
+                    "script calls allow(\"{name}\") but `{name}` is not declared in \
+                     rules.toml `script_allow`; declarations are the only source of \
+                     allow activations"
+                )));
+            }
+        }
+
+        Ok(Self { engine, ast, decls })
+    }
+
+    /// 声明集（定稿点作用域化逃逸检查用）。
+    pub fn decls(&self) -> &ScriptAllowDecls {
+        &self.decls
     }
 }
 
@@ -121,32 +175,181 @@ impl RuleEngine for RhaiEngine {
         verdict: Decision,
         project: &Path,
         pipe_to_shell: bool,
-    ) -> Result<Option<Decision>, ScriptError> {
+    ) -> Result<ScriptOutcome, ScriptError> {
         let mut scope = rhai::Scope::new();
         let ctx = build_context(cmd, verdict, project, pipe_to_shell);
         let result: Dynamic = self
             .engine
             .call_fn(&mut scope, &self.ast, "check", (ctx,))
             .map_err(|e| ScriptError::Runtime(e.to_string()))?;
+        // 激活标记（allow 原语构造的自定义类型）→ 交给定稿点。
+        if let Some(a) = result.clone().try_cast::<AllowActivation>() {
+            return Ok(ScriptOutcome::Activate(a.0));
+        }
         let s = result
             .into_string()
-            .map_err(|_| ScriptError::Contract("check() must return a string".into()))?;
+            .map_err(|_| ScriptError::Contract("check() must return a decision value".into()))?;
         match s.as_str() {
-            "" => Ok(None),
-            // allow 契约（M3.2 定稿）：脚本 v1 无放行权——放行语义完全由
-            // rules.toml 承载；返回 allow（含无条件兜底）被结构性拒绝，
-            // 由调用方映射为 fail-safe confirm。
+            "" => Ok(ScriptOutcome::Pass),
+            // allow 契约：放行必须走带名通道（allow("bin")，引擎才有的对账）；
+            // 裸 "allow" 字符串仍是契约违约，fail-safe confirm。
             "allow" => Err(ScriptError::Contract(
-                "scripts cannot return `allow` (v1 allow contract: allow belongs to \
-                 rules.toml only; scripts may only raise to confirm/deny)"
+                "scripts cannot return a bare `allow` (use the declared allow(\"bin\") \
+                 channel; bare strings cannot be reconciled)"
                     .into(),
             )),
-            "confirm" => Ok(Some(Decision::Confirm)),
-            "deny" => Ok(Some(Decision::Deny)),
+            "confirm" => Ok(ScriptOutcome::Adjust(Decision::Confirm)),
+            "deny" => Ok(ScriptOutcome::Adjust(Decision::Deny)),
             other => Err(ScriptError::Contract(format!(
-                "check() returned `{other}`; expected one of \"\", confirm, deny"
+                "check() returned `{other}`; expected one of \"\", confirm, deny, \
+                 allow(\"bin\")"
             ))),
         }
+    }
+}
+
+/// 机制 3：运行时双保险——`allow(name)` 执行时再校验 name ∈ 声明集；
+/// 未声明 → 运行时错误 → 调用方 fail-safe confirm。
+fn register_allow(engine: &mut Engine, decls: ScriptAllowDecls) {
+    engine.register_type_with_name::<AllowActivation>("AllowActivation");
+    engine.register_fn(
+        "allow",
+        move |name: &str| -> Result<AllowActivation, Box<EvalAltResult>> {
+            if decls.scope_of(name).is_some() {
+                Ok(AllowActivation(name.to_string()))
+            } else {
+                Err(Box::new(EvalAltResult::ErrorRuntime(
+                    Dynamic::from(format!(
+                        "allow(\"{name}\") rejected: `{name}` is not declared in rules.toml \
+                     `script_allow`"
+                    )),
+                    Position::NONE,
+                )))
+            }
+        },
+    );
+}
+
+/// 定稿点（design.md 筛查管线第 3 步）：全引擎唯一的放行出口。
+///
+/// - **deny 终审**：查表落 deny 的命令，脚本任何产出都翻不动（不可逆操作
+///   不给任何机制留放行通道）；
+/// - **allow(name) 激活**：按声明作用域元数据复查——local 声明对原始命令
+///   参数执行 `path_escapes`（与查表层同一实现），逃逸 → confirm；global
+///   声明豁免（两表皆现 global 胜已在声明集 `scope_of` 体现）。检查在引擎、
+///   单点、脚本不可绕过也不可代劳（脚本自查通过照样再查）；
+/// - 查表 allow 上的激活为幂等 no-op。
+///
+/// 返回（最终裁决，原因说明——裁决日志 reason 字段数据源）。
+pub fn finalize(
+    initial: Decision,
+    outcome: ScriptOutcome,
+    decls: &ScriptAllowDecls,
+    cmd: &SimpleCommand,
+    project: &Path,
+) -> (Decision, Option<String>) {
+    match outcome {
+        ScriptOutcome::Pass => (initial, None),
+        ScriptOutcome::Adjust(d) => {
+            if initial == Decision::Deny {
+                (
+                    Decision::Deny,
+                    Some("script outcome discarded: deny is final".into()),
+                )
+            } else {
+                (d, Some("adjusted by rules.rhai".into()))
+            }
+        }
+        ScriptOutcome::Activate(name) => {
+            if initial == Decision::Deny {
+                return (
+                    Decision::Deny,
+                    Some(format!(
+                        "allow(\"{name}\") activation discarded: deny is final"
+                    )),
+                );
+            }
+            match decls.scope_of(&name) {
+                Some(DeclScope::Global) => (
+                    Decision::Allow,
+                    Some(format!("allow(\"{name}\") activated (global declaration)")),
+                ),
+                Some(DeclScope::Local) => {
+                    if cmd
+                        .args()
+                        .iter()
+                        .any(|w| crate::cmd_parse::path_escapes(w, project))
+                    {
+                        (
+                            Decision::Confirm,
+                            Some(format!(
+                                "allow(\"{name}\") activation downgraded: path escapes \
+                                 repository"
+                            )),
+                        )
+                    } else {
+                        (
+                            Decision::Allow,
+                            Some(format!(
+                                "allow(\"{name}\") activated (local declaration; args \
+                                 inside repo)"
+                            )),
+                        )
+                    }
+                }
+                // 双保险：机制 3 已在运行时拒绝未声明名；此分支到不了则保守。
+                None => (
+                    Decision::Confirm,
+                    Some("allow activation without declaration; fail-safe".into()),
+                ),
+            }
+        }
+    }
+}
+
+/// 机制 1（加载期字面量提取）：AST 静态提取脚本中全部 `allow("…")` 调用的
+/// 实参字面量。校验对象是语法树不是运行值——实参不是字符串字面量（变量 /
+/// 拼接 / 循环变量）→ 拒载。遍历用 rhai 官方 `AST::walk`（含函数体；rhai
+/// `internals` feature，随锁版钉死），个别 AST 内部变体不下潜时由机制 3
+/// 运行时双保险兜底。
+fn extract_allow_literals(ast: &rhai::AST) -> Result<Vec<String>, ScriptError> {
+    let mut out: Vec<String> = Vec::new();
+    let mut rejected: Option<ScriptError> = None;
+    ast.walk(&mut |path: &[ASTNode]| {
+        let Some(node) = path.last() else {
+            return true;
+        };
+        // `allow("…")` 的两种出现形态：表达式（`return allow(...)` / 参数位）
+        // 或语句级 FnCall（单函数调用成句的专用变体——含 `return allow(...)`
+        // 被优化器折叠后的形态——其自身不再作为 Expr 节点被访问）。
+        let fc = match node {
+            ASTNode::Expr(Expr::FnCall(fc, _) | Expr::MethodCall(fc, _)) => fc,
+            ASTNode::Stmt(Stmt::FnCall(fc, _)) => fc,
+            _ => return true,
+        };
+        if fc.name != "allow" {
+            return true;
+        }
+        match fc.args.first() {
+            // 字面量名 → 收集进提取集。
+            Some(Expr::StringConstant(s, _)) => {
+                out.push(s.to_string());
+                true
+            }
+            // 非字面量实参 → 拒载（终止遍历）。
+            _ => {
+                rejected = Some(ScriptError::Rejected(
+                    "`allow()` must be called with a string literal bin name (dynamic \
+                     names are not statically reconcilable)"
+                        .into(),
+                ));
+                false
+            }
+        }
+    });
+    match rejected {
+        Some(e) => Err(e),
+        None => Ok(out),
     }
 }
 
@@ -254,12 +457,13 @@ fn register_primitives(engine: &mut Engine, project: PathBuf, kb: Option<Arc<Kno
 pub fn load_project_script(
     project: &Path,
     kb: Option<Arc<KnowledgeBase>>,
+    decls: ScriptAllowDecls,
 ) -> Result<Option<RhaiEngine>, ScriptError> {
     let path = project.join(".crush-tether").join("rules.rhai");
     match std::fs::read_to_string(&path) {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(e) => Err(ScriptError::Io(e)),
-        Ok(source) => RhaiEngine::compile(&source, project.to_path_buf(), kb).map(Some),
+        Ok(source) => RhaiEngine::compile(&source, project.to_path_buf(), kb, decls).map(Some),
     }
 }
 
@@ -283,7 +487,13 @@ mod tests {
     }
 
     fn compile(src: &str) -> RhaiEngine {
-        RhaiEngine::compile(src, PathBuf::from("D:/code/tmp/proj"), None).expect("compiles")
+        RhaiEngine::compile(
+            src,
+            PathBuf::from("D:/code/tmp/proj"),
+            None,
+            ScriptAllowDecls::default(),
+        )
+        .expect("compiles")
     }
 
     const PROJ: &str = "D:/code/tmp/proj";
@@ -300,17 +510,17 @@ mod tests {
         assert_eq!(
             e.evaluate(&cmd("sudo x"), Decision::Allow, Path::new(PROJ), false)
                 .unwrap(),
-            Some(Decision::Deny)
+            ScriptOutcome::Adjust(Decision::Deny)
         );
         assert_eq!(
             e.evaluate(&cmd("rm x"), Decision::Allow, Path::new(PROJ), false)
                 .unwrap(),
-            Some(Decision::Confirm)
+            ScriptOutcome::Adjust(Decision::Confirm)
         );
         assert_eq!(
             e.evaluate(&cmd("ls"), Decision::Allow, Path::new(PROJ), false)
                 .unwrap(),
-            None
+            ScriptOutcome::Pass
         );
     }
 
@@ -326,7 +536,7 @@ mod tests {
         assert_eq!(
             e.evaluate(&cmd("git push"), Decision::Allow, Path::new(PROJ), false)
                 .unwrap(),
-            Some(Decision::Deny)
+            ScriptOutcome::Adjust(Decision::Deny)
         );
     }
 
@@ -362,7 +572,7 @@ mod tests {
         // 语法错误在编译期暴露。
         let src = "fn check(ctx) { let = ; }";
         assert!(matches!(
-            RhaiEngine::compile(src, PathBuf::from(PROJ), None),
+            RhaiEngine::compile(src, PathBuf::from(PROJ), None, ScriptAllowDecls::default()),
             Err(ScriptError::Compile(_))
         ));
     }
@@ -404,6 +614,7 @@ mod tests {
             ),
             PathBuf::from(PROJ),
             Some(kb),
+            ScriptAllowDecls::default(),
         )
         .expect("compiles");
         assert_eq!(
@@ -414,12 +625,12 @@ mod tests {
                 false
             )
             .unwrap(),
-            Some(Decision::Confirm)
+            ScriptOutcome::Adjust(Decision::Confirm)
         );
         assert_eq!(
             e.evaluate(&cmd("git branch"), Decision::Allow, Path::new(PROJ), false)
                 .unwrap(),
-            None
+            ScriptOutcome::Pass
         );
         assert_eq!(
             e.evaluate(
@@ -429,7 +640,7 @@ mod tests {
                 false
             )
             .unwrap(),
-            Some(Decision::Confirm)
+            ScriptOutcome::Adjust(Decision::Confirm)
         );
         assert_eq!(
             e.evaluate(
@@ -439,7 +650,7 @@ mod tests {
                 false
             )
             .unwrap(),
-            None
+            ScriptOutcome::Pass
         );
         assert_eq!(
             e.evaluate(
@@ -449,12 +660,12 @@ mod tests {
                 false
             )
             .unwrap(),
-            Some(Decision::Deny)
+            ScriptOutcome::Adjust(Decision::Deny)
         );
         assert_eq!(
             e.evaluate(&cmd("npx foo"), Decision::Allow, Path::new(PROJ), false)
                 .unwrap(),
-            Some(Decision::Confirm)
+            ScriptOutcome::Adjust(Decision::Confirm)
         );
         assert_eq!(
             e.evaluate(
@@ -464,13 +675,14 @@ mod tests {
                 false
             )
             .unwrap(),
-            Some(Decision::Confirm)
+            ScriptOutcome::Adjust(Decision::Confirm)
         );
         // 知识库删光：查不到数据 → 各兜底分支不触发 → 无意见。
         let e_empty = RhaiEngine::compile(
             "fn check(ctx) { if kb_write_tokens(\"git\", \"branch\").contains(\"-d\") { \"confirm\" } else { \"\" } }",
             PathBuf::from(PROJ),
             None,
+            ScriptAllowDecls::default(),
         )
         .expect("compiles");
         assert_eq!(
@@ -482,19 +694,24 @@ mod tests {
                     false
                 )
                 .unwrap(),
-            None
+            ScriptOutcome::Pass
         );
     }
 
     #[test]
     fn missing_script_file_is_none_not_error() {
-        let r = load_project_script(Path::new("D:/code/tmp/definitely-absent"), None).unwrap();
+        let r = load_project_script(
+            Path::new("D:/code/tmp/definitely-absent"),
+            None,
+            ScriptAllowDecls::default(),
+        )
+        .unwrap();
         assert!(r.is_none(), "TOML 自足：脚本缺失不是错误");
     }
 
     #[test]
     fn allow_contract_rejects_script_allow() {
-        // v1 脚本无放行权：返回 allow = 契约违约（无条件兜底被结构性拒绝）。
+        // 裸 "allow" 字符串 = 契约违约（放行必须走 allow("bin") 带名通道）。
         let e = compile("fn check(ctx) { \"allow\" }");
         assert!(matches!(
             e.evaluate(&cmd("ls"), Decision::Allow, Path::new(PROJ), false),
@@ -509,12 +726,12 @@ mod tests {
         assert_eq!(
             e.evaluate(&cmd("ls"), Decision::Allow, Path::new(PROJ), false)
                 .unwrap(),
-            Some(Decision::Confirm)
+            ScriptOutcome::Adjust(Decision::Confirm)
         );
         assert_eq!(
             e.evaluate(&cmd("sudo x"), Decision::Deny, Path::new(PROJ), false)
                 .unwrap(),
-            Some(Decision::Deny)
+            ScriptOutcome::Adjust(Decision::Deny)
         );
     }
 
@@ -529,12 +746,12 @@ mod tests {
         assert_eq!(
             e.evaluate(&cmd("sh"), Decision::Allow, Path::new(PROJ), true)
                 .unwrap(),
-            Some(Decision::Deny)
+            ScriptOutcome::Adjust(Decision::Deny)
         );
         assert_eq!(
             e.evaluate(&cmd("sh"), Decision::Allow, Path::new(PROJ), false)
                 .unwrap(),
-            None
+            ScriptOutcome::Pass
         );
     }
 
@@ -551,17 +768,17 @@ mod tests {
         assert_eq!(
             e.evaluate(&cmd("sudo x"), Decision::Allow, Path::new(PROJ), false)
                 .unwrap(),
-            Some(Decision::Deny)
+            ScriptOutcome::Adjust(Decision::Deny)
         );
         assert_eq!(
             e.evaluate(&cmd("rm x"), Decision::Allow, Path::new(PROJ), false)
                 .unwrap(),
-            Some(Decision::Confirm)
+            ScriptOutcome::Adjust(Decision::Confirm)
         );
         assert_eq!(
             e.evaluate(&cmd("ls"), Decision::Allow, Path::new(PROJ), false)
                 .unwrap(),
-            None,
+            ScriptOutcome::Pass,
             "PASS 映射无意见"
         );
         // 限定名是常量：脚本内重新赋值不得改变引擎侧词汇表。
@@ -583,12 +800,162 @@ mod tests {
         assert_eq!(
             e.evaluate(&cmd("ls"), Decision::Allow, Path::new(PROJ), false)
                 .unwrap(),
-            Some(Decision::Confirm)
+            ScriptOutcome::Adjust(Decision::Confirm)
         );
         assert_eq!(
             e.evaluate(&cmd("git status"), Decision::Allow, Path::new(PROJ), false)
                 .unwrap(),
-            None
+            ScriptOutcome::Pass
         );
+    }
+
+    // ── script_allow 五件套 ──────────────────────────────────────────────
+
+    fn decls(local: &[&str], global: &[&str]) -> ScriptAllowDecls {
+        let mut d = ScriptAllowDecls::default();
+        for b in local {
+            d.declare_local(b);
+        }
+        for b in global {
+            d.declare_global(b);
+        }
+        d
+    }
+
+    #[test]
+    fn allow_activation_flows_to_outcome_for_declared_bin() {
+        let e = RhaiEngine::compile(
+            concat!(
+                "fn check(ctx) {",
+                "  if ctx.bin == \"ls\" && ctx.writes_redirect { return allow(\"ls\"); }",
+                "  \"\"",
+                "}"
+            ),
+            PathBuf::from(PROJ),
+            None,
+            decls(&["ls"], &[]),
+        )
+        .expect("compiles");
+        assert_eq!(
+            e.evaluate(
+                &cmd("ls > out.txt"),
+                Decision::Confirm,
+                Path::new(PROJ),
+                false
+            )
+            .unwrap(),
+            ScriptOutcome::Activate("ls".into())
+        );
+        assert_eq!(
+            e.evaluate(&cmd("ls"), Decision::Allow, Path::new(PROJ), false)
+                .unwrap(),
+            ScriptOutcome::Pass
+        );
+    }
+
+    #[test]
+    fn undeclared_allow_is_rejected_at_load_time() {
+        // 机制 2：提取集 − 声明集 ≠ ∅ → 拒载。
+        let r = RhaiEngine::compile(
+            "fn check(ctx) { if ctx.bin == \"curl\" { return allow(\"curl\"); } \"\" }",
+            PathBuf::from(PROJ),
+            None,
+            decls(&["ls"], &[]),
+        );
+        assert!(matches!(r, Err(ScriptError::Rejected(msg)) if msg.contains("curl")));
+    }
+
+    #[test]
+    fn dynamic_allow_name_is_rejected_at_load_time() {
+        // 机制 1：变量实参 → 拒载（校验语法树不是运行值）。
+        for src in [
+            "fn check(ctx) { let b = \"ls\"; return allow(b); }",
+            "fn check(ctx) { for x in [\"a\", \"b\"] { return allow(x); } }",
+        ] {
+            let r =
+                RhaiEngine::compile(src, PathBuf::from(PROJ), None, decls(&["ls", "curl"], &[]));
+            assert!(matches!(r, Err(ScriptError::Rejected(_))), "{src}");
+        }
+        // 字符串拼接被优化器折叠为字面量 → 提取到折叠后的实参并与声明集
+        // 对账：未声明 → 拒载（静态提取与运行值恒一致，审计面不缩小）。
+        let r = RhaiEngine::compile(
+            "fn check(ctx) { return allow(\"c\" + \"url\"); }",
+            PathBuf::from(PROJ),
+            None,
+            decls(&["ls"], &[]),
+        );
+        assert!(matches!(r, Err(ScriptError::Rejected(msg)) if msg.contains("curl")));
+    }
+
+    #[test]
+    fn deny_is_final_over_script_outcomes() {
+        let cmd_deny = cmd("sudo x");
+        let proj = Path::new(PROJ);
+        let d = ScriptAllowDecls::default();
+        // Adjust 在 deny 之上无效（终审）。
+        let (v, reason) = finalize(
+            Decision::Deny,
+            ScriptOutcome::Adjust(Decision::Confirm),
+            &d,
+            &cmd_deny,
+            proj,
+        );
+        assert_eq!(v, Decision::Deny);
+        assert!(reason.unwrap().contains("deny is final"));
+        // 激活在 deny 之上无效（终审）。
+        let (v, reason) = finalize(
+            Decision::Deny,
+            ScriptOutcome::Activate("ls".into()),
+            &decls(&["ls"], &[]),
+            &cmd_deny,
+            proj,
+        );
+        assert_eq!(v, Decision::Deny);
+        assert!(reason.unwrap().contains("deny is final"));
+    }
+
+    #[test]
+    fn activation_scope_decides_escape_check() {
+        let proj = Path::new(PROJ);
+        // local 声明：仓库内参数 → allow；逃逸参数 → confirm。
+        let (v, _) = finalize(
+            Decision::Confirm,
+            ScriptOutcome::Activate("ls".into()),
+            &decls(&["ls"], &[]),
+            &cmd("ls > out.txt"),
+            proj,
+        );
+        assert_eq!(v, Decision::Allow);
+        let (v, reason) = finalize(
+            Decision::Confirm,
+            ScriptOutcome::Activate("ls".into()),
+            &decls(&["ls"], &[]),
+            &cmd("ls ../../outside.txt"),
+            proj,
+        );
+        assert_eq!(v, Decision::Confirm);
+        assert!(reason.unwrap().contains("escapes"));
+        // global 声明：豁免逃逸检查。
+        let (v, reason) = finalize(
+            Decision::Confirm,
+            ScriptOutcome::Activate("docker".into()),
+            &decls(&[], &["docker"]),
+            &cmd("docker > /outside.txt"),
+            proj,
+        );
+        assert_eq!(v, Decision::Allow);
+        assert!(reason.unwrap().contains("global"));
+        // 两表皆现 → global 胜（scope_of 体现）。
+        let d = decls(&["ls"], &["ls"]);
+        assert_eq!(d.scope_of("ls"), Some(DeclScope::Global));
+        // 查表 allow 上的激活 = 幂等。
+        let (v, _) = finalize(
+            Decision::Allow,
+            ScriptOutcome::Activate("ls".into()),
+            &decls(&["ls"], &[]),
+            &cmd("ls > out.txt"),
+            proj,
+        );
+        assert_eq!(v, Decision::Allow);
     }
 }

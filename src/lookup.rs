@@ -73,6 +73,11 @@ impl RuleLookup {
         self.classify_traced(cmd, project).verdict
     }
 
+    /// script_allow 声明集（脚本引擎对账与定稿点作用域判据的数据源）。
+    pub fn script_allow(&self) -> &crate::config::merge::ScriptAllowDecls {
+        &self.rules.script_allow
+    }
+
     /// 裁决 + 归一链（P4 裁决日志 `kb` 字段的数据源）。
     pub fn classify_traced(&self, cmd: &SimpleCommand, project: &Path) -> Classification {
         let Some(bin0) = cmd.bin() else {
