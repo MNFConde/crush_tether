@@ -177,12 +177,15 @@ fn check_verdict(
             let (verdict, trace) = rs.decide_trace(command, project);
             service::log_verdict(
                 project,
-                mode,
-                agent.slug(),
                 command,
                 &verdict,
                 &trace,
-                rs.kb_present,
+                service::LogContext {
+                    mode,
+                    agent: agent.slug(),
+                    kb_present: rs.kb_present,
+                    explicit: rs.config_path.as_deref(),
+                },
             );
             Ok(verdict)
         }

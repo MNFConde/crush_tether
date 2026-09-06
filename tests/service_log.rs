@@ -152,3 +152,55 @@ fn log_can_be_disabled_via_env() {
         "关闭后不落盘"
     );
 }
+
+#[test]
+fn explicit_config_layer_traced_in_source() {
+    let proj = TempDir::new("m43-explicit");
+    // 日志落盘目录（显式覆盖跳过引导生成，需自备目录）。
+    std::fs::create_dir_all(proj.path().join(".crush-tether")).expect("mkdir");
+    // 显式覆盖文件走 --config：source.layer 应为 explicit，file = 显式路径。
+    let ext = proj.path().join("override-rules.toml");
+    std::fs::write(
+        &ext,
+        "version = 1\ndefault = \"confirm\"\n[local]\nallow = [\"ls\"]\n",
+    )
+    .expect("write override rules");
+    let ext_str = ext.to_string_lossy().into_owned();
+    let r = run_mode_env(proj.path(), "check", &["--config", &ext_str], "ls", &[]);
+    assert_eq!(r.code, 0);
+    let v = log_of(proj.path())
+        .into_iter()
+        .find(|v| v["decision"] == "allow")
+        .expect("allow verdict logged");
+    assert_eq!(v["source"]["layer"], "explicit", "{v}");
+    assert_eq!(v["source"]["file"], ext_str, "{v}");
+    assert_eq!(v["source"]["entry"], "allow", "{v}");
+}
+
+#[test]
+fn script_overridden_verdict_traces_to_script_layer() {
+    let proj = TempDir::new("m43-script");
+    let cfg = proj.path().join(".crush-tether");
+    std::fs::create_dir_all(&cfg).expect("mkdir");
+    std::fs::write(
+        cfg.join("rules.toml"),
+        "version = 1\ndefault = \"confirm\"\n[local]\nallow = [\"ls\"]\n",
+    )
+    .expect("write rules");
+    // 脚本把 ls 改判 deny（上调合法）：生效裁决出自脚本 → layer=script。
+    std::fs::write(
+        cfg.join("rules.rhai"),
+        "fn check(ctx) {\n    if ctx.bin == \"ls\" { return decision::DENY; }\n    decision::PASS\n}\n",
+    )
+    .expect("write rules.rhai");
+    let r = run_mode_env(proj.path(), "check", &[], "ls", &[]);
+    assert_eq!(r.code, 2, "脚本改判 deny → exit 2");
+    let v = log_of(proj.path())
+        .into_iter()
+        .find(|v| v["decision"] == "deny")
+        .expect("deny verdict logged");
+    assert_eq!(v["source"]["layer"], "script", "{v}");
+    assert_eq!(v["source"]["file"], "rules.rhai", "{v}");
+    assert_eq!(v["source"]["entry"], "script", "{v}");
+    assert_eq!(v["script"]["file"], "rules.rhai", "{v}");
+}

@@ -101,6 +101,8 @@ pub struct RuleSet {
     pub kb_present: bool,
     /// 项目层 rules.toml 的 lint 告警（`type:"load"` 事件行内容）。
     pub lint_warnings: Vec<crate::lint::Lint>,
+    /// `--config` 显式覆盖路径（日志 source.layer=explicit 时的 file 溯源）。
+    pub config_path: Option<PathBuf>,
 }
 
 /// 单命令裁决的溯源信息（日志 source/normalized/script 字段数据源）。
@@ -147,16 +149,28 @@ impl RuleSet {
             other => other,
         };
         let kb = found.as_ref().ok().and_then(|l| l.knowledge.as_ref());
-        let lookup = if let Some(path) = crate::config::explicit_path(config_arg) {
-            match crate::config::load_file(&path) {
-                Ok(f) => RuleLookup::new(
-                    crate::config::merge(crate::config::Layers {
-                        global: None,
-                        user: None,
-                        project: Some(&f),
-                    }),
-                    kb,
-                ),
+        let config_path = crate::config::explicit_path(config_arg);
+        let lookup = if let Some(path) = &config_path {
+            match crate::config::load_file(path) {
+                Ok(f) => {
+                    // 显式覆盖把 project 层标为 `explicit`（日志溯源），其余
+                    // 标签不变——层级语义仍是「单文件顶替项目层」。
+                    RuleLookup::new(
+                        crate::config::merge_with_labels(
+                            crate::config::Layers {
+                                global: None,
+                                user: None,
+                                project: Some(&f),
+                            },
+                            crate::config::LayerLabels {
+                                global: "global",
+                                user: "user",
+                                project: "explicit",
+                            },
+                        ),
+                        kb,
+                    )
+                }
                 Err(e) => {
                     return Err(format!(
                         "crush-tether: explicit config {} failed to load: {e}; fail-safe \
@@ -208,6 +222,7 @@ impl RuleSet {
             script,
             kb_present: kb.is_some(),
             lint_warnings,
+            config_path,
         })
     }
 
@@ -247,9 +262,16 @@ impl RuleSet {
                                     cmd,
                                     project,
                                 );
-                                // script 字段自证：激活或改判（含 deny 终审拦截）留痕。
+                                // script 字段自证：激活或改判（含 deny 终审拦截）留痕；
+                                // 生效裁决出自脚本 → source.layer 换为 script（D-07 词表）。
                                 if activate || d != v0.decision {
-                                    trace.borrow_mut().script_changed = true;
+                                    let mut t = trace.borrow_mut();
+                                    t.script_changed = true;
+                                    t.source = Some(crate::lookup::EntrySource {
+                                        layer: "script",
+                                        entry: "script".into(),
+                                        token: cmd.bin().unwrap_or("").to_string(),
+                                    });
                                 }
                                 (d, r)
                             }
@@ -341,42 +363,48 @@ fn log_jsonl(project: &Path, value: &serde_json::Value) {
     }
 }
 
+/// 裁决日志的装配上下文（调用方运行形态 + 快照可观测切片）。
+pub struct LogContext<'a> {
+    pub mode: &'a str,
+    pub agent: &'a str,
+    /// 知识库 main 是否在位（日志 `kb` 字段：[] = 删光自证）。
+    pub kb_present: bool,
+    /// `--config` 显式覆盖路径（source.layer=explicit 时的 file 值）。
+    pub explicit: Option<&'a Path>,
+}
+
 /// 裁决日志记录（design.md「日志」示例字段全集）。
 pub fn log_verdict(
     project: &Path,
-    mode: &str,
-    agent: &str,
     command: &str,
     verdict: &Verdict,
     trace: &DecisionTrace,
-    kb_present: bool,
+    ctx: LogContext<'_>,
 ) {
     let source = trace.source.as_ref().map(|s| {
-        let file = match s.layer {
-            "project" => ".crush-tether/rules.toml",
-            "user" => "~/.config/crush-tether/rules.toml",
-            _ => "",
+        let file: Option<String> = match s.layer {
+            "project" => Some(".crush-tether/rules.toml".into()),
+            "user" => Some("~/.config/crush-tether/rules.toml".into()),
+            "script" => Some("rules.rhai".into()),
+            "explicit" => ctx.explicit.map(|p| p.to_string_lossy().into_owned()),
+            _ => None,
         };
         serde_json::json!({
             "layer": s.layer,
-            "file": if file.is_empty() {
-                serde_json::Value::Null
-            } else {
-                serde_json::json!(file)
-            },
+            "file": file.map(serde_json::Value::String).unwrap_or(serde_json::Value::Null),
             "entry": s.entry,
             "match": s.token,
         })
     });
     let rec = serde_json::json!({
         "ts": rfc3339_utc(),
-        "mode": mode,
-        "agent": agent,
+        "mode": ctx.mode,
+        "agent": ctx.agent,
         "command": command,
         "decision": verdict.decision.to_string(),
         "reason": verdict.reason,
         "source": source,
-        "kb": if kb_present { serde_json::json!(["main"]) } else { serde_json::json!([]) },
+        "kb": if ctx.kb_present { serde_json::json!(["main"]) } else { serde_json::json!([]) },
         "normalized": trace.normalized,
         "script": {
             "file": if trace.script_changed { serde_json::json!("rules.rhai") } else { serde_json::Value::Null },
@@ -675,16 +703,19 @@ fn handle_connection(
                 // serve 单点写裁决日志（ADR-07）。
                 log_verdict(
                     project,
-                    "serve",
-                    if req.agent.is_empty() {
-                        "unknown"
-                    } else {
-                        &req.agent
-                    },
                     &req.command,
                     &v,
                     &trace,
-                    rs.kb_present,
+                    LogContext {
+                        mode: "serve",
+                        agent: if req.agent.is_empty() {
+                            "unknown"
+                        } else {
+                            &req.agent
+                        },
+                        kb_present: rs.kb_present,
+                        explicit: rs.config_path.as_deref(),
+                    },
                 );
                 Some(VerdictDto {
                     decision: v.decision.to_string(),
