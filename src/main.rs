@@ -124,8 +124,9 @@ fn run_hook(agent: Agent, config_arg: Option<&str>, engine: &str) -> ExitCode {
     if let Some(v) = service::hook_decide(&project, engine, config_arg, agent.slug(), &command) {
         return ExitCode::from(channel::emit(&v, agent) as u8);
     }
-    // 降级路径：本进程 check（仍然全量管线，绝不无裁决放行）。
-    match check_verdict(&project, config_arg, engine, &command, agent, "check") {
+    // 降级路径：本进程 check（仍然全量管线，绝不无裁决放行）。日志 mode
+    // 记 "hook"：审计可区分「serve 降级」与「独立 check」。
+    match check_verdict(&project, config_arg, engine, &command, agent, "hook") {
         Ok(verdict) => ExitCode::from(channel::emit(&verdict, agent) as u8),
         Err(code) => code,
     }
