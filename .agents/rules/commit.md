@@ -103,6 +103,11 @@
 - **坑**：撤销 hooksPath 时误写 `git config core.hooksPath --unset`（把选项放到了值的位置），git 把 `--unset` 当普通字符串写入 config——此后 `git config core.hooksPath` 显示 `--unset` 且 exit 0，看似「已 unset」实则配置了指向不存在目录的路径，钩子静默跳过且极具误导性（2026-09-06 于 crush_tether 实证，`git config --show-origin --get core.hooksPath` 定位到 `file:.git/config` 值为字面 `--unset`）。
 - **对策**：撤销语法是 `git config --unset core.hooksPath`（选项在前）；重新启用/覆盖单值配置直接 `git config core.hooksPath .githooks` 原位替换即可，无需先 unset。排查配置时用 `--show-origin --get` 同时看值与来源。
 
+### 6.5 追加型编辑 .gitignore 类文件时内容行静默丢失（只落了空行）
+
+- **坑**：93ee1a8 意图给 `.gitignore` 追加 `/.crush-tether/`，实际入库的追加行是**空行**（diff 显示 `+` 后无内容）——追加式编辑（老内容 + 新行拼接）时拼接点出错，行内容丢失但不报错，校验只看了「文件存在改动」。后果：运行时目录此后一直未被忽略（2026-09-06 于 crush_tether 复审实证）。
+- **对策**：追加型编辑提交前 `git diff` 逐行核对新增行内容（尤其最后一行）；发现此类静默丢失，补修提交 + 在此登记。
+
 ## 七、钩子安装
 
 一次性执行（本地配置，不入库，不自动推送）：
