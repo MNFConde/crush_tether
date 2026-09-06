@@ -947,6 +947,25 @@ fn spawn_serve(project: &Path, engine: &str, config: Option<&str>) {
         const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
         const CREATE_NO_WINDOW: u32 = 0x0800_0000;
         cmd.creation_flags(DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW);
+        // 清自身 stdio 句柄的继承标志：CreateProcess 的句柄继承按「句柄自身的
+        // inheritable 标志」复制——hook runner（node 系）的 stdout/stderr 管道
+        // 可继承，serve 一旦复制到，hook 的输出流 EOF 就由 serve 存活期决定
+        // （idle 30s），runner 侧表现为 hook 挂死超时。serve 的 stdio 本就
+        // 指向 NUL，此调用只影响本进程句柄对子进程的可见性。
+        unsafe {
+            use windows_sys::Win32::Foundation::HANDLE_FLAG_INHERIT;
+            use windows_sys::Win32::Foundation::SetHandleInformation;
+            use windows_sys::Win32::System::Console::GetStdHandle;
+            use windows_sys::Win32::System::Console::STD_ERROR_HANDLE;
+            use windows_sys::Win32::System::Console::STD_INPUT_HANDLE;
+            use windows_sys::Win32::System::Console::STD_OUTPUT_HANDLE;
+            for slot in [STD_INPUT_HANDLE, STD_OUTPUT_HANDLE, STD_ERROR_HANDLE] {
+                let h = GetStdHandle(slot);
+                if !h.is_null() {
+                    let _ = SetHandleInformation(h, HANDLE_FLAG_INHERIT, 0);
+                }
+            }
+        }
     }
     #[cfg(unix)]
     {

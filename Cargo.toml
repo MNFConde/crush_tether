@@ -24,6 +24,10 @@ interprocess = "2"
 notify = "8.2.0"
 mlua = { version = "0.12.1", features = ["lua54", "vendored"] }
 
+# serve detached spawn 前 清自身 stdio 句柄继承标志（Windows 专有，M4.1 修复）。
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Console"] }
+
 [profile.release]
 lto = true
 codegen-units = 1

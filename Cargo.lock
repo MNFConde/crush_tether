@@ -108,6 +108,7 @@ dependencies = [
  "toml",
  "tree-sitter",
  "tree-sitter-bash",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

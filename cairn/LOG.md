@@ -2,6 +2,14 @@
 
 This file records substantive progress in reverse-chronological order — newest entry at the top, right below this line. Keep each entry short — summary and pointer only; conclusions settle into `cairn/<topic>.md`.
 
+## 2026-09-06 · M5.3 探针首获：serve spawn 句柄继承洞（M4.1 修复）
+
+- **M5.3 实机探针（工作区 hook 配置轨）首测即抓到 P4 阻断级缺陷**：node 系祖先（zcode hook runner 即是）下，hook 进程 49ms 完成裁决并退出，但其 stdout/stderr 管道 EOF 迟迟不来——runner 侧表现为 hook 挂死 31s（= serve idle 期）；超时型 runner 会掐死 hook、裁决丢失。bash（MSYS）下不可复现，纯文档自测无法发现。
+- **根因**：Windows 句柄继承按句柄自身 inheritable 标志复制，node/libuv 创建的管道可继承、serve 经 `Command::spawn`（bInheritHandles=TRUE）全量复制——serve 攥住 hook 的输出管道直至自身退出（`CRUSH_TETHER_IDLE_EXIT=2` 时 CLOSE 同步缩到 3s，实锤因果）。
+- **修复**：`spawn_serve` spawn 前对自身三个 stdio 句柄 `SetHandleInformation` 清 `HANDLE_FLAG_INHERIT`（windows-sys 新增为直接依赖，钉 0.61）；修复后 EXIT/CLOSE 均 ~90ms。
+- **教训**：Windows 跨进程 stdio 挂死的排查姿势——先分「进程退出」与「流关闭」两个事件（node `exit` vs `close`），再用 idle 期缩放实验定位持有者。
+- Details: `src/service.rs` `spawn_serve`、`Cargo.toml`（windows-sys）；探针资产在 `.zcode/probe/`（gitignore）。
+
 ## 2026-09-06 · 文档批：hook 接入失效模式表 + 权限学习候选登记
 
 - **失效模式入档**（用户指定：为后续功能做铺垫）：design.md Agent 适配层节新增「Hook 接入失效模式与保障边界（定稿）」——五条失效模式 × 三层兜底责任（A agent 侧机制 / B 我方管线内部 / C 部署验收实测），作为新 agent 接入的验收对照表；唯一待补洞 = #2（hook 二进制起不来时 agent 侧行为未验证，zcode 探针待办）。
