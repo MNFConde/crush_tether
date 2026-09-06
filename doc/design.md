@@ -325,7 +325,8 @@ pub trait Channel {
 }
 ```
 
-**首发 adapter：Crush（一）→ ClaudeCode（二）**。其余 agent 留空壳，不首发。
+**首发 adapter：Crush（一）→ ClaudeCode（二）→ zcode（三，2026-09-06 并入 P5/M5.3）**。其余 agent 留空壳，不首发。
+- **zcode**：hook 协议与 ClaudeCode 高度同构——模板变量 `${CLAUDE_PROJECT_DIR}`/`${ZCODE_PROJECT_DIR}` 双别名、`PreToolUse` 可返回 `allow`/`ask`/`deny` 三值决策（与三档一一映射）、exit 0/2 语义一致；支持 `type:"process"` 参数向量执行（Windows 免 shell 转义）。两点 zcode 文档未写死，实现期探针实测后再定型（不预设）：① stdin 输入载荷键名（是否同 ClaudeCode 信封）；② `PermissionRequest` 能否返回三值决策（能则改挂它，语义上更正的拦截点；否则用已验证的 `PreToolUse`）。交付形态取插件分发（`hooks/hooks.json` 自动启用 hook runner；配置文件里的 hooks 默认禁用）。
 - **OpenCode**：延后至版本稳定（存在 V1 `permission`/`bash` 与 V2 `permissions`/`shell` 分叉、插件 in-process、命令改写 bug），**不先适配**。
 - 其他候选（Cursor / Continue.dev / Gemini CLI / Cline / Roo）仅列空壳，后续按需扩展。
 

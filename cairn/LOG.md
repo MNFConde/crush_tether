@@ -2,6 +2,12 @@
 
 This file records substantive progress in reverse-chronological order — newest entry at the top, right below this line. Keep each entry short — summary and pointer only; conclusions settle into `cairn/<topic>.md`.
 
+## 2026-09-06 · zcode adapter 并入 P5（M5.3 登记）
+
+- 评估结论：zcode hook 协议与 ClaudeCode 高度同构（`${CLAUDE_PROJECT_DIR}` 双别名、`PreToolUse` 三值决策 allow/ask/deny 与三档一一映射、exit 0/2 一致、`type:"process"` 免 shell），M5.1 信封可薄变体复用。用户拍板并入 M5.3。
+- 两处未文档化事实登记为 M5.3 实现期探针（不预设）：stdin 输入载荷键名、`PermissionRequest` 能否返回三值决策。交付形态取插件分发（配置 hooks 默认禁用，插件 hooks.json 自动启用）。
+- Details: `doc/design.md`「Agent 适配层」、`cairn/ROADMAP.md` P5/M5.3 与 Settled「Agent 首发」。
+
 ## 2026-09-06 · script_allow 设计定稿 + M4.0 登记 + 挂账执行
 
 - **script_allow（脚本条件放行）设计定稿**（design.md 新节）：注册式 + 声明对账——声明双形态（顶级列表 / 命令节键）、引擎五件套（字面量提取 / 差集拒载 / 运行时双保险 / 定稿点作用域化逃逸检查 / deny 终审）、lint 三条新规则。allow 契约由「绝对禁止」演进为「放行面 = 用户声明集 ∩ 脚本条件命中」（更正登记 11）；实现登记 **M4.0 独立里程碑，启动需用户授权**。
