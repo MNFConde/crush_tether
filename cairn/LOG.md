@@ -2,6 +2,14 @@
 
 This file records substantive progress in reverse-chronological order — newest entry at the top, right below this line. Keep each entry short — summary and pointer only; conclusions settle into `cairn/<topic>.md`.
 
+## 2026-09-07 · CI 首跑双红诊断与修复（gh 日志闭环）
+
+- **CI run #1（10543eb）两 job 皆红**。ubuntu quality：clippy 失败于 `src/service.rs` `mode()`——interprocess 的 `mode` 是 Unix-only 扩展 trait `ListenerOptionsExt` 的方法而非固有方法，未引入作用域即失效；`#[cfg(unix)]` 块在 Windows 上整体编译掉，本地永远测不出（双 job 平台差异面的首个实锤）。
+- **windows-test：失败用例 = `templates_match_design_md_examples_byte_for_byte`，非预登记的 seed 竞态 flake（更正此前预期）**。根因 = `include_str!` 嵌入工作区模板字节 + 仓库无 `.gitattributes` + CI runner `core.autocrlf=true` 干净 checkout 转 CRLF；测试只归一了 design.md 侧。本机工作区文件从未重新 checkout 故保持 LF，测不出。
+- **用户裁定走 CRLF 兼容路线**（不强推 `.gitattributes`）：测试两侧归一换行符，护栏语义回归「逐行内容一致」；TOML/rhai/lua 解析器对 CRLF 本就无害，用户侧 seed 包不在任何比对范围。`.gitattributes` 留作后续真正需要字节确定性时再补。
+- 教训：`include_str!` 嵌入的是工作区字节，跨平台字节断言必须两侧归一或钉死 eol；平台差异门控的代码块在本平台永远不可测，只能靠对端 job。
+- Details: `src/service.rs`（bind 补 trait 引入）、`tests/seed_defaults.rs`（两侧归一）。
+
 ## 2026-09-07 · 会话审查闭环：漂移修复 + 退役清单钉死 + 可选加固登记
 
 - **审查发现 3 处文档漂移，全部修复**：ROADMAP P6 行标题滞后（子条目已 ✅ 父行仍写「待用户确认节奏」）；AGENTS.md 状态段自相矛盾（「仅余 M6.3」紧接「M6.3 已完成」——整段重写为收官态口径，消除「M6.1/M6.2 已落地」旧括号）；design.md 失效模式 #2 实测范围精化（实测 = 「进程已启动但非 2 退出码」fail-open；「路径不存在」未测、推断同路、随 M7 前置确认；顺带更正 ROADMAP「M6.2 遗留探针插件」标签笔误）。
