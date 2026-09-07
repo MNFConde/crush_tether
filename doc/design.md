@@ -395,6 +395,19 @@ ClaudeCode / Crush 实机部署形态是否存在类似 zcode 的启用门槛：
 
 注册面要点：zcode 插件 `hooks/hooks.json` 用 `type:"process"`（`command`/`args`/`timeoutMs` 三字段严格，勿混入 `statusMessage`）+ `${ZCODE_PLUGIN_ROOT}` 相对路径；dump/控制目录用参数传入而非写死。参考实现：`script/hook_probe.py`（M7.2，python，经 `uv run python` 调用、零第三方依赖）。
 
+#### 插件分发形态与装载守卫（分析登记，2026-09-08，未定稿）
+
+围绕失效模式 #2 的正式插件分发形态分析。已定稿仅一点：**开发测试推荐 `cargo install --path .`**（用户确认；二进制入 cargo bin 即 PATH 可达，本机已实装验证）。其余全部候选待正式分发期拍板：
+
+- **形态取舍**（统一标尺：二进制缺失这一失败落在谁身上、响不响）：
+  - **全平台捆绑 + wrapper = 目标形态（建议）**：失败面落在自己可测的代码里；wrapper 检测二进制缺席即 exit 2 + 安装指引，把 #2 结构性翻成响亮失败。体积实测 4.8MB（release profile 已满配精简：lto + codegen-units=1 + strip + panic=abort），3 平台 ≈ 15MB 可接受；UPX 明确反对（加壳抬杀软误报率）。
+  - **按平台拆插件 = 否**：用户选错平台 → 静默 fail-open，把 #2 以用户操作错误的面目请回。
+  - **首跑 bootstrap 下载 = 后备**：fail-closed 与网络可用性冲突（离线/代理环境全阻断），fail-open 则静默裸奔；另有「安全工具自下载」信任面。
+- **平台坑实测（本机证据）**：执行位——zcode 安装为拷贝/解包（缓存无 `.git`）但 Unix 执行位实测存活（官方插件 `.sh` 落盘 755），坑基本消；macOS quarantine——CLI 网络栈/本地拷贝不打标，低风险；**杀软误报 = 唯一真坑**（概率低、杀伤高：二进制被隔离 = 门静默消失），wrapper 部分对冲，正解 = 签名（成本高）或误报申诉。
+- **marketplace schema 实查（双官方清单，2026-09-08）**：均无 `os`/`arch`/`platform` 字段、无 install 钩子阶段 → 按平台分发与「安装时下载」在 schema 层不存在；Claude marketplace 条目支持 `ref`/`sha` 钉版（zcode github 源大概率同构，动工前验证）；zcode 官方市场为 zip artifact + sha256 交付。
+- **装载守卫三轴模型**：对外兼容面 = hooks.json（接线：事件/matcher/超时）+ wrapper（装载与守卫：找到二进制→转发，缺席→exit 2+指引；**保持哑**，永不解析信封、永不参与裁决）+ adapter（协议：信封键名/回包格式，crate 内既有契约测试）。wrapper 在仓库内（`plugin/`）、crate 外；唯一 agent 耦合点 = 解释器契约（各 agent 如何 spawn `command`、Windows 过不过 shell）= M7.3 探针项；wrapper 可进 CI（ubuntu job 测 sh 版、windows job 测 cmd 版）。
+- **分发两期分解（建议，待拍板）**：一期 = wrapper-only 插件（KB 级、零平台矩阵）+ PATH 二进制——不依赖捆绑即可杀掉 #2；二期 = 捆绑二进制（面向非 Rust 插件用户）+ scoop/Releases 管线。scoop manifest 机制上等价 GitHub Releases 路线（url 必须 http(s) 可取 + hash，无实用本地安装；本机 bucket 模板现成、仓库已 PUBLIC），触发条件 = 出现首个非 cargo 用户或对外宣传。
+
 ## 配置格式与脚本边界（v1 定稿）
 
 > [!IMPORTANT]

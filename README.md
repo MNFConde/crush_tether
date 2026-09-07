@@ -12,8 +12,10 @@ Crush 命令级 bash 权限门（Rust 实现）。拦截 agent 即将执行的 b
 
 ```sh
 cargo build --release   # 产物 target/release/crush-tether
-cargo install --path .  # 或装入 PATH
+cargo install --path .  # 开发测试推荐：装入 cargo bin（已在 PATH），升级加 --force
 ```
+
+**开发测试推荐 `cargo install --path .`**（2026-09-08 定稿）：agent 插件/hook 以裸命令名解析二进制，二进制必须在 PATH 可达——进程起不来时 agent 侧 fail-open 放行（失效模式 #2，见 `doc/design.md`「Hook 接入失效模式」），故安装后建议 `where crush-tether` 验证一次。
 
 工具链钉版见 `rust-toolchain.toml`；依赖版本约束只钉在根 `Cargo.toml` 一处。
 

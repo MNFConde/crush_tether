@@ -62,7 +62,7 @@
   - （**P6 后候选**，2026-09-06 登记）**新 agent 接入对照表**：接入任何新 agent（OpenCode / Codex 等）时，逐行对照 design.md「Hook 接入失效模式与保障边界」表走验收清单（失效模式 × 三层兜底责任 × 验证方法），不重新推导。
 
 - [ ] **P7 体验与适配专项**（2026-09-07 登记；各条目均待用户授权逐项启动，登记不等于开工；编号项 = M7.0–M7.3 四项，另有 M7 前置与可选加固各一）：
-  - **M7 前置：正式插件实机验证**（2026-09-07 会话审查登记，P7 开工后先做；在此之前正式插件不得视为已验证）：前置 = `crush-tether` 进 PATH（登记时不在 PATH——`cargo install --path .` 或入 shims 目录；不装 PATH 直接装插件会落进失效模式 #2 的 fail-open 放行）；然后本地 marketplace 安装正式 `plugin/`，实测 hook 触发与三档行为。范围澄清：M5.3 实测通过的是**探针插件形态**（node wrapper + 二进制绝对路径），正式版 `type:"process"` + PATH 解析链路未跑过。
+  - **M7 前置：正式插件实机验证**（2026-09-07 会话审查登记，P7 开工后先做；在此之前正式插件不得视为已验证）：前置 = `crush-tether` 进 PATH（登记时不在 PATH——`cargo install --path .` 或入 shims 目录；不装 PATH 直接装插件会落进失效模式 #2 的 fail-open 放行）；然后本地 marketplace 安装正式 `plugin/`，实测 hook 触发与三档行为。范围澄清：M5.3 实测通过的是**探针插件形态**（node wrapper + 二进制绝对路径），正式版 `type:"process"` + PATH 解析链路未跑过。**2026-09-08 更新**：二进制可达路线定稿 = `cargo install --path .`（用户确认开发测试推荐，已实机安装并验证 PATH 解析 + check 裁决，README 构建节已注明；实装落点 = scoop persist rustup `.cargo\bin`，rustup 升级不丢）；插件分发形态分析（三形态取舍/平台坑本机实测/marketplace schema 实查/装载守卫三轴模型/分发两期分解建议）登记于 design.md「插件分发形态与装载守卫」+ `cairn/plugin-distribution-analysis.md`，scoop/Release 管线与捆绑等分发路线后置正式分发期拍板。
   - **M7.0 写目标感知逃逸检查**（用户策略：「读取默认都通过、写入默认只能本仓库内」）：现状 = `[local]` allow 逃逸检查对**任意参数词**生效（lookup.rs 两处 + `path_escapes`），读项目外文件也被翻 confirm、且 `[global]` 豁免是整体的（读外写内与读内写外无法区分表达）；升级 = 逃逸检查只作用于**写效果路径**（重定向目标、knowledge `write_tokens` 写参数位、写 flag 值——flag 型写已被 confirm.flag 桶覆盖），读源路径豁免；design.md `[local]`「带逃逸检查」承诺语义随之精化（更正登记）；配套 = cp/mv 等双位置写命令的 knowledge 条目。验收：读外纯读 / 读外写内 / 读内写外 / flag 写四形态用例 + M7.1 `explain` 验证。
   - **M7.1 规则测试工具**：命令式 = `explain '<cmd>'`（人读单发：裁决 + 命中层级/桶/token/kb/归一/脚本 全溯源）+ `check --batch`（一行一命令 → 裁决表）；断言式 = 规则用例文件（输入 + 期望档位）批量对账；**REPL = 用户面调试器**（读配置快照逐条调试自己的规则配置与脚本，即时显示命中与未命中原因——定位是放开给用户自助调试，非内部工具）。基建复用：trace/裁决日志（M4.3）+ 热重载（改规则即测，免重启）。
   - **M7.2 探针工具 python 化入库**：`script/hook_probe.py`（经 `uv run python` 调用，本机 python 由 uv 管理无全局环境；路径参数化换项目可复用；控制文件切模式 perm-out/perm-exit/fail-exit 不改代码换实验；零第三方依赖）；design.md「hook 探针方法（定稿）」为语言无关方法论，python 版为参考实现；node 版 `.zcode/probe/` 维持 gitignore 临时件随探针插件退役。验收：本仓库自测 + 外部项目实测 hook 触发各一次。**退役清单（M7.2 落地时或用户提前禁用时执行；2026-09-07 审查项 6/7——config.json 残留与探针三副本漂移——均在此清单内消解，不单独处理；全部为未入库临时件，持久文档（design.md 探针方法节/LOG/ROADMAP 记录）不在退役范围）**：禁用/卸载探针插件 + 清 `~/.zcode/cli/plugins/cache/crush-tether-probe-marketplace/`；删工作区 `.zcode/probe/`（含 dump.jsonl——删前用户过目；三副本版本漂移不修、随删消灭）；删 `.zcode/config.json`（`enabled:true` 残留，防 zcode 日后修复配置轨导致双 hook 叠跑）；清用户级 `~/.zcode/cli/config.json` 的 enabledPlugins 与 `known_marketplaces.json` 中探针 marketplace 注册。
@@ -96,7 +96,7 @@
 
 ## Open Questions
 
-1. mdor 侧退役节奏：crush-guard 目录与 `[project.scripts]` 何时删除（本仓库已是唯一实现，待用户确认后执行）。
+1. ~~mdor 侧退役节奏：crush-guard 目录与 `[project.scripts]` 何时删除~~（2026-09-08 勾销：已随 M6.3 完成，mdor 提交 13d175e；mdor 是否实挂 crush-tether 属新部署决策，仍待拍板，见根 AGENTS.md「待用户拍板」）。
 
 ## Settled（历轮定稿）
 
