@@ -19,17 +19,21 @@ fn extract_example(md: &str, section: &str) -> String {
 
 #[test]
 fn templates_match_design_md_examples_byte_for_byte() {
-    // 行尾归一：Windows 工作区 design.md 为 CRLF、模板为 LF，逐行内容必须一致。
+    // 行尾归一：checkout 环境可能把任一侧转成 CRLF（如 CI Windows runner
+    // autocrlf=true 时 include_str! 嵌入的模板），护栏语义是逐行内容一致，
+    // 换行符不入比对。
     let md = std::fs::read_to_string(Path::new(DESIGN_MD))
         .expect("read design.md")
         .replace('\r', "");
+    let rules = DEFAULT_RULES_TOML.replace('\r', "");
+    let knowledge = DEFAULT_KNOWLEDGE_TOML.replace('\r', "");
     assert_eq!(
-        DEFAULT_RULES_TOML.trim(),
+        rules.trim(),
         extract_example(&md, "### `rules.toml` 结构").trim(),
         "默认 rules.toml 模板必须与 design.md 示例一致"
     );
     assert_eq!(
-        DEFAULT_KNOWLEDGE_TOML.trim(),
+        knowledge.trim(),
         extract_example(&md, "### 命令知识库（bucket 框架，定稿）").trim(),
         "默认 knowledge.toml 模板必须与 design.md 示例一致"
     );
