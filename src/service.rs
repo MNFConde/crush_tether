@@ -526,8 +526,13 @@ fn ns_name<'a>(name: &'a str) -> std::io::Result<interprocess::local_socket::Nam
 fn bind(name: &str) -> std::io::Result<interprocess::local_socket::Listener> {
     use interprocess::local_socket::ListenerOptions;
     let opts = ListenerOptions::new().name(ns_name(name)?);
+    // mode 是 Unix-only 扩展 trait 的方法（非固有方法），必须显式引入作用域；
+    // Windows 下该块整体编译掉，本地测不出缺失（CI linux clippy 首跑抓到）。
     #[cfg(unix)]
-    let opts = opts.mode(0o600); // ACL：仅当前用户可连
+    let opts = {
+        use interprocess::os::unix::local_socket::ListenerOptionsExt as _;
+        opts.mode(0o600) // ACL：仅当前用户可连
+    };
     // Windows：默认 DACL 即当前用户；reclaim_name=false（默认）→ 首次创建
     // 带 FILE_FLAG_FIRST_PIPE_INSTANCE，二次创建失败 = 输者。
     opts.create_sync()
