@@ -2,6 +2,14 @@
 
 This file records substantive progress in reverse-chronological order — newest entry at the top, right below this line. Keep each entry short — summary and pointer only; conclusions settle into `cairn/<topic>.md`.
 
+## 2026-09-08 · M7 前置完成：正式插件实机三档验证闭环 + hook 审核门发现
+
+- **三档全链实测通过**（正式插件 `type:"process"` + 裸命令名，区别于探针形态）：allow（`cat`/`tail` 单命令无弹窗）/ confirm（`curl --version` 弹窗 → 用户批准 → 执行）/ deny（`sudo --version` 工具调用直接阻断）；复合命令（`echo && powershell`）按多命中合成落 confirm，语义正确。链路点：裸命令名 PATH 解析、connect-or-spawn（serve 常驻进程 + 裁决全走 `mode:"serve"`）、JSONL 裁决日志含 `type:"load"` 事件——失效模式 #2 部署项在开发机闭环。
+- **安装启用机制实查**：marketplace add + 安装只有 UI 路径（本地目录型注册格式已实证）；CLI `plugins` 子命令仅 list/enable；`enabledPlugins` 显式条目优先于默认启用（曾现磁盘 false 与 list 渲染不一致，CLI enable 归 true）。
+- **两个新发现**：①探针插件已不在册（用户级三处注册均无残留）→ M7.2 退役清单收缩；②zcode 工作区 hook 有审核门（待批准不启用）→ M5.3「配置轨未生效」真因解开，statusMessage 疑因作废（design.md 更正登记 21）。
+- M7.2/M7.3 + 可选加固搁置（用户拍板）；M7.0/M7.1 待授权（M7.0 的 explain 验证并入 M7.1）。
+- Details: `cairn/ROADMAP.md`（Current focus + M7 前置 ✅ + M7.2 收缩 + M5.3 更正指针）、`doc/design.md`（更正登记 21 + 插件分发节验证闭环）、`cairn/plugin-distribution-analysis.md`（机制实装补录）。
+
 ## 2026-09-08 · 分发形态分析登记 + M7 前置安装路线定稿（cargo install 实装）
 
 - **M7 前置二进制可达定稿**（用户确认）：开发测试推荐 `cargo install --path .`，已实机安装（落点 scoop persist rustup `.cargo\bin`，`where` PATH 解析命中 + check 模式 stdin 信封 allow 裁决验证）；README 构建节注明推荐与失效模式 #2 风险提示。
