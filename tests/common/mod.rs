@@ -81,12 +81,23 @@ pub fn run_mode_env(
         .spawn()
         .unwrap_or_else(|e| panic!("spawn crush-tether {mode}: {e}"));
     let payload = format!("{{\"tool_input\":{{\"command\":\"{command}\"}}}}");
-    child
+    if let Err(e) = child
         .stdin
         .take()
         .expect("stdin piped")
         .write_all(payload.as_bytes())
-        .expect("write hook input");
+    {
+        // BrokenPipe = 子进程在读 stdin 前就退出了。这是合法行为而非测试
+        // 环境异常：fail-safe 快速失败路径（如 unsupported engine，main.rs
+        // 配置错误即告警 + confirm 返回）按设计不消费输入。谁快谁赢的竞速
+        // 在 Linux CI 上子进程先退 → EPIPE，不能当硬错误 panic；
+        // 裁决断言照常走 wait_with_output 的 stdout/stderr/code。
+        assert_eq!(
+            e.kind(),
+            std::io::ErrorKind::BrokenPipe,
+            "write hook input: {e}"
+        );
+    }
     let out = child.wait_with_output().expect("wait process");
     CheckRun {
         stdout: String::from_utf8_lossy(&out.stdout).into_owned(),
