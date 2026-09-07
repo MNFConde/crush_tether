@@ -2,6 +2,13 @@
 
 This file records substantive progress in reverse-chronological order — newest entry at the top, right below this line. Keep each entry short — summary and pointer only; conclusions settle into `cairn/<topic>.md`.
 
+## 2026-09-08 · 分发形态分析登记 + M7 前置安装路线定稿（cargo install 实装）
+
+- **M7 前置二进制可达定稿**（用户确认）：开发测试推荐 `cargo install --path .`，已实机安装（落点 scoop persist rustup `.cargo\bin`，`where` PATH 解析命中 + check 模式 stdin 信封 allow 裁决验证）；README 构建节注明推荐与失效模式 #2 风险提示。
+- **插件分发形态分析登记**（未定稿，待正式分发期拍板）：三形态取舍（捆绑+wrapper 为建议目标形态/拆平台否/bootstrap 后备）、平台坑本机实测（执行位存活、quarantine 低危、杀软误报唯一真坑）、双官方 marketplace schema 实查（无平台字段/无 install 阶段；Claude 支持 ref/sha 钉版）、装载守卫三轴模型（hooks.json 接线/wrapper 装载守卫/adapter 协议）、两期分解**建议**（一期 wrapper-only 插件 + PATH 即可先行杀失效模式 #2，二期捆绑 + scoop/Releases 管线）。
+- **ROADMAP Open Questions #1 勾销**：mdor 侧退役已随 M6.3 完成（13d175e），条目划掉留注。
+- Details: `doc/design.md`「插件分发形态与装载守卫（分析登记）」、`cairn/plugin-distribution-analysis.md`（新建专题：生态机制事实/决策/教训）、`cairn/ROADMAP.md`（OQ#1 + M7 前置 2026-09-08 更新）、`README.md`（构建节）。
+
 ## 2026-09-07 · CI 首跑双红诊断与修复（gh 日志闭环）
 
 - **CI run #1（10543eb）两 job 皆红**。ubuntu quality：clippy 失败于 `src/service.rs` `mode()`——interprocess 的 `mode` 是 Unix-only 扩展 trait `ListenerOptionsExt` 的方法而非固有方法，未引入作用域即失效；`#[cfg(unix)]` 块在 Windows 上整体编译掉，本地永远测不出（双 job 平台差异面的首个实锤）。
