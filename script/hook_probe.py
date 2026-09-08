@@ -18,6 +18,8 @@ zcode 工作区 hook（``type:"process"``，command=uv，args 向量），实测
 - perm-out.txt   perm 角色回包内容（缺席 = 静默 exit 0 放行）
 - perm-exit.txt  perm 角色退出码覆写
 - fail-exit.txt  fail 角色退出码覆写
+- delay.txt      全角色通用：dump 载荷后挂起 N 秒再继续（浮点秒，缺席/非法 = 0）
+                 ——模拟 hook 慢/挂死，观测 agent 超时与杀进程行为
 
 用法：
     uv run python hook_probe.py <bash|perm|post|fail>
@@ -35,11 +37,12 @@ import json
 import os
 import subprocess
 import sys
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
 DUMP_NAME = "dump.jsonl"
-CONTROL_FILES = ("perm-out.txt", "perm-exit.txt", "fail-exit.txt")
+CONTROL_FILES = ("perm-out.txt", "perm-exit.txt", "fail-exit.txt", "delay.txt")
 
 
 def resolve_probe_dir(arg_value: str | None) -> Path:
@@ -66,6 +69,16 @@ def control_exit_code(probe_dir: Path, name: str) -> int:
         return int(raw)
     except ValueError:
         return 0
+
+
+def control_delay(probe_dir: Path) -> float:
+    raw = read_control(probe_dir, "delay.txt")
+    if raw is None:
+        return 0.0
+    try:
+        return max(0.0, float(raw))
+    except ValueError:
+        return 0.0
 
 
 def dump(probe_dir: Path, role_tag: str, tag: str, **extra: object) -> None:
@@ -99,14 +112,19 @@ def main() -> int:
 
     probe_dir = resolve_probe_dir(args.probe_dir)
     role_tag = f"{args.source}-{args.role}"
+    delay = control_delay(probe_dir)
 
     if args.role == "fail":
         code = control_exit_code(probe_dir, "fail-exit.txt")
-        dump(probe_dir, role_tag, f"fail-exit={code}", stdin=read_stdin()[:500])
+        dump(probe_dir, role_tag, f"fail-exit={code}", stdin=read_stdin()[:500], delay=delay)
+        if delay:
+            time.sleep(delay)
         return code
 
     stdin = read_stdin()
-    dump(probe_dir, role_tag, "stdin", stdin=stdin)
+    dump(probe_dir, role_tag, "stdin", stdin=stdin, delay=delay)
+    if delay:
+        time.sleep(delay)
 
     if args.role == "post":
         return 0
