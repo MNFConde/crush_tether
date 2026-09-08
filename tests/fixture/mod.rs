@@ -37,10 +37,13 @@ pub fn decide(cmd: &str) -> Decision {
 
     let verdict = crush_tether::engine::decide_with(cmd, Path::new(PROJECT), &|c, p, pipe| {
         let v0 = lookup.classify(c, p);
+        let escape = |cc: &crush_tether::cmd_parse::SimpleCommand, pp: &Path| {
+            lookup.write_target_escapes(cc, pp)
+        };
         let (decision, reason) = match script.evaluate(c, v0.decision, p, pipe) {
             // 与 main.rs 相同：定稿点唯一放行出口。
             Ok(outcome) => {
-                crush_tether::script::finalize(v0.decision, outcome, script.decls(), c, p)
+                crush_tether::script::finalize(v0.decision, outcome, script.decls(), c, p, &escape)
             }
             Err(_) => (
                 Decision::Confirm,

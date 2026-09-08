@@ -284,7 +284,7 @@ struct Cmd {
         │   [global].allow 整命令豁免 → 命令节(遮蔽裸列表) → 裸列表     │
         │        ↓  多维度命中按 precedence 合成（deny>confirm>allow）  │
         │   未命中 → 节内 default → 顶层 default → confirm 兜底         │
-        │   [local] 的 allow 命中 → 此处已带一次路径逃逸检查            │
+        │   [local] 的 allow 命中 → 此处已带一次写目标感知逃逸检查      │
         │                                                               │
         │   产出：初步裁决 + 特征（bin/sub/args/写重定向/管道/项目根）  │
         └───────────────────────────────────────────────────────────────┘
@@ -308,7 +308,7 @@ struct Cmd {
         │                                                               │
         │   deny 终审：查表落 deny 的命令，脚本任何返回都翻不动         │
         │   allow(name) 激活：按声明作用域元数据决定——                  │
-        │     local 声明 → 此处执行路径逃逸检查（逃逸 → confirm）       │
+        │     local 声明 → 此处执行写目标感知逃逸检查（逃逸 → confirm） │
         │     global 声明 → 豁免（两表皆声明时 global 胜，M2.3 同规）   │
         └───────────────────────────────────────────────────────────────┘
                                       │  每条简单命令的最终裁决
@@ -417,7 +417,7 @@ ClaudeCode / Crush 实机部署形态是否存在类似 zcode 的启用门槛：
 
 - **声明层零条件判断**：`rules.toml` 只做「命令归属查表」（无一处 if/参数检查）；一切带条件判断的分类（两态子命令、参数内容检查、跨命令检查）全部下沉脚本层。这是对定稿「能声明表达的进 TOML」的收窄，见[更正登记](#更正登记对既有定稿)。
 - **命令中心**：配置按「命令 → 子命令/flag 分桶」组织，不设命名命令集合与规则链（替代定稿的 `[[rules]]` + first-match-wins）。
-- **作用域即结构**：文件顶层分 `[local]` / `[global]` 两表——`[local]` = 效果不出项目（其内 allow 一律带路径逃逸检查）；`[global]` = 允许影响项目外（其内 allow 豁免逃逸检查，如团队统一放行的 docker）。
+- **作用域即结构**：文件顶层分 `[local]` / `[global]` 两表——`[local]` = 写入不出项目（其内 allow 一律带**写目标感知逃逸检查**，M7.0 精化：只查写效果路径——重定向目标与知识库 `write_position` 标注的写参数位，读源路径豁免，见[更正登记](#更正登记对既有定稿) 22）；`[global]` = 允许影响项目外（其内 allow 豁免逃逸检查，如团队统一放行的 docker）。
 
 ### `rules.toml` 结构（定稿）
 
@@ -427,7 +427,7 @@ version    = 1                              # 配置文件格式（schema）版�
 default    = "confirm"                      # 未命中任何配置的命令
 precedence = ["deny", "confirm", "allow"]   # 桶间优先级（可调），见「查表顺序」条
 
-# ═══ [local]:效果不出项目 —— 此表内所有 allow 默认带路径逃逸检查 ═══
+# ═══ [local]:写入不出项目 —— 此表内所有 allow 默认带写目标感知逃逸检查（M7.0） ═══
 [local]
 allow   = ["ls", "cat", "grep", "rg", "find", "head", "tail", "wc", "pwd", "echo",
   "printf", "which", "file", "stat", "sort", "uniq", "comm", "diff", "md5sum",
@@ -517,6 +517,20 @@ alias_of = "pip"
 [curl]
 may_write   = true
 write_flags = ["-o", "--output"] # 属性：带这些 flag 会写文件
+
+# 写目标位置（M7.0 写目标感知逃逸检查）：最后一个位置参数是写目标，
+# 读源豁免——allow 放行这类命令时写内自动过、写外仍拦。
+[cp]
+write_position = "last"
+
+[mv]
+write_position = "last"
+
+[touch]
+write_position = "last"
+
+[mkdir]
+write_position = "last"
 
 [git]
 sub.branch     = { write_tokens = ["-d", "-D", "-m", "-M", "--delete", "--move", "--create"] }
@@ -710,6 +724,7 @@ allow.flag = { remove = ["-h"] }                 # 继承并移除（flag 也能
 19. DSL 节「安全原语（`writes_file`/`path_escapes`/`deny`）」清单 → **2026-09-06 如实化**：实际注册原语为 `path_escapes`/`inside_repo`/`kb_*` 知识库数据源族 + `allow("bin")` 受控激活通道（M4.0）；`writes_file`/`deny` 原语从未存在——写特征经 ctx 字段 `writes_redirect`/`pipe_to_shell` 暴露，deny 是脚本返回值不是原语。历史遗留措辞（P3 前草案期写入），非近期引入。
 20. serve 生命周期「detached spawn serve」（M4.1 实现 c127205）→ **2026-09-06 补正（M5.3 探针实机发现）**：Windows 下 `Command::spawn` 按句柄自身 inheritable 标志复制可继承句柄——node 系祖先（zcode hook runner）的 stdout/stderr 管道可继承，serve 复制到后 hook 的输出流 EOF 由 serve 存活期（idle 30s）决定，runner 侧表现为 hook 挂死 31s、超时型 runner 丢裁决（MSYS bash 的管道不可继承，故 bash 自测不可复现）。修复 = `spawn_serve` 前对自身 stdio 三句柄 `SetHandleInformation` 清 `HANDLE_FLAG_INHERIT`（943b205，windows-sys 钉 0.61）；实测 node 祖先下冷启动 31039ms → ~90ms。「detached」定稿语义不变，此为实现级补全。
 21. M5.3「配置文件 hook 轨实测未生效（`statusMessage` 疑因）」→ **2026-09-08 真因更正（M7 前置实机发现）**：zcode 对工作区 `hooks` 配置有**审核门**——须用户在 UI 批准后才启用（重启后提示「N 个工作区 Hook 待审核，本会话暂未启用」），探针期该轨从未被批准故从未生效，非 zcode 丢弃载荷；`statusMessage` 疑因作废（`process` 型三字段严格性本身未被推翻，仅不再作为未生效的解释）。同日旁证：正式插件（插件轨）安装启用后 hook 即触发，不经审核门。
+22. 「`[local]` = 效果不出项目（其内 allow 一律带路径逃逸检查）」→ **2026-09-08 精化（M7.0 落地）**：逃逸检查从「任意参数词」收窄为「**写效果路径**」——写型重定向的目标词元 + 知识库 `write_position = "last"`（新增槽位，v1 槽位集 10 → 11）标注的最后一个位置参数；读源路径一律豁免（`ls ../other/file` 不再降级）。动因 = 用户策略「读取默认都通过、写入默认只能本仓库内」：原实现把读项目外文件也翻 confirm，且 `[global]` 豁免是整体的、读写无法分别表达。承诺措辞随之从「效果不出项目」精化为「**写入不出项目**」。配套：默认知识库补 `cp`/`mv`/`touch`/`mkdir` 的 `write_position` 条目（allow 桶内的写型命令必须标注写参数位，否则写逃逸失去防护——`touch outside.txt` 回归用例钉死此约束）；已知边界 = `cp -t dir src` 形态 `-t` 未登记 `takes_value` 时 `dir` 会被误认写目标（保守方向多拦，不漏放）。script_allow 定稿点检查同原语收窄（`finalize` 经注入回调与查表层共用 `write_target_escapes`）。flag 型写不受影响（`confirm.flag` 桶合成机制本就独立于逃逸检查）。
 1. 「能声明表达的进 `rules.toml`」→ 收窄为「**无条件的纯查表**进 `rules.toml`，一切条件判断进脚本」。
 2. 「`[[rules]]` 规则链 + first-match-wins」→ **删除**，替换为「`[local]`/`[global]` 双表 + 每命令三桶查表 + 可调桶间优先级 `precedence`」。
 3. 「命令集合并集（只增不减，`exclude` 表剔除）」→ 2026-09-05 替换为 token 级合并，**2026-09-06 再修订为字段级继承**（数组覆盖 / inline table 增删；「挪桶即剔除」弃用——挪桶是改判不是删除）；无需 `exclude` 表（见 [D-02](decisions.md#d-02-字段级继承合并模型)）。

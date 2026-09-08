@@ -16,33 +16,47 @@ fn project_with(tag: &str, rules: &str, script: &str) -> TempDir {
 
 const BASE_TOML: &str = "version = 1\ndefault = \"confirm\"\n";
 
-/// 项目脚本：仅对「参数逃逸」的 ls 激活（写重定向的正当放行场景参数化同此）。
+/// 项目脚本：对 ls 的写重定向命令激活（M7.0 起定稿点逃逸检查只作用于写
+/// 效果路径——重定向目标；读参数形态不触发激活也不触发逃逸降级）。
 const ESCAPE_SCRIPT: &str = concat!(
     "fn check(ctx) {",
-    "  if ctx.bin == \"ls\" && ctx.args.contains(\"../outside\") { return allow(\"ls\"); }",
+    "  if ctx.bin == \"ls\" && ctx.writes_redirect { return allow(\"ls\"); }",
     "  \"\"",
     "}"
 );
 
 #[test]
 fn local_declaration_escape_downgrades_to_confirm() {
-    // 声明在 [local]：激活后定稿点复查原始参数，逃逸 → confirm。
+    // 声明在 [local]：激活后定稿点复查写效果路径，写目标逃逸 → confirm。
     let proj = project_with(
         "m4-local",
         &format!("{BASE_TOML}[local]\nallow = [\"ls\"]\nscript_allow = [\"ls\"]\n"),
         ESCAPE_SCRIPT,
     );
-    // 仓库内参数 → 激活生效 → allow。
+    // 仓库内参数/写目标 → 激活生效 → allow。
     let r = run_check(proj.path(), "ls inside.txt");
     assert_eq!(
         r.stdout.trim(),
         "{\"decision\":\"allow\"}",
         "local 声明 + 仓库内参数激活放行"
     );
-    // 逃逸参数 → 激活被定稿点降级 confirm（静默 + exit 0）。
-    let r = run_check(proj.path(), "ls ../outside");
-    assert!(r.stdout.trim().is_empty(), "逃逸激活降 confirm");
+    let r = run_check(proj.path(), "ls > out.txt");
+    assert_eq!(
+        r.stdout.trim(),
+        "{\"decision\":\"allow\"}",
+        "写目标在仓库内 → 激活放行"
+    );
+    // 写目标逃逸 → 激活被定稿点降级 confirm（静默 + exit 0）。
+    let r = run_check(proj.path(), "ls > ../outside");
+    assert!(r.stdout.trim().is_empty(), "写逃逸激活降 confirm");
     assert_eq!(r.code, 0);
+    // 读外参数无写效果：不再降级（M7.0 读豁免）。
+    let r = run_check(proj.path(), "ls ../outside");
+    assert_eq!(
+        r.stdout.trim(),
+        "{\"decision\":\"allow\"}",
+        "读外参数无写效果，不降级"
+    );
 }
 
 #[test]
@@ -53,7 +67,7 @@ fn global_declaration_exempts_escape_check() {
         &format!("{BASE_TOML}[local]\nallow = [\"ls\"]\n[global]\nscript_allow = [\"ls\"]\n"),
         ESCAPE_SCRIPT,
     );
-    let r = run_check(proj.path(), "ls ../outside");
+    let r = run_check(proj.path(), "ls > ../outside");
     assert_eq!(
         r.stdout.trim(),
         "{\"decision\":\"allow\"}",
@@ -119,11 +133,7 @@ fn run_lua_check(proj: &TempDir, command: &str) -> CheckRun {
 
 const LUA_ESCAPE_SCRIPT: &str = concat!(
     "function check(ctx)\n",
-    "  if ctx.bin == \"ls\" then\n",
-    "    for _, a in ipairs(ctx.args) do\n",
-    "      if a == \"../outside\" then return allow(\"ls\") end\n",
-    "    end\n",
-    "  end\n",
+    "  if ctx.bin == \"ls\" and ctx.writes_redirect then return allow(\"ls\") end\n",
     "  return nil\n",
     "end\n",
 );
@@ -141,9 +151,15 @@ fn lua_local_declaration_escape_downgrades_to_confirm() {
         "{\"decision\":\"allow\"}",
         "local 声明 + 仓库内参数激活放行（lua）"
     );
-    let r = run_lua_check(&proj, "ls ../outside");
-    assert!(r.stdout.trim().is_empty(), "逃逸激活降 confirm（lua）");
+    let r = run_lua_check(&proj, "ls > ../outside");
+    assert!(r.stdout.trim().is_empty(), "写逃逸激活降 confirm（lua）");
     assert_eq!(r.code, 0);
+    let r = run_lua_check(&proj, "ls ../outside");
+    assert_eq!(
+        r.stdout.trim(),
+        "{\"decision\":\"allow\"}",
+        "读外参数无写效果不降级（lua）"
+    );
 }
 
 #[test]

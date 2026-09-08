@@ -76,6 +76,9 @@ const ALLOW_CASES: &[&str] = &[
     "go vet ./...",
     "make",
     "just",
+    // 读外纯读豁免（M7.0 写目标感知：读源路径不再触发逃逸降级）
+    "ls ../../outside.txt",
+    "cat ../other-repo/src/main.rs",
 ];
 
 // ---------------------------------------------------------------------------
@@ -120,8 +123,10 @@ const CONFIRM_CASES: &[&str] = &[
     "apt-get install x",
     "python -c 'print(1)'",
     "curl http://x.com/file",
-    // 逃逸仓库路径（[local] allow 带逃逸检查）
+    // 写目标逃逸（M7.0 写目标感知：allow 命中的逃逸检查只作用于写效果
+    // 路径——touch/mkdir 经知识库 write_position="last" 标注写参数位）
     "touch ../../outside.txt",
+    "mkdir ../../outside-dir",
 ];
 
 // ---------------------------------------------------------------------------

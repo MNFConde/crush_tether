@@ -3,7 +3,7 @@ version    = 1                              # 配置文件格式（schema）版�
 default    = "confirm"                      # 未命中任何配置的命令
 precedence = ["deny", "confirm", "allow"]   # 桶间优先级（可调），见「查表顺序」条
 
-# ═══ [local]:效果不出项目 —— 此表内所有 allow 默认带路径逃逸检查 ═══
+# ═══ [local]:写入不出项目 —— 此表内所有 allow 默认带写目标感知逃逸检查（M7.0） ═══
 [local]
 allow   = ["ls", "cat", "grep", "rg", "find", "head", "tail", "wc", "pwd", "echo",
   "printf", "which", "file", "stat", "sort", "uniq", "comm", "diff", "md5sum",

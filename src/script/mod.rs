@@ -359,10 +359,11 @@ fn register_allow(engine: &mut Engine, decls: ScriptAllowDecls) {
 ///
 /// - **deny 终审**：查表落 deny 的命令，脚本任何产出都翻不动（不可逆操作
 ///   不给任何机制留放行通道）；
-/// - **allow(name) 激活**：按声明作用域元数据复查——local 声明对原始命令
-///   参数执行 `path_escapes`（与查表层同一实现），逃逸 → confirm；global
-///   声明豁免（两表皆现 global 胜已在声明集 `scope_of` 体现）。检查在引擎、
-///   单点、脚本不可绕过也不可代劳（脚本自查通过照样再查）；
+/// - **allow(name) 激活**：按声明作用域元数据复查——local 声明执行写目标
+///   感知逃逸检查（`escape_check` 由调用方注入，与查表层同一实现，M7.0 起
+///   只查写效果路径、读源豁免），逃逸 → confirm；global 声明豁免（两表皆现
+///   global 胜已在声明集 `scope_of` 体现）。检查在引擎、单点、脚本不可绕过
+///   也不可代劳（脚本自查通过照样再查）；
 /// - 查表 allow 上的激活为幂等 no-op。
 ///
 /// 返回（最终裁决，原因说明——裁决日志 reason 字段数据源）。
@@ -372,6 +373,7 @@ pub fn finalize(
     decls: &ScriptAllowDecls,
     cmd: &SimpleCommand,
     project: &Path,
+    escape_check: &dyn Fn(&SimpleCommand, &Path) -> bool,
 ) -> (Decision, Option<String>) {
     match outcome {
         ScriptOutcome::Pass => (initial, None),
@@ -400,24 +402,20 @@ pub fn finalize(
                     Some(format!("allow(\"{name}\") activated (global declaration)")),
                 ),
                 Some(DeclScope::Local) => {
-                    if cmd
-                        .args()
-                        .iter()
-                        .any(|w| crate::cmd_parse::path_escapes(w, project))
-                    {
+                    if escape_check(cmd, project) {
                         (
                             Decision::Confirm,
                             Some(format!(
-                                "allow(\"{name}\") activation downgraded: path escapes \
-                                 repository"
+                                "allow(\"{name}\") activation downgraded: write target \
+                                 escapes repository"
                             )),
                         )
                     } else {
                         (
                             Decision::Allow,
                             Some(format!(
-                                "allow(\"{name}\") activated (local declaration; args \
-                                 inside repo)"
+                                "allow(\"{name}\") activated (local declaration; write \
+                                 targets inside repo)"
                             )),
                         )
                     }
@@ -612,13 +610,15 @@ pub struct ScriptChain {
 impl ScriptChain {
     /// 依层序评估整条链；任一层出错整体 `Err`（调用方 fail-safe confirm）。
     /// 返回（最终裁决，生效裁决所在层标签——激活或改判的层，
-    /// 累积的最后一个原因说明）。
+    /// 累积的最后一个原因说明）。`escape_check` 为写目标感知逃逸检查回调
+    /// （M7.0：调用方注入，与查表层同一实现——定稿点单点语义）。
     pub fn evaluate(
         &self,
         cmd: &SimpleCommand,
         initial: Decision,
         project: &Path,
         pipe_to_shell: bool,
+        escape_check: &dyn Fn(&SimpleCommand, &Path) -> bool,
     ) -> Result<(Decision, Option<&'static str>, Option<String>), ScriptError> {
         let mut current = initial;
         let mut layer: Option<&'static str> = None;
@@ -626,7 +626,7 @@ impl ScriptChain {
         for (tag, engine) in &self.engines {
             let outcome = engine.evaluate(cmd, current, project, pipe_to_shell)?;
             let activate = matches!(outcome, ScriptOutcome::Activate(_));
-            let (d, r) = finalize(current, outcome, engine.decls(), cmd, project);
+            let (d, r) = finalize(current, outcome, engine.decls(), cmd, project, escape_check);
             if activate || d != current {
                 layer = Some(tag);
             }
@@ -1177,6 +1177,7 @@ mod tests {
         let cmd_deny = cmd("sudo x");
         let proj = Path::new(PROJ);
         let d = ScriptAllowDecls::default();
+        let no_escape = |_: &SimpleCommand, _: &Path| false;
         // Adjust 在 deny 之上无效（终审）。
         let (v, reason) = finalize(
             Decision::Deny,
@@ -1184,6 +1185,7 @@ mod tests {
             &d,
             &cmd_deny,
             proj,
+            &no_escape,
         );
         assert_eq!(v, Decision::Deny);
         assert!(reason.unwrap().contains("deny is final"));
@@ -1194,6 +1196,7 @@ mod tests {
             &decls(&["ls"], &[]),
             &cmd_deny,
             proj,
+            &no_escape,
         );
         assert_eq!(v, Decision::Deny);
         assert!(reason.unwrap().contains("deny is final"));
@@ -1202,24 +1205,42 @@ mod tests {
     #[test]
     fn activation_scope_decides_escape_check() {
         let proj = Path::new(PROJ);
-        // local 声明：仓库内参数 → allow；逃逸参数 → confirm。
+        // 写目标感知逃逸检查（M7.0）：与查表层同一原语——重定向目标查逃逸。
+        let write_escape = |c: &SimpleCommand, p: &Path| {
+            c.redirect_targets
+                .iter()
+                .any(|w| crate::cmd_parse::path_escapes(w, p))
+        };
+        // local 声明：写目标在仓库内 → allow；写目标逃逸 → confirm；读外
+        // 参数无写效果 → 不再降级（读豁免）。
         let (v, _) = finalize(
             Decision::Confirm,
             ScriptOutcome::Activate("ls".into()),
             &decls(&["ls"], &[]),
             &cmd("ls > out.txt"),
             proj,
+            &write_escape,
         );
         assert_eq!(v, Decision::Allow);
         let (v, reason) = finalize(
             Decision::Confirm,
             ScriptOutcome::Activate("ls".into()),
             &decls(&["ls"], &[]),
-            &cmd("ls ../../outside.txt"),
+            &cmd("ls > ../../outside.txt"),
             proj,
+            &write_escape,
         );
         assert_eq!(v, Decision::Confirm);
         assert!(reason.unwrap().contains("escapes"));
+        let (v, _) = finalize(
+            Decision::Confirm,
+            ScriptOutcome::Activate("ls".into()),
+            &decls(&["ls"], &[]),
+            &cmd("ls ../../outside.txt"),
+            proj,
+            &write_escape,
+        );
+        assert_eq!(v, Decision::Allow, "读外参数无写效果，不降级");
         // global 声明：豁免逃逸检查。
         let (v, reason) = finalize(
             Decision::Confirm,
@@ -1227,6 +1248,7 @@ mod tests {
             &decls(&[], &["docker"]),
             &cmd("docker > /outside.txt"),
             proj,
+            &write_escape,
         );
         assert_eq!(v, Decision::Allow);
         assert!(reason.unwrap().contains("global"));
@@ -1240,6 +1262,7 @@ mod tests {
             &decls(&["ls"], &[]),
             &cmd("ls > out.txt"),
             proj,
+            &write_escape,
         );
         assert_eq!(v, Decision::Allow);
     }

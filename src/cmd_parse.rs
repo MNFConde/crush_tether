@@ -14,6 +14,9 @@ pub struct SimpleCommand {
     pub words: Vec<String>,
     /// 写文件重定向（`>` `>>` `>|` `<>` 且目标非丢弃设备）。
     pub writes_redirect: bool,
+    /// 写型重定向的目标词元（M7.0 写目标感知；`writes_redirect` 为 true 但
+    /// 目标不可识别的异常形态下为空——查表侧对「有写无可查目标」保守处理）。
+    pub redirect_targets: Vec<String>,
 }
 
 impl SimpleCommand {
@@ -117,6 +120,7 @@ fn collect_commands(node: tree_sitter::Node<'_>, source: &str, out: &mut Vec<Sim
 fn extract_command(node: tree_sitter::Node<'_>, source: &str) -> SimpleCommand {
     let mut words = Vec::new();
     let mut writes_redirect = false;
+    let mut redirect_targets = Vec::new();
     let mut cursor = node.walk();
 
     for child in node.children(&mut cursor) {
@@ -130,8 +134,12 @@ fn extract_command(node: tree_sitter::Node<'_>, source: &str) -> SimpleCommand {
                 push_word(child, source, &mut words);
             }
             "file_redirect" => {
-                if redirect_writes_file(child, source) {
+                let (writes, target) = redirect_writes_file(child, source);
+                if writes {
                     writes_redirect = true;
+                    if let Some(t) = target {
+                        redirect_targets.push(t);
+                    }
                 }
             }
             "heredoc_redirect" => {}
@@ -147,11 +155,14 @@ fn extract_command(node: tree_sitter::Node<'_>, source: &str) -> SimpleCommand {
         let mut pcursor = node.walk();
         if let Some(parent) = node.parent() {
             for child in parent.children(&mut pcursor) {
-                if child.id() != node.id()
-                    && child.kind() == "file_redirect"
-                    && redirect_writes_file(child, source)
-                {
-                    writes_redirect = true;
+                if child.id() != node.id() && child.kind() == "file_redirect" {
+                    let (writes, target) = redirect_writes_file(child, source);
+                    if writes {
+                        writes_redirect = true;
+                        if let Some(t) = target {
+                            redirect_targets.push(t);
+                        }
+                    }
                 }
             }
         }
@@ -160,6 +171,7 @@ fn extract_command(node: tree_sitter::Node<'_>, source: &str) -> SimpleCommand {
     SimpleCommand {
         words,
         writes_redirect,
+        redirect_targets,
     }
 }
 
@@ -209,7 +221,8 @@ fn unquote(raw: &str) -> String {
     }
 }
 
-/// 判断 file_redirect 是否为真实写文件（排除输入型、fd dup/close、丢弃设备）。
+/// 判断 file_redirect 是否为真实写文件（排除输入型、fd dup/close、丢弃设备），
+/// 并提取写目标词元（M7.0 写目标感知）。
 ///
 /// 节点结构（tree-sitter-bash 0.25）：`file_redirect` 子节点为
 /// `[file_descriptor] 操作符 目标`，操作符是匿名节点（`>` `>>` `<` `>&` `&>` 等），
@@ -220,7 +233,10 @@ fn unquote(raw: &str) -> String {
 /// - fd dup（`2>&1`，操作符 `>&`/`<&`）不写；
 /// - 目标为 `/dev/null` / `NUL` / `null` / `-` 不写；
 /// - 其余输出型（含 fd 作用域 `2> err.txt`、合并重定向 `&> file`）为写。
-fn redirect_writes_file(node: tree_sitter::Node<'_>, source: &str) -> bool {
+///
+/// 返回（是否写，写目标词元——异常形态无可识别目标时为 None，调用方对
+/// 「有写无可查目标」保守处理）。
+fn redirect_writes_file(node: tree_sitter::Node<'_>, source: &str) -> (bool, Option<String>) {
     let mut cursor = node.walk();
     let mut op = String::new();
     let mut target: Option<String> = None;
@@ -245,17 +261,19 @@ fn redirect_writes_file(node: tree_sitter::Node<'_>, source: &str) -> bool {
 
     // 输入型重定向永不写。
     if op == "<" || op == "<<" || op == "<<<" {
-        return false;
+        return (false, None);
     }
     // fd dup（2>&1）/ fd close（2>&-）：操作符 >& / <& / >&- ，无持久写。
     if op == ">&" || op == "<&" || op == ">&-" {
-        return false;
+        return (false, None);
     }
 
     match target {
-        Some(t) => !matches!(t.as_str(), "/dev/null" | "null" | "NUL" | "nul" | "-"),
-        // 无可识别目标（异常形态）：保守视为写。
-        None => true,
+        Some(t) if matches!(t.as_str(), "/dev/null" | "null" | "NUL" | "nul" | "-") => {
+            (false, None)
+        }
+        // 无可识别目标（异常形态）：保守视为写、无目标词元可查。
+        other => (true, other),
     }
 }
 
@@ -335,4 +353,40 @@ pub fn path_escapes(word: &str, project_root: &Path) -> bool {
         return !inside_repo(&w, project_root);
     }
     false
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn one(s: &str) -> SimpleCommand {
+        flatten_commands(s).expect("parses").into_iter().next().expect("one command")
+    }
+
+    #[test]
+    fn redirect_targets_collected_for_write_redirects_only() {
+        let c = one("ls > out.txt");
+        assert!(c.writes_redirect);
+        assert_eq!(c.redirect_targets, ["out.txt"]);
+
+        // 追加/覆盖写都收集；丢弃设备不收集也不算写。
+        assert_eq!(one("ls >> log.txt").redirect_targets, ["log.txt"]);
+        let c = one("ls > /dev/null");
+        assert!(!c.writes_redirect);
+        assert!(c.redirect_targets.is_empty());
+        // fd dup 与输入型不写。
+        assert!(!one("ls 2>&1").writes_redirect);
+        assert!(!one("cat < in.txt").writes_redirect);
+        // `cmd > file` 顶层包裹形态（目标在兄弟节点）同样收集。
+        assert_eq!(one("echo hi > ../outside").redirect_targets, ["../outside"]);
+    }
+
+    #[test]
+    fn plain_args_do_not_become_redirect_targets() {
+        // 读参数词不是重定向目标——M7.0 读豁免的解析层基础。
+        let c = one("ls -la ../outside");
+        assert!(!c.writes_redirect);
+        assert!(c.redirect_targets.is_empty());
+        assert_eq!(c.args(), ["-la", "../outside"]);
+    }
 }

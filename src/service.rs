@@ -325,7 +325,15 @@ impl RuleSet {
                 }
                 let (decision, reason) = match &self.script {
                     Some(chain) => {
-                        match chain.evaluate(cmd, v0.decision, project, pipe_to_shell) {
+                        let lookup = &self.lookup;
+                        match chain.evaluate(
+                            cmd,
+                            v0.decision,
+                            project,
+                            pipe_to_shell,
+                            // 定稿点写目标感知逃逸检查（M7.0）：与查表层同一实现。
+                            &|c, p| lookup.write_target_escapes(c, p),
+                        ) {
                             // 链式定稿点：deny 终审 + allow 激活作用域化逃逸
                             // 检查的唯一出口（用户层先、项目层最后）。
                             Ok((d, layer, r)) => {

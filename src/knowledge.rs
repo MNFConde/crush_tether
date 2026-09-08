@@ -5,12 +5,13 @@
 //!
 //! - 条目文法：一命令一表头 `[bin]`；`sub` / `flag` 是仅有的两个保留结构键
 //!   （点号键打开子条目空间，值用单行 inline table）；其余键为槽位。
-//! - 槽位封闭集（v1 共 10 个，槽位跟着消费机制走，D-06）：
+//! - 槽位封闭集（v1 共 11 个，槽位跟着消费机制走，D-06）：
 //!   - 运行时归一组（引擎判定路径消费）：`alias_of`（命令/子命令）、
 //!     `same_flag`（flag）、`takes_value`（flag）。
 //!   - lint+脚本数据源组：`may_write`（命令/子命令）、`write_flags`
 //!     （命令/子命令）、`write_tokens`（子命令）、`write_arg_count`（子命令）、
 //!     `irreversible`（flag）。
+//!   - 查表逃逸检查组（M7.0 写目标感知）：`write_position`（命令）。
 //!   - lint 提示组：`delegates`（命令）。登记后置组：`wraps`（命令）。
 //! - 归一语义：命令别名改名（`pip3` → `pip`，参数原样）；子命令别名 =
 //!   bin+子命令 → 目标 bin（`npm exec foo` → `npx foo`）；flag 归一到等价类
@@ -50,6 +51,10 @@ pub struct BinEntry {
     pub delegates: Option<String>,
     /// 包装壳（v1 仅登记）。
     pub wraps: Option<String>,
+    /// 写目标位置（M7.0 写目标感知逃逸检查的消费槽位）：`"last"` = 最后一个
+    /// 位置参数是写目标（`cp src dst` 的 `dst`），其余位置参数按读源豁免。
+    /// v1 仅支持 `"last"`，其余值加载期报错。
+    pub write_position: Option<String>,
     /// 子命令条目（`sub.exec = { alias_of = "npx" }`）。
     pub subs: BTreeMap<String, SubEntry>,
     /// flag 条目（`flag."--force" = { same_flag = "-f" }`）。
@@ -100,8 +105,18 @@ impl KnowledgeBase {
     }
 
     /// 加载期防环：命令别名链、子命令别名→命令链、same_flag 链走到不动点，
-    /// 重访节点即环（`a→b→a` 报配置错误）。
+    /// 重访节点即环（`a→b→a` 报配置错误）。附带 `write_position` 取值校验
+    /// （v1 仅 `"last"`，拼错加载期报错而非静默失效）。
     pub fn validate(&self) -> Result<(), ConfigError> {
+        for (bin, entry) in &self.bins {
+            if let Some(p) = &entry.write_position
+                && p != "last"
+            {
+                return Err(ConfigError::Semantic(format!(
+                    "knowledge [{bin}]: unsupported write_position `{p}` (supported: \"last\")"
+                )));
+            }
+        }
         for bin in self.bins.keys() {
             let mut seen = vec![bin.clone()];
             let mut cur = bin.clone();
@@ -160,6 +175,7 @@ impl KnowledgeBase {
         let mut sub_alias = HashMap::new();
         let mut flag = HashMap::new();
         let mut takes_value: HashMap<String, HashSet<String>> = HashMap::new();
+        let mut write_last = HashSet::new();
 
         for b in self.bins.keys() {
             let mut cur = b.clone();
@@ -178,6 +194,14 @@ impl KnowledgeBase {
             }
         }
         for (b, entry) in &self.bins {
+            // 写目标位置按规范形 bin 名记录（查表侧用归一后的 bin 查询）。
+            if entry.write_position.as_deref() == Some("last") {
+                let mut cur = b.clone();
+                while let Some((next, _)) = self.step(&cur, None) {
+                    cur = next;
+                }
+                write_last.insert(cur);
+            }
             let mut fm = HashMap::new();
             let mut tv = HashSet::new();
             for f in entry.flags.keys() {
@@ -204,6 +228,7 @@ impl KnowledgeBase {
             sub_alias,
             flag,
             takes_value,
+            write_last,
         }
     }
 }
@@ -219,6 +244,9 @@ pub struct CanonMaps {
     pub flag: HashMap<String, HashMap<String, String>>,
     /// bin → 取值的 flag 集合（以规范形记录）。
     pub takes_value: HashMap<String, HashSet<String>>,
+    /// 最后一个位置参数为写目标的 bin 集合（`write_position = "last"`，
+    /// M7.0 写目标感知逃逸检查；以规范形记录）。
+    pub write_last: HashSet<String>,
 }
 
 impl CanonMaps {
@@ -318,6 +346,7 @@ impl<'de> Deserialize<'de> for BinEntry {
                     "write_flags",
                     "delegates",
                     "wraps",
+                    "write_position",
                     "sub",
                     "flag",
                 ];
@@ -329,6 +358,7 @@ impl<'de> Deserialize<'de> for BinEntry {
                         "write_flags" => out.write_flags = Some(map.next_value()?),
                         "delegates" => out.delegates = Some(map.next_value()?),
                         "wraps" => out.wraps = Some(map.next_value()?),
+                        "write_position" => out.write_position = Some(map.next_value()?),
                         "sub" => out.subs = map.next_value()?,
                         "flag" => out.flags = map.next_value()?,
                         _ => return Err(de::Error::unknown_field(&key, SLOTS)),

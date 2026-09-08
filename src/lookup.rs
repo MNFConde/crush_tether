@@ -11,8 +11,9 @@
 //! 3. 节内多维度命中（sub / flag 各自合法命中不同桶）按 `precedence` 有序
 //!    合成出唯一裁决（D-04：`git show --output=x` 中 `show` 命中 allow.sub、
 //!    `--output` 命中 confirm.flag → confirm）。
-//! 4. `[local]` 的一切 allow 命中带路径逃逸检查（local 的承诺是「效果不出
-//!    项目」）；`[global]` allow 豁免。
+//! 4. `[local]` 的一切 allow 命中带**写目标感知逃逸检查**（M7.0：只查写效果
+//!    路径——重定向目标 / 知识库 `write_position` 标注的写参数位，读源豁免；
+//!    local 的承诺精化为「写入不出项目」）；`[global]` allow 豁免。
 //! 5. 未命中 → 节内 `default` → 顶层 `default` → confirm（fail-safe，恒链尾）。
 //!
 //! 知识库两侧规范形化：命令侧逐词元归一（takes_value 的值词元不参与 flag
@@ -26,6 +27,62 @@ use crate::cmd_parse::{SimpleCommand, path_escapes};
 use crate::config::{Dims, MergedCommand, MergedRules, MergedScope, Provenance, ScopeProvenance};
 use crate::knowledge::{CanonMaps, KnowledgeBase};
 use crate::model::{Decision, Verdict};
+
+/// M7.0 写目标感知：命令的**写效果路径**词元集——查表 allow 与 script_allow
+/// 定稿点共用的逃逸检查对象（读源路径一律豁免）。
+///
+/// 集合构成：
+/// - 写型重定向的目标词元（`cmd > target` 的 `target`）；
+/// - 知识库 `write_position = "last"` 标注的命令（`cp`/`mv` 等双位置写命令）
+///   的最后一个位置参数（flag 与 flag 值不占位）。
+///
+/// 无重定向且无标注 → 空集（读命令如 `ls`/`cat` 的任意参数都不再触发逃逸
+/// 检查——「读取默认都通过」）。`writes_redirect` 为真但目标不可识别的异常
+/// 形态无词元可查，由调用方保守转 confirm。
+pub fn write_effect_words<'a>(
+    cmd: &'a SimpleCommand,
+    canon: &CanonMaps,
+    canon_bin: &str,
+) -> Vec<&'a str> {
+    let mut out: Vec<&str> = cmd.redirect_targets.iter().map(String::as_str).collect();
+    if canon.write_last.contains(canon_bin)
+        && let Some(w) = last_positional(cmd.args(), canon, canon_bin)
+    {
+        out.push(w);
+    }
+    out
+}
+
+/// 最后一个位置参数：跳过 flag 词元与 `takes_value` flag 的值词元
+/// （`cp -t dir a` 中 `-t` 未登记取值时 `dir` 会被误认为写目标——保守方向，
+/// 已知边界登记于 design.md M7.0）。
+fn last_positional<'a>(args: &'a [String], canon: &CanonMaps, bin: &str) -> Option<&'a str> {
+    let mut last = None;
+    let mut skip_next = false;
+    for a in args {
+        if skip_next {
+            skip_next = false;
+            continue;
+        }
+        if a.len() > 1 && a.starts_with('-') {
+            let base = a.split('=').next().unwrap_or(a);
+            // 短 flag 粘连值：-oX 的 flag 名是 -o（与查表 flag_bases 同一规则）。
+            let mut sticky = false;
+            let mut probe = base.to_string();
+            if base.len() > 2 && base.starts_with('-') && !base.starts_with("--") {
+                probe = base[..2].to_string();
+                sticky = true;
+            }
+            let c = canon.canon_flag(bin, &probe);
+            if !a.contains('=') && !sticky && canon.flag_takes_value(bin, &c) {
+                skip_next = true;
+            }
+            continue;
+        }
+        last = Some(a.as_str());
+    }
+    last
+}
 
 /// 查表裁决器：持有合并后生效规则的规范形副本与知识库规范形映射。
 pub struct RuleLookup {
@@ -92,6 +149,23 @@ impl RuleLookup {
     /// script_allow 声明集（脚本引擎对账与定稿点作用域判据的数据源）。
     pub fn script_allow(&self) -> &crate::config::merge::ScriptAllowDecls {
         &self.rules.script_allow
+    }
+
+    /// M7.0 写目标感知逃逸检查：命令的写效果路径（重定向目标 / 知识库
+    /// `write_position` 标注的写参数位）是否逃逸仓库。查表 allow 命中与
+    /// script_allow 定稿点共用同一判定（语义一致：读源路径豁免）。写型
+    /// 重定向但目标不可识别的异常形态保守视为逃逸。
+    pub fn write_target_escapes(&self, cmd: &SimpleCommand, project: &Path) -> bool {
+        if cmd.writes_redirect && cmd.redirect_targets.is_empty() {
+            return true;
+        }
+        let Some(bin0) = cmd.bin() else {
+            return !cmd.redirect_targets.is_empty();
+        };
+        let bin = self.canon.canon_bin(bin0);
+        write_effect_words(cmd, &self.canon, &bin)
+            .iter()
+            .any(|w| path_escapes(w, project))
     }
 
     /// 裁决 + 归一链（P4 裁决日志 `kb` 字段的数据源）。
@@ -243,10 +317,11 @@ impl RuleLookup {
                         norm.bin
                     )),
                     Decision::Allow => {
-                        // [local] 的承诺是「效果不出项目」：allow 命中带逃逸检查
-                        //（用原始参数判，归一不改参数语义）。
-                        if cmd.args().iter().any(|w| path_escapes(w, project)) {
-                            Verdict::confirm("path escapes repository")
+                        // [local] 的承诺是「写入不出项目」（M7.0 精化）：逃逸
+                        // 检查只作用于写效果路径，读源路径豁免（归一不改参数
+                        // 语义，仍用原始词元判）。
+                        if self.write_target_escapes(cmd, project) {
+                            Verdict::confirm("write target escapes repository")
                         } else {
                             Verdict::allow()
                         }
@@ -310,10 +385,10 @@ impl RuleLookup {
                 Decision::Deny => Verdict::deny(format!("{hit} blocked")),
                 Decision::Confirm => Verdict::confirm(format!("{hit} requires confirmation")),
                 Decision::Allow => {
-                    // [local] 的承诺是「效果不出项目」：allow 命中一律带逃逸
-                    // 检查（原始参数）；[global] allow 豁免。
-                    if !is_global && cmd.args().iter().any(|w| path_escapes(w, project)) {
-                        Verdict::confirm("path escapes repository")
+                    // [local] 的承诺是「写入不出项目」（M7.0 精化）：allow 命中的
+                    // 逃逸检查只作用于写效果路径；[global] allow 整体豁免。
+                    if !is_global && self.write_target_escapes(cmd, project) {
+                        Verdict::confirm("write target escapes repository")
                     } else {
                         Verdict::allow()
                     }
@@ -646,18 +721,92 @@ mod tests {
     }
 
     #[test]
-    fn local_allow_hits_carry_escape_check() {
+    fn local_allow_escape_check_targets_write_effects_only() {
+        // M7.0 写目标感知：读源路径豁免、写效果路径查逃逸。
         let l = lookup(BASE);
         assert_eq!(classify(&l, "ls").decision, Decision::Allow);
+        // 读外纯读：豁免（原语义误拦，M7.0 修复）。
+        assert_eq!(
+            classify(&l, "ls /outside/x").decision,
+            Decision::Allow,
+            "读外参数无写效果，不再降级"
+        );
+        assert_eq!(
+            classify(&l, "git status /outside/x").decision,
+            Decision::Allow
+        );
+        // 写外（重定向目标逃逸）：confirm。
         assert!(
-            classify(&l, "ls /outside/x").decision == Decision::Confirm,
-            "[local] allow 命中带路径逃逸检查"
+            classify(&l, "ls > /outside/x").decision == Decision::Confirm,
+            "重定向目标逃逸 → confirm"
         );
         assert!(
-            classify(&l, "git status /outside/x").decision == Decision::Confirm,
-            "节内 allow.sub 命中同样带逃逸检查"
+            classify(&l, "git status > /outside/x").decision == Decision::Confirm,
+            "节内 allow.sub 同样按写效果查逃逸"
         );
+        // 写内：allow。
         assert_eq!(classify(&l, "git status").decision, Decision::Allow);
+        assert_eq!(classify(&l, "ls > out.txt").decision, Decision::Allow);
+        // flag 写仍由 confirm.flag 桶合成（逃逸检查不替代桶机制）。
+        assert_eq!(
+            classify(&l, "git show --output=/outside/x").decision,
+            Decision::Confirm
+        );
+    }
+
+    #[test]
+    fn write_position_last_scans_only_the_target_arg() {
+        // 知识库 write_position="last"：cp 的最后一个位置参数是写目标，
+        // 读源（首个位置参数）豁免——读外写内放行、读内写外拦截。
+        let rules = concat!(
+            "version = 1\n",
+            "default = \"confirm\"\n",
+            "[local]\n",
+            "allow = [\"cp\"]\n",
+        );
+        let kb = crate::knowledge::KnowledgeBase::parse_toml(concat!(
+            "version = 1\n",
+            "[cp]\n",
+            "write_position = \"last\"\n",
+        ))
+        .expect("kb parses");
+        let f = file(rules);
+        let l = RuleLookup::new(
+            merge(Layers {
+                global: None,
+                user: None,
+                project: Some(&f),
+            }),
+            Some(&kb),
+        );
+        assert!(
+            classify(&l, "cp /outside/src.txt .").decision == Decision::Allow,
+            "读外写内：源豁免、目标在内 → allow"
+        );
+        assert!(
+            classify(&l, "cp src.txt ../outside/dst.txt").decision == Decision::Confirm,
+            "读内写外：写目标逃逸 → confirm"
+        );
+        assert!(
+            classify(&l, "cp -r src dst").decision == Decision::Allow,
+            "flag 不占位：-r 后 last 位置参数是 dst"
+        );
+        // 无知识库（或无标注）：allow 命中只查重定向目标，位置参数全豁免。
+        let l_plain = lookup(rules);
+        assert_eq!(
+            classify(&l_plain, "cp src.txt ../outside/dst.txt").decision,
+            Decision::Allow
+        );
+    }
+
+    #[test]
+    fn unsupported_write_position_value_is_rejected() {
+        let msg = crate::knowledge::KnowledgeBase::parse_toml(
+            "version = 1\n[cp]\nwrite_position = \"first\"",
+        )
+        .expect_err("unsupported value")
+        .to_string();
+        assert!(msg.contains("write_position"), "{msg}");
     }
 
     #[test]
