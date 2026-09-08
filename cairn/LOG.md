@@ -2,6 +2,12 @@
 
 This file records substantive progress in reverse-chronological order — newest entry at the top, right below this line. Keep each entry short — summary and pointer only; conclusions settle into `cairn/<topic>.md`.
 
+## 2026-09-09 · M7.3 开工：方案定稿（一次性实机实测 + CI 常态回归）
+
+- 方案要点与三层触发器全录 ROADMAP M7.3 条：mock LLM 后端驱动 agent（hook 链路 = agent 进程本地行为，与 LLM 无关——mock 固定 tool_use 响应即可让 agent 走完 hook 全链，零凭证零费用可重复，CI 矩阵成立的根基，spike 待证）；锚点 0 最新版全轴出基线、历史锚点静态不重测按需二分；push = pinned smoke + paths 过滤 agent 耦合面，cron = latest smoke + 新版自动全轴 + bot commit 矩阵机器层（scoop 模式），dispatch = 全矩阵人工回溯排查。
+- 状态事实：正式插件已卸载（用户执行，重装即可补）→ zcode 两项补充（确认模式 allow 跳过弹窗、计划模式交叉）标待补测；claude-code 已升 2.1.263（锚点 1 = 2.1.195 窗口关闭，降回溯候选）；两 agent 均走第三方供应商 API（base_url+key 无登录动作）——本地实测耗供应商额度，CI 零 secrets 零消耗。
+- Details: `cairn/ROADMAP.md`（M7.3 条 + Current focus）。
+
 ## 2026-09-08 · M7.2 收官：两处实机验收闭环（四角色 4/4）+ 退役清单执行
 
 - **两处实机验收全过**：本仓库自测（新会话批准工作区 hook 审核门后 `ws-*` 实弹——bash 转发真实引擎回 `allow`、fail 默认 exit 0、post 正常 dump）；外部项目 TestProject（`.zcode/config.json` 注册落盘后会话即武装）——**四角色 4/4 全覆盖，更正前报「ext-perm 未触发」：实为报告时点早于 confirm 类命令，14:49/14:53 两次 PermissionRequest 实证触发**（requestId 载荷、静默 exit 0 后原生审批弹窗照常）；蛇形+驼峰双命名并存在外部项目再次实锤。
