@@ -174,7 +174,7 @@ pub struct RuleSet {
 }
 
 /// 单命令裁决的溯源信息（日志 source/normalized/script 字段数据源）。
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Clone)]
 pub struct DecisionTrace {
     /// 表裁决命中溯源（脚本改判时换为 layer=script）。
     pub source: Option<crate::lookup::EntrySource>,
@@ -184,6 +184,22 @@ pub struct DecisionTrace {
     pub script_changed: bool,
     /// 生效脚本层标签（"user"/"project"；日志 script.file 溯源数据源）。
     pub script_layer: Option<&'static str>,
+    /// 查表层最终产出（脚本评估前基线；allow 命中经 M7.0 写逃逸降级后即
+    /// confirm——命中桶看 `source.entry`，产出档看本字段。explain 溯源用）。
+    pub table_decision: Decision,
+}
+
+impl Default for DecisionTrace {
+    fn default() -> Self {
+        DecisionTrace {
+            source: None,
+            normalized: None,
+            script_changed: false,
+            script_layer: None,
+            // Default 基线取 Allow 无语义（日志不消费此字段；explain 恒显式赋值）。
+            table_decision: Decision::Allow,
+        }
+    }
 }
 
 impl RuleSet {
@@ -307,86 +323,239 @@ impl RuleSet {
     }
 
     /// 裁决 + 溯源（日志 source/normalized/script 字段）。
+    ///
+    /// 与 [`Self::explain`] 共享 [`Self::classify_single`]；组合语义与
+    /// `engine::decide_with` 一致（任一 deny 短路返回该裁决）。
     pub fn decide_trace(&self, command: &str, project: &Path) -> (Verdict, DecisionTrace) {
-        use std::cell::RefCell;
-        let trace = RefCell::new(DecisionTrace::default());
-        let verdict =
-            crate::engine::decide_with(command, project, &|cmd, project, pipe_to_shell| {
-                let c0 = self.lookup.classify_traced(cmd, project);
-                let v0 = c0.verdict;
-                {
-                    let mut t = trace.borrow_mut();
-                    if t.source.is_none() {
-                        t.source = c0.source.clone();
-                    }
-                    if t.normalized.is_none() && !c0.kb_chain.is_empty() {
-                        t.normalized = Some(c0.kb_chain.join(" -> "));
-                    }
+        let commands = match crate::cmd_parse::flatten_commands(command) {
+            Ok(c) => c,
+            Err(e) => {
+                return (
+                    crate::model::unparseable(e.to_string()),
+                    DecisionTrace::default(),
+                );
+            }
+        };
+        if commands.is_empty() {
+            return (Verdict::confirm("empty command"), DecisionTrace::default());
+        }
+        let pipe = crate::engine::pipe_to_shell(command);
+        let mut merged = DecisionTrace::default();
+        let mut saw_confirm = false;
+        let mut short_circuit: Option<Verdict> = None;
+        for c in &commands {
+            let (v, t) = self.classify_single(c, project, pipe);
+            merge_trace(&mut merged, t);
+            match v.decision {
+                Decision::Deny => {
+                    short_circuit = Some(v);
+                    break;
                 }
-                let (decision, reason) = match &self.script {
-                    Some(chain) => {
-                        let lookup = &self.lookup;
-                        match chain.evaluate(
-                            cmd,
-                            v0.decision,
-                            project,
-                            pipe_to_shell,
-                            // 定稿点写目标感知逃逸检查（M7.0）：与查表层同一实现。
-                            &|c, p| lookup.write_target_escapes(c, p),
-                        ) {
-                            // 链式定稿点：deny 终审 + allow 激活作用域化逃逸
-                            // 检查的唯一出口（用户层先、项目层最后）。
-                            Ok((d, layer, r)) => {
-                                // script 字段自证：激活或改判（含 deny 终审拦截）
-                                // 留痕；生效裁决出自脚本 → source.layer 换为
-                                // script（D-07 词表），层标签供 file 区分两层。
-                                if let Some(tag) = layer {
-                                    let mut t = trace.borrow_mut();
-                                    t.script_changed = true;
-                                    t.script_layer = Some(tag);
-                                    t.source = Some(crate::lookup::EntrySource {
-                                        layer: "script",
-                                        entry: "script".into(),
-                                        token: cmd.bin().unwrap_or("").to_string(),
-                                    });
-                                }
-                                (d, r)
-                            }
-                            Err(e) => {
-                                eprintln!(
-                                    "crush-tether: script evaluation failed: {e}; fail-safe confirm"
-                                );
-                                (
-                                    Decision::Confirm,
-                                    Some("script evaluation failed; fail-safe".into()),
-                                )
-                            }
-                        }
-                    }
-                    None => (v0.decision, None),
-                };
-                let script_changed = trace.borrow().script_changed;
-                match (reason, decision != v0.decision) {
-                    (Some(reason), true) => Verdict {
-                        decision,
-                        reason: Some(reason),
-                    },
-                    (Some(reason), false) => Verdict {
-                        decision,
-                        reason: v0.reason.or(Some(reason)),
-                    },
-                    (None, _) => Verdict {
-                        decision,
-                        reason: if script_changed {
-                            Some("adjusted by rules.rhai".into())
-                        } else {
-                            v0.reason
-                        },
-                    },
-                }
-            });
-        (verdict, trace.into_inner())
+                Decision::Confirm => saw_confirm = true,
+                Decision::Allow => {}
+            }
+        }
+        let verdict = match short_circuit {
+            Some(v) => v,
+            None if saw_confirm => Verdict::confirm("component requires confirmation"),
+            None => Verdict::allow(),
+        };
+        (verdict, merged)
     }
+
+    /// 单命令全链（查表 → 脚本 → 定稿点）：`decide_trace` 与 `explain`
+    /// 的共享原语（M7.1）。
+    pub fn classify_single(
+        &self,
+        cmd: &crate::cmd_parse::SimpleCommand,
+        project: &Path,
+        pipe_to_shell: bool,
+    ) -> (Verdict, DecisionTrace) {
+        let c0 = self.lookup.classify_traced(cmd, project);
+        let v0 = c0.verdict;
+        let mut trace = DecisionTrace {
+            source: c0.source.clone(),
+            normalized: if c0.kb_chain.is_empty() {
+                None
+            } else {
+                Some(c0.kb_chain.join(" -> "))
+            },
+            table_decision: v0.decision,
+            ..DecisionTrace::default()
+        };
+        let lookup = &self.lookup;
+        let (decision, reason) = match &self.script {
+            Some(chain) => {
+                match chain.evaluate(
+                    cmd,
+                    v0.decision,
+                    project,
+                    pipe_to_shell,
+                    // 定稿点写目标感知逃逸检查（M7.0）：与查表层同一实现。
+                    &|c, p| lookup.write_target_escapes(c, p),
+                ) {
+                    // 链式定稿点：deny 终审 + allow 激活作用域化逃逸检查的
+                    // 唯一出口（用户层先、项目层最后）。
+                    Ok((d, layer, r)) => {
+                        // script 字段自证：激活或改判（含 deny 终审拦截）留痕；
+                        // 生效裁决出自脚本 → source.layer 换为 script（D-07
+                        // 词表），层标签供 file 区分两层。
+                        if let Some(tag) = layer {
+                            trace.script_changed = true;
+                            trace.script_layer = Some(tag);
+                            trace.source = Some(crate::lookup::EntrySource {
+                                layer: "script",
+                                entry: "script".into(),
+                                token: cmd.bin().unwrap_or("").to_string(),
+                            });
+                        }
+                        (d, r)
+                    }
+                    Err(e) => {
+                        eprintln!("crush-tether: script evaluation failed: {e}; fail-safe confirm");
+                        (
+                            Decision::Confirm,
+                            Some("script evaluation failed; fail-safe".into()),
+                        )
+                    }
+                }
+            }
+            None => (v0.decision, None),
+        };
+        let verdict = match (reason, decision != v0.decision) {
+            (Some(reason), true) => Verdict {
+                decision,
+                reason: Some(reason),
+            },
+            (Some(reason), false) => Verdict {
+                decision,
+                reason: v0.reason.or(Some(reason)),
+            },
+            (None, _) => Verdict {
+                decision,
+                reason: if trace.script_changed {
+                    Some("adjusted by rules.rhai".into())
+                } else {
+                    v0.reason
+                },
+            },
+        };
+        (verdict, trace)
+    }
+
+    /// M7.1 规则测试工具：单发全溯源报告（人读 `explain` 模式的数据源）。
+    /// 加载由调用方完成（`RuleSet::load`），本方法不落裁决日志。
+    pub fn explain(&self, command: &str, project: &Path) -> ExplainReport {
+        let commands = crate::cmd_parse::flatten_commands(command);
+        let mut report = ExplainReport {
+            engine: self.engine.clone(),
+            kb_present: self.kb_present,
+            lint: self.lint_warnings.clone(),
+            parse_error: commands.as_ref().err().map(|e| e.0.clone()),
+            commands: Vec::new(),
+            combined: Verdict::confirm("empty command"),
+        };
+        let Ok(commands) = commands else {
+            return report;
+        };
+        if commands.is_empty() {
+            return report;
+        }
+        let pipe = crate::engine::pipe_to_shell(command);
+        let mut verdicts = Vec::new();
+        for c in &commands {
+            let escape_check = {
+                let lookup = &self.lookup;
+                let c = c.clone();
+                let p = project.to_path_buf();
+                move || lookup.write_target_escapes(&c, &p)
+            };
+            let write_scan = self.lookup.write_scan_words(c);
+            let (v, t) = self.classify_single(c, project, pipe);
+            report.commands.push(CommandExplain {
+                raw: c.words.join(" "),
+                bin: c.bin().unwrap_or("").to_string(),
+                table_decision: t.table_decision,
+                table_source: t.source.clone(),
+                normalized: t.normalized.clone(),
+                writes_redirect: c.writes_redirect,
+                redirect_targets: c.redirect_targets.clone(),
+                write_scan,
+                write_escape: escape_check(),
+                script_changed: t.script_changed,
+                script_layer: t.script_layer,
+                final_decision: v.decision,
+                reason: v.reason.clone(),
+            });
+            verdicts.push(v);
+        }
+        report.combined = Verdict::combine(verdicts);
+        report
+    }
+}
+
+/// trace 合并规则（与逐条短路组合语义一致）：source/normalized 首个优先，
+/// script_changed 永久置位，script_layer 后到覆盖。
+fn merge_trace(merged: &mut DecisionTrace, t: DecisionTrace) {
+    if merged.source.is_none() {
+        merged.source = t.source;
+    }
+    if merged.normalized.is_none() {
+        merged.normalized = t.normalized;
+    }
+    merged.table_decision = t.table_decision;
+    if t.script_changed {
+        merged.script_changed = true;
+        merged.script_layer = t.script_layer;
+    }
+}
+
+/// `explain` 的单命令溯源（M7.1）。
+#[derive(Debug, Clone)]
+pub struct CommandExplain {
+    /// 原始词元串（空格连接）。
+    pub raw: String,
+    /// 命令名。
+    pub bin: String,
+    /// 查表层裁决（脚本评估前基线）。
+    pub table_decision: Decision,
+    /// 查表命中溯源。
+    pub table_source: Option<crate::lookup::EntrySource>,
+    /// 归一链（`a -> b`）。
+    pub normalized: Option<String>,
+    /// 是否有写型重定向。
+    pub writes_redirect: bool,
+    /// 写型重定向目标词元。
+    pub redirect_targets: Vec<String>,
+    /// 逃逸检查扫描集（写效果路径词元，M7.0 溯源）。
+    pub write_scan: Vec<String>,
+    /// 定稿点写逃逸判定（true = 会被降级 confirm）。
+    pub write_escape: bool,
+    /// 脚本层是否改判/激活。
+    pub script_changed: bool,
+    /// 生效脚本层（user/project）。
+    pub script_layer: Option<&'static str>,
+    /// 该命令最终裁决。
+    pub final_decision: Decision,
+    /// 原因说明。
+    pub reason: Option<String>,
+}
+
+/// `explain` 的全量报告。
+#[derive(Debug, Clone)]
+pub struct ExplainReport {
+    /// 引擎标签。
+    pub engine: String,
+    /// 知识库在位性。
+    pub kb_present: bool,
+    /// 加载期 lint 告警。
+    pub lint: Vec<crate::lint::Lint>,
+    /// 解析失败原因（命令行整体不可解析时非空）。
+    pub parse_error: Option<String>,
+    /// 逐条命令溯源。
+    pub commands: Vec<CommandExplain>,
+    /// 组合裁决。
+    pub combined: Verdict,
 }
 
 // ── 裁决日志（M4.3，ADR-07：默认开）───────────────────────────────────────

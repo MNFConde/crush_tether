@@ -360,7 +360,11 @@ mod tests {
     use super::*;
 
     fn one(s: &str) -> SimpleCommand {
-        flatten_commands(s).expect("parses").into_iter().next().expect("one command")
+        flatten_commands(s)
+            .expect("parses")
+            .into_iter()
+            .next()
+            .expect("one command")
     }
 
     #[test]

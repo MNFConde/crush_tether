@@ -12,6 +12,8 @@ pub mod knowledge;
 pub mod lint;
 pub mod lookup;
 pub mod model;
+pub mod repl;
+pub mod report;
 pub mod script;
 pub mod service;
 

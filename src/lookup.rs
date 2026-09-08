@@ -168,6 +168,20 @@ impl RuleLookup {
             .any(|w| path_escapes(w, project))
     }
 
+    /// 逃逸检查扫描集（M7.1 explain 溯源展示用：哪些词元参与了写效果判定）。
+    pub fn write_scan_words(&self, cmd: &SimpleCommand) -> Vec<String> {
+        match cmd.bin() {
+            Some(b) => {
+                let bin = self.canon.canon_bin(b);
+                write_effect_words(cmd, &self.canon, &bin)
+                    .into_iter()
+                    .map(String::from)
+                    .collect()
+            }
+            None => Vec::new(),
+        }
+    }
+
     /// 裁决 + 归一链（P4 裁决日志 `kb` 字段的数据源）。
     pub fn classify_traced(&self, cmd: &SimpleCommand, project: &Path) -> Classification {
         let Some(bin0) = cmd.bin() else {

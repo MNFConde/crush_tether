@@ -1,15 +1,19 @@
-//! bin 入口：三角色运行时（design.md「软件与项目内脚本分工」）。
+//! bin 入口：运行模式分派（design.md「软件与项目内脚本分工」）。
 //!
-//! - `check`：单发全量管线（兜底/冒烟/测试基准）。
+//! - `check`：单发全量管线（兜底/冒烟/测试基准）；`--batch` 批量裁决表、
+//!   `--cases <file>` 断言用例对账（M7.1）。
 //! - `hook`：connect-or-spawn 主路径（连不上 serve → detached spawn +
 //!   ~200ms 有界重试 → 仍失败降级本进程 check，绝不无裁决放行）。
 //! - `serve`：常驻服务（独占 bind 单实例 + 串行 accept + idle 退出）。
 //! - `benchmark`：双跑对比（in-process vs serve 路径），验收 diff 为空。
+//! - `explain`：单发全溯源报告（M7.1 人读调试）。
+//! - `repl`：用户面规则调试器（M7.1，每条输入重载配置，改规则即测）。
 //!
 //! 裁决管线：配置加载（显式覆盖或三层发现 + 引导生成）→ 字段级继承合并 →
 //! rules.toml 查表（多命中合成）→ rules.rhai 脚本 → 定稿点 → 组合裁决，
 //! 装配在 `service::RuleSet`（serve 与 check 共用同一实现）。
 
+use std::io::BufRead;
 use std::path::PathBuf;
 use std::process::ExitCode;
 use std::time::Duration;
@@ -25,11 +29,14 @@ fn main() -> ExitCode {
     let mut engine_arg: Option<String> = None;
     let mut project_arg: Option<PathBuf> = None;
     let mut idle_secs: Option<u64> = None;
+    let mut batch = false;
+    let mut cases: Option<String> = None;
+    let mut positional: Vec<String> = Vec::new();
 
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
         match arg.as_str() {
-            "check" | "hook" | "serve" | "benchmark" => mode = arg,
+            "check" | "hook" | "serve" | "benchmark" | "explain" | "repl" => mode = arg,
             "--agent" => match args.next().as_deref().and_then(Agent::parse) {
                 Some(a) => agent = a,
                 None => {
@@ -67,10 +74,23 @@ fn main() -> ExitCode {
                     return fail_safe_confirm(agent);
                 }
             },
+            "--batch" => batch = true,
+            "--cases" => match args.next() {
+                Some(p) => cases = Some(p),
+                None => {
+                    eprintln!("crush-tether: --cases requires a file path argument");
+                    return fail_safe_confirm(agent);
+                }
+            },
             _ => {
-                // 未知参数告警不硬错（保兼容）：配置文件拼写错误是硬错误，
-                // CLI 拼错也不该静默改用缺省（fail-safe 哲学一致性）。
-                eprintln!("crush-tether: unknown argument `{arg}` ignored");
+                if arg.starts_with('-') {
+                    // 未知 flag 告警不硬错（保兼容）：配置文件拼写错误是硬错误，
+                    // CLI 拼错也不该静默改用缺省（fail-safe 哲学一致性）。
+                    eprintln!("crush-tether: unknown argument `{arg}` ignored");
+                } else {
+                    // 位置参数：explain 模式的命令文本（支持未引号多词形态）。
+                    positional.push(arg);
+                }
             }
         }
     }
@@ -96,7 +116,25 @@ fn main() -> ExitCode {
         }
         "hook" => run_hook(agent, config_arg.as_deref(), &engine),
         "benchmark" => run_benchmark(agent, config_arg.as_deref(), &engine),
-        _ => run_check(agent, config_arg.as_deref(), &engine),
+        "explain" => run_explain(
+            config_arg.as_deref(),
+            &engine,
+            project_arg.as_ref(),
+            &positional,
+        ),
+        "repl" => {
+            let project = crush_tether::repl::resolve_project(project_arg.as_ref());
+            crush_tether::repl::run(&project, config_arg.as_deref(), &engine)
+        }
+        _ => {
+            if batch {
+                return run_batch(config_arg.as_deref(), &engine, project_arg.as_ref());
+            }
+            if let Some(file) = cases.as_deref() {
+                return run_cases(file, config_arg.as_deref(), &engine, project_arg.as_ref());
+            }
+            run_check(agent, config_arg.as_deref(), &engine)
+        }
     }
 }
 
@@ -214,4 +252,139 @@ fn check_verdict(
 fn fail_safe_confirm(agent: Agent) -> ExitCode {
     let verdict = Verdict::confirm("configuration error; fail-safe");
     ExitCode::from(channel::emit(&verdict, agent))
+}
+
+/// explain 模式（M7.1）：单发全溯源报告（人读）。命令 = 位置参数拼接
+/// （`explain git push` 与 `explain 'git push'` 等价）；不落裁决日志。
+fn run_explain(
+    config_arg: Option<&str>,
+    engine: &str,
+    project_arg: Option<&PathBuf>,
+    positional: &[String],
+) -> ExitCode {
+    if positional.is_empty() {
+        eprintln!("usage: crush-tether explain '<command>'");
+        return ExitCode::from(2);
+    }
+    let command = positional.join(" ");
+    let project = crush_tether::repl::resolve_project(project_arg);
+    match RuleSet::load(&project, config_arg, engine) {
+        Ok(rs) => {
+            print!(
+                "{}",
+                crush_tether::report::render_report(&rs.explain(&command, &project))
+            );
+            ExitCode::from(0)
+        }
+        Err(e) => {
+            eprintln!("crush-tether: {e}");
+            ExitCode::from(2)
+        }
+    }
+}
+
+/// check --batch（M7.1）：stdin 一行一命令 → 裁决表（人读；exit 0 恒定，
+/// 表是报告不是阻断）。空行跳过；加载失败 stderr + exit 2。
+fn run_batch(config_arg: Option<&str>, engine: &str, project_arg: Option<&PathBuf>) -> ExitCode {
+    let project = crush_tether::repl::resolve_project(project_arg);
+    let rs = match RuleSet::load(&project, config_arg, engine) {
+        Ok(rs) => rs,
+        Err(e) => {
+            eprintln!("crush-tether: {e}");
+            return ExitCode::from(2);
+        }
+    };
+    let stdin = std::io::stdin();
+    for line in stdin.lock().lines().map_while(Result::ok) {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let v = rs.decide(line, &project);
+        println!("{}", crush_tether::report::render_batch_line(line, &v));
+    }
+    ExitCode::from(0)
+}
+
+/// `--cases` 用例文件 schema（TOML）。
+#[derive(serde::Deserialize)]
+struct CasesFile {
+    version: u64,
+    #[serde(rename = "case")]
+    cases: Vec<CaseEntry>,
+}
+
+#[derive(serde::Deserialize)]
+struct CaseEntry {
+    cmd: String,
+    expect: String,
+}
+
+/// check --cases（M7.1）：断言式规则用例批量对账——输入 + 期望档位，
+/// 逐条对账输出 PASS/FAIL 表；全过 exit 0，任一失败 exit 1。
+fn run_cases(
+    file: &str,
+    config_arg: Option<&str>,
+    engine: &str,
+    project_arg: Option<&PathBuf>,
+) -> ExitCode {
+    let text = match std::fs::read_to_string(file) {
+        Ok(t) => t,
+        Err(e) => {
+            eprintln!("crush-tether: cannot read cases file `{file}`: {e}");
+            return ExitCode::from(2);
+        }
+    };
+    let parsed: CasesFile = match toml::from_str(&text) {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("crush-tether: cases file `{file}` parse error: {e}");
+            return ExitCode::from(2);
+        }
+    };
+    if parsed.version != 1 {
+        eprintln!(
+            "crush-tether: cases file `{file}` version {} unsupported (expected 1)",
+            parsed.version
+        );
+        return ExitCode::from(2);
+    }
+    let project = crush_tether::repl::resolve_project(project_arg);
+    let rs = match RuleSet::load(&project, config_arg, engine) {
+        Ok(rs) => rs,
+        Err(e) => {
+            eprintln!("crush-tether: {e}");
+            return ExitCode::from(2);
+        }
+    };
+    let mut failed = 0usize;
+    for c in &parsed.cases {
+        let actual = crush_tether::model::Decision::parse(&c.expect).map(|expect| {
+            let actual = rs.decide(&c.cmd, &project).decision;
+            (expect, actual)
+        });
+        match actual {
+            Some((expect, actual)) => {
+                let pass = actual == expect;
+                if !pass {
+                    failed += 1;
+                }
+                println!(
+                    "{}",
+                    crush_tether::report::render_case_line(pass, &c.cmd, expect, actual)
+                );
+            }
+            None => {
+                println!("FAIL  (bad expect `{}`) {}", c.expect, c.cmd);
+                failed += 1;
+            }
+        }
+    }
+    let total = parsed.cases.len();
+    println!("{}/{total} passed", total - failed);
+    if failed == 0 {
+        ExitCode::from(0)
+    } else {
+        ExitCode::from(1)
+    }
 }

@@ -2,6 +2,14 @@
 
 This file records substantive progress in reverse-chronological order — newest entry at the top, right below this line. Keep each entry short — summary and pointer only; conclusions settle into `cairn/<topic>.md`.
 
+## 2026-09-08 · M7.0 + M7.1 完成：写目标感知逃逸检查 + 规则测试工具四件套
+
+- **M7.0（3ce9058）**：`[local]` allow 逃逸检查从「任意参数词」收窄为「写效果路径」（重定向目标 + 知识库新槽位 `write_position="last"` 标注的写参数位），读外纯读不再误拦——落实「读取默认都通过、写入默认只能本仓库内」。关键发现：allow 桶内的写型命令**必须**标注写参数位否则写逃逸失去防护（`touch outside.txt` 回归用例钉死）——默认包补 cp/mv/touch/mkdir 条目，**存量配置不自动迁移**（本仓库自己的 knowledge.toml 已手动补）。design.md 更正登记 22 + 承诺措辞精化「写入不出项目」。
+- **M7.1**：四件套落地——`explain`（全溯源：命中层/桶/token/归一链/写扫描集/脚本改判）、`check --batch`（裁决表）、`check --cases`（断言对账，规则变更回归护栏）、`repl`（调试器：空行重复上一条、每条输入重载配置 = 改规则即测、不落日志）。基建 = `RuleSet::classify_single` 单命令共享原语（工具与门禁裁决恒一致）。REPL 形态定点 = 纯 stdio（rustyline 留升级位）。
+- **M7.0 四形态 explain 实跑闭环**（读外纯读/读外写内/读内写外/flag 写）——验收按裁定并入 M7.1 完成。
+- 插件已按用户决定禁用（日常无门运行，M7 前置验证结论不受影响）；P7 仅余搁置项。
+- Details: `cairn/ROADMAP.md`（M7.0/M7.1 ✅ 条目）、`doc/design.md`（更正登记 22 + 「规则测试工具（M7.1，定稿）」节）、`tests/rule_tools.rs`、`README.md`（运行模式）。
+
 ## 2026-09-08 · M7 前置完成：正式插件实机三档验证闭环 + hook 审核门发现
 
 - **三档全链实测通过**（正式插件 `type:"process"` + 裸命令名，区别于探针形态）：allow（`cat`/`tail` 单命令无弹窗）/ confirm（`curl --version` 弹窗 → 用户批准 → 执行）/ deny（`sudo --version` 工具调用直接阻断）；复合命令（`echo && powershell`）按多命中合成落 confirm，语义正确。链路点：裸命令名 PATH 解析、connect-or-spawn（serve 常驻进程 + 裁决全走 `mode:"serve"`）、JSONL 裁决日志含 `type:"load"` 事件——失效模式 #2 部署项在开发机闭环。
