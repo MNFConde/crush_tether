@@ -6,6 +6,7 @@
 |---|---|---|
 | [check-links.py](check-links.py) | 校验 doc/ 与 cairn/ 各 Markdown 的跨文件与站内锚点引用一致性（平移自 mdor） | `uv run --directory script check-links.py` |
 | [check-commit-msg.py](check-commit-msg.py) | 校验 git 提交信息格式（Conventional Commits），由 `.githooks/commit-msg` 调用（平移自 mdor） | `uv run --directory script check-commit-msg.py <提交信息文件>` |
+| [hook_probe.py](hook_probe.py) | hook 探针（design.md「hook 探针方法（定稿）」的 python 参考实现，M7.2）：dump 载荷 / 转发真实引擎 / 控制文件切模式，注册进任意项目实测 hook 触发 | `uv run python hook_probe.py <bash\|perm\|post\|fail>`（可带 `--probe-dir`/`--engine` 等，见下） |
 
 ## check-links.py
 
@@ -19,6 +20,19 @@
 - **用法**：`uv run --directory script check-commit-msg.py <提交信息文件>`（git 提交时由 commit-msg 钩子自动调用）
 - **退出码**：0 = 格式通过；1 = 存在违规（逐条列出）；2 = 参数错误
 - **启用**（一次性，本地配置不入库）：`git config core.hooksPath .githooks`
+
+## hook_probe.py
+
+- **作用**：hook 探针参考实现——注册进 agent 工作区 hook（`type:"process"`，`command: "uv"`），实测「hook 真的被拉起、载荷与裁决真的流转」。方法论（语言无关）见 doc/design.md「hook 探针方法（定稿）」。四角色与已退役的 node 探针（`.zcode/probe/probe.js`）语义 1:1：
+  - `bash`：dump stdin 载荷 → 转发真实引擎（`<engine> hook --agent <slug>`）→ 原样回传引擎 stdout 与退出码
+  - `perm`：dump 后，探针目录有 `perm-out.txt` 则原样写到 stdout（模拟许可信封），退出码取 `perm-exit.txt`（默认 0）
+  - `post`：仅 dump（PostToolUse 只有执行结果、无用户选择回传）
+  - `fail`：按 `fail-exit.txt` 内容作退出码（默认 0），dump 截断 stdin——模拟 hook 进程异常退出
+- **用法**：`uv run python hook_probe.py <bash|perm|post|fail> [--probe-dir DIR] [--engine EXE] [--agent SLUG] [--source TAG]`
+- **探针目录**（dump 的 `dump.jsonl` 与三个控制文件所在地）：`--probe-dir` > 环境变量 `HOOK_PROBE_DIR` > `<cwd>/.zcode/hook-probe`；换实验改控制文件，不改注册、不重启会话
+- **引擎解析**：`--engine` > 环境变量 `CRUSH_TETHER_EXE` > `crush-tether`（裸命令名 PATH 解析，与正式插件分发路线一致）
+- **退出码**：bash/perm/fail 按语义回传引擎或控制文件退出码；post 恒 0；探针自身故障不外泄（dump 写失败静默，引擎转发失败 stderr 告警 + exit 1）
+- **注**：`uv run python` 在无 pyproject 的目录走默认解释器临时环境，故外部项目（含 python 项目外的一般项目）可直接注册本脚本，无需自带脚本环境
 
 ## 临时探针台账（三次法则登记处）
 

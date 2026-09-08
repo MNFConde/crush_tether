@@ -2,6 +2,13 @@
 
 This file records substantive progress in reverse-chronological order — newest entry at the top, right below this line. Keep each entry short — summary and pointer only; conclusions settle into `cairn/<topic>.md`.
 
+## 2026-09-08 · M7.2 探针 python 化落地：hook_probe.py + 实机测试就绪
+
+- `script/hook_probe.py`（零第三方依赖）落地：四角色 bash/perm/post/fail 与退役 node 探针语义 1:1；控制文件（perm-out/perm-exit/fail-exit.txt）切模式不改注册；**探针目录与引擎全参数化**（`--probe-dir`/`HOOK_PROBE_DIR` 默认 `<cwd>/.zcode/hook-probe`；`--engine`/`CRUSH_TETHER_EXE` 默认裸命令名 PATH），换项目可复用。
+- **关键确认**：`uv run python` 在无 pyproject 的 CWD 走默认解释器临时环境——外部项目（含非 python 项目）可直接注册本脚本，无需自带脚本环境；非实机冒烟四角色全过（转发真实引擎 allow 回包 / perm exit 3 / fail exit 7 / post 仅 dump）。
+- 调序（用户拍板）：实机验收两处（本仓库自测 + 外部项目实测）合并等用户批准；退役清单挪至测试通过后执行（node 探针保留到替代品实机验证后）；本仓库 `.zcode/config.json` 已改指 python 探针（审核门待批准）；旧 dump.jsonl 剪至 `tmp/`（用户过目，`tmp/` 入 gitignore）。
+- Details: `cairn/ROADMAP.md`（M7.2 状态 + 退役清单收缩注记）、`script/scripts.md`（用法节）、`doc/design.md`（探针方法节参考实现指针）。
+
 ## 2026-09-08 · M7.0 + M7.1 完成：写目标感知逃逸检查 + 规则测试工具四件套
 
 - **M7.0（3ce9058）**：`[local]` allow 逃逸检查从「任意参数词」收窄为「写效果路径」（重定向目标 + 知识库新槽位 `write_position="last"` 标注的写参数位），读外纯读不再误拦——落实「读取默认都通过、写入默认只能本仓库内」。关键发现：allow 桶内的写型命令**必须**标注写参数位否则写逃逸失去防护（`touch outside.txt` 回归用例钉死）——默认包补 cp/mv/touch/mkdir 条目，**存量配置不自动迁移**（本仓库自己的 knowledge.toml 已手动补）。design.md 更正登记 22 + 承诺措辞精化「写入不出项目」。

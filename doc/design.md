@@ -393,7 +393,7 @@ ClaudeCode / Crush 实机部署形态是否存在类似 zcode 的启用门槛：
 4. **exit / close 双事件观测**：排查「hook 挂死」类问题先区分**进程退出**与**输出流关闭**两个时刻（node 下即 `exit` vs `close` 事件）——句柄被孙进程继承时二者分离，这是 M4.1 句柄继承洞（更正登记 20）的定位手法；
 5. **idle 缩放实验**：把 serve 的 `--idle-exit` 调小，若某等待时长同步缩短，即证明持有者是 serve 的存活期——因果坐实而不靠猜。
 
-注册面要点：zcode 插件 `hooks/hooks.json` 用 `type:"process"`（`command`/`args`/`timeoutMs` 三字段严格，勿混入 `statusMessage`）+ `${ZCODE_PLUGIN_ROOT}` 相对路径；dump/控制目录用参数传入而非写死。参考实现：`script/hook_probe.py`（M7.2，python，经 `uv run python` 调用、零第三方依赖）。
+注册面要点：zcode 插件 `hooks/hooks.json` 用 `type:"process"`（`command`/`args`/`timeoutMs` 三字段严格，勿混入 `statusMessage`）+ `${ZCODE_PLUGIN_ROOT}` 相对路径；dump/控制目录用参数传入而非写死。参考实现：`script/hook_probe.py`（M7.2 已落地，python 零第三方依赖，经 `uv run python` 调用；探针目录与引擎全参数化——`--probe-dir`/`HOOK_PROBE_DIR`、`--engine`/`CRUSH_TETHER_EXE`，用法见 `script/scripts.md`）。
 
 #### 插件分发形态与装载守卫（分析登记，2026-09-08，未定稿）
 

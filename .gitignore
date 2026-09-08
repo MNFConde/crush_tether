@@ -12,3 +12,6 @@
 
 # plugin/ 目录内被 hook 误触生成的运行时状态（plugin 被当项目根），不入库
 plugin/.crush-tether/
+
+# 本地临时件（探针 dump 等待过目数据），不入库
+/tmp/
