@@ -2,6 +2,13 @@
 
 This file records substantive progress in reverse-chronological order — newest entry at the top, right below this line. Keep each entry short — summary and pointer only; conclusions settle into `cairn/<topic>.md`.
 
+## 2026-09-08 · M7.2 收官：两处实机验收闭环（四角色 4/4）+ 退役清单执行
+
+- **两处实机验收全过**：本仓库自测（新会话批准工作区 hook 审核门后 `ws-*` 实弹——bash 转发真实引擎回 `allow`、fail 默认 exit 0、post 正常 dump）；外部项目 TestProject（`.zcode/config.json` 注册落盘后会话即武装）——**四角色 4/4 全覆盖，更正前报「ext-perm 未触发」：实为报告时点早于 confirm 类命令，14:49/14:53 两次 PermissionRequest 实证触发**（requestId 载荷、静默 exit 0 后原生审批弹窗照常）；蛇形+驼峰双命名并存在外部项目再次实锤。
+- **引擎侧副作用与设计吻合**：生成物落 `<项目>/.crush-tether/`——默认包三件套（rules.toml/rules.rhai/knowledge.toml，M2.6 定位）+ ADR-07 默认开的 decisions.jsonl 实时裁决（连会话自身的 powershell 进程检查都判 confirm）；serve connect-or-spawn + `--idle-exit 30` 生命周期实证（PID 空闲自退、随用随拉）；默认包 lint 告警为静态提示不影响裁决。
+- **退役清单已执行**：删工作区 `.zcode/probe/`（node 探针三副本随删消灭）+ `.zcode/config.json`（配置轨测试注册，防日后与正式插件双 hook 叠跑）+ 用户级 `crush-tether-probe-marketplace` 数据目录与 cache 空壳 + TestProject 全部测试产物；探针资产收敛为入库的 `script/hook_probe.py` 参考实现。P7 仅余 M7.3 + 可选加固（搁置）。
+- Details: `cairn/ROADMAP.md`（M7.2 ✅ + 退役清单执行注记）、`script/scripts.md`（探针用法）、`doc/design.md`（hook 探针方法定稿 + zcode 叠加段）。
+
 ## 2026-09-08 · M7.2 探针 python 化落地：hook_probe.py + 实机测试就绪
 
 - `script/hook_probe.py`（零第三方依赖）落地：四角色 bash/perm/post/fail 与退役 node 探针语义 1:1；控制文件（perm-out/perm-exit/fail-exit.txt）切模式不改注册；**探针目录与引擎全参数化**（`--probe-dir`/`HOOK_PROBE_DIR` 默认 `<cwd>/.zcode/hook-probe`；`--engine`/`CRUSH_TETHER_EXE` 默认裸命令名 PATH），换项目可复用。
