@@ -361,27 +361,22 @@ impl RuleLookup {
                 Decision::Confirm => &section.confirm,
                 Decision::Deny => &section.deny,
             };
-            let sub_hit = norm.sub.as_ref().and_then(|s| {
-                dims.sub
-                    .iter()
-                    .find(|t| *t == s)
-                    .map(|t| format!("{} {t}", norm.bin))
-            });
-            let flag_hit = norm
-                .flags
-                .iter()
-                .find(|f| dims.flag.contains(f))
-                .map(|f| format!("{} {f}", norm.bin));
-            let (hit, dim, token, prov) = if let Some((hit, token)) = sub_hit.zip(norm.sub.as_ref())
-            {
-                (hit, "sub", token.clone(), &dims.sub_prov)
-            } else if let Some((hit, token)) = flag_hit.and_then(|h| {
-                norm.flags
-                    .iter()
-                    .find(|f| dims.flag.contains(f))
-                    .map(|f| (h, f.clone()))
-            }) {
-                (hit, "flag", token, &dims.flag_prov)
+            let sub_token = norm.sub.as_ref().filter(|s| dims.sub.contains(*s)).cloned();
+            let flag_token = norm.flags.iter().find(|f| dims.flag.contains(f)).cloned();
+            let (hit, dim, token, prov) = if let Some(token) = sub_token {
+                (
+                    format!("{} {token}", norm.bin),
+                    "sub",
+                    token,
+                    &dims.sub_prov,
+                )
+            } else if let Some(token) = flag_token {
+                (
+                    format!("{} {token}", norm.bin),
+                    "flag",
+                    token,
+                    &dims.flag_prov,
+                )
             } else {
                 continue;
             };
@@ -525,8 +520,6 @@ fn canonicalize_command(cmd: MergedCommand, bin: &str, canon: &CanonMaps) -> Mer
             .flag
             .iter()
             .map(|t| canon.canon_flag(bin, t))
-            .collect::<Vec<_>>()
-            .into_iter()
             .fold(Vec::new(), extend_unique),
         flag_prov: d
             .flag_prov
@@ -579,8 +572,6 @@ fn canon_unique(tokens: &[String], canon: &CanonMaps) -> Vec<String> {
     tokens
         .iter()
         .map(|t| canon.canon_bin(t))
-        .collect::<Vec<_>>()
-        .into_iter()
         .fold(Vec::new(), extend_unique)
 }
 

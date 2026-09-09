@@ -263,16 +263,6 @@ impl RhaiEngine {
             allow_literals: extracted,
         })
     }
-
-    /// 声明集（定稿点作用域化逃逸检查用）。
-    pub fn decls(&self) -> &ScriptAllowDecls {
-        &self.decls
-    }
-
-    /// 提取集（机制 1 产物；lint 死声明检查与 load 事件行的脚本侧数据源）。
-    pub fn allow_literals(&self) -> &[String] {
-        &self.allow_literals
-    }
 }
 
 impl RuleEngine for RhaiEngine {
@@ -513,7 +503,7 @@ impl ScriptCtx {
             },
             writes_redirect: cmd.writes_redirect,
             pipe_to_shell,
-            project: project.to_string_lossy().to_string(),
+            project: project.to_string_lossy().into_owned(),
         }
     }
 }

@@ -28,6 +28,12 @@ mlua = { version = "0.12.1", features = ["lua54", "vendored"] }
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Console"] }
 
+# clippy 关键分配/性能 lint（nursery 组、默认不开，逐条显式提升为 deny）：
+# 违例在本地 clippy 与 CI 同步红灯，不留到人工审查阶段。
+[lints.clippy]
+redundant_clone = "deny"
+needless_collect = "deny"
+
 [profile.release]
 lto = true
 codegen-units = 1

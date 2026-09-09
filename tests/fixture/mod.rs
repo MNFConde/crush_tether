@@ -30,7 +30,7 @@ pub fn decide(cmd: &str) -> Decision {
     let script = RhaiEngine::compile(
         DEFAULT_RULES_RHAI,
         PathBuf::from(PROJECT),
-        Some(kb.clone()),
+        Some(kb),
         lookup.script_allow().clone(),
     )
     .expect("default rules.rhai compiles");

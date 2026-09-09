@@ -86,7 +86,7 @@ impl LuaEngine {
         .map_err(|e| ScriptError::Compile(e.to_string()))?;
         lua.set_memory_limit(MEMORY_LIMIT)
             .map_err(|e| ScriptError::Compile(e.to_string()))?;
-        sanitize_base(&lua);
+        sanitize_base(&lua)?;
 
         // 全局指令数限流 hook：主线程与脚本自建协程都被计数（线程级
         // set_hook 只挂主线程，C 层 coroutine.create 不继承——协程会
@@ -109,9 +109,9 @@ impl LuaEngine {
         )
         .map_err(|e| ScriptError::Compile(e.to_string()))?;
 
-        register_primitives(&lua, project, kb);
+        register_primitives(&lua, project, kb)?;
         register_decision_table(&lua)?;
-        register_allow(&lua, decls.clone());
+        register_allow(&lua, decls.clone())?;
 
         // 顶层语句执行一次（函数定义落全局）；语法错误在此暴露。
         let chunk: Function = lua
@@ -147,16 +147,6 @@ impl LuaEngine {
             decls,
             allow_literals: extracted,
         })
-    }
-
-    /// 声明集（定稿点作用域化逃逸检查用）。
-    pub fn decls(&self) -> &ScriptAllowDecls {
-        &self.decls
-    }
-
-    /// 提取集（机制 1 产物；lint 死声明检查与 load 事件行的脚本侧数据源）。
-    pub fn allow_literals(&self) -> &[String] {
-        &self.allow_literals
     }
 }
 
@@ -215,17 +205,28 @@ impl super::RuleEngine for LuaEngine {
     }
 }
 
+/// mlua 注册类错误 → 脚本编译失败（注册发生在全新 VM，失败只可能是资源
+/// 类异常；按 Compile 类别向上传播，不 panic）。
+fn compile_err(e: mlua::Error) -> ScriptError {
+    ScriptError::Compile(e.to_string())
+}
+
 /// base 库消毒：危险全局置 nil（`load`/`loadfile`/`dofile`/`print`）。
 /// `require`/`io`/`os`/`package` 本就不在库白名单内，无需处理。
-fn sanitize_base(lua: &Lua) {
+fn sanitize_base(lua: &Lua) -> Result<(), ScriptError> {
     for name in DANGEROUS_BASE_GLOBALS {
-        let _ = lua.globals().set(*name, Value::Nil);
+        lua.globals().set(*name, Value::Nil).map_err(compile_err)?;
     }
+    Ok(())
 }
 
 /// 注册 Rust 侧安全原语：纯函数、无 IO；知识库数据源经 `Arc` 共享只读
 /// 事实（与 rhai 侧 [`super::RhaiEngine`] 同一函数集、同一语义）。
-fn register_primitives(lua: &Lua, project: PathBuf, kb: Option<Arc<KnowledgeBase>>) {
+fn register_primitives(
+    lua: &Lua,
+    project: PathBuf,
+    kb: Option<Arc<KnowledgeBase>>,
+) -> Result<(), ScriptError> {
     let p = project.clone();
     lua.globals()
         .set(
@@ -233,18 +234,18 @@ fn register_primitives(lua: &Lua, project: PathBuf, kb: Option<Arc<KnowledgeBase
             lua.create_function(move |_, word: String| {
                 Ok(crate::cmd_parse::path_escapes(&word, &p))
             })
-            .expect("register path_escapes"),
+            .map_err(compile_err)?,
         )
-        .expect("set path_escapes");
+        .map_err(compile_err)?;
     lua.globals()
         .set(
             "inside_repo",
             lua.create_function(move |_, word: String| {
                 Ok(crate::cmd_parse::inside_repo(&word, &project))
             })
-            .expect("register inside_repo"),
+            .map_err(compile_err)?,
         )
-        .expect("set inside_repo");
+        .map_err(compile_err)?;
 
     let k = kb.clone();
     lua.globals()
@@ -258,9 +259,9 @@ fn register_primitives(lua: &Lua, project: PathBuf, kb: Option<Arc<KnowledgeBase
                     .cloned()
                     .unwrap_or_default())
             })
-            .expect("register kb_write_tokens"),
+            .map_err(compile_err)?,
         )
-        .expect("set kb_write_tokens");
+        .map_err(compile_err)?;
     let k = kb.clone();
     lua.globals()
         .set(
@@ -272,9 +273,9 @@ fn register_primitives(lua: &Lua, project: PathBuf, kb: Option<Arc<KnowledgeBase
                     .and_then(|e| e.write_arg_count)
                     .unwrap_or(0))
             })
-            .expect("register kb_write_arg_count"),
+            .map_err(compile_err)?,
         )
-        .expect("set kb_write_arg_count");
+        .map_err(compile_err)?;
     let k = kb.clone();
     lua.globals()
         .set(
@@ -285,9 +286,9 @@ fn register_primitives(lua: &Lua, project: PathBuf, kb: Option<Arc<KnowledgeBase
                     .and_then(|e| e.may_write)
                     .unwrap_or(false))
             })
-            .expect("register kb_may_write"),
+            .map_err(compile_err)?,
         )
-        .expect("set kb_may_write");
+        .map_err(compile_err)?;
     let k = kb.clone();
     lua.globals()
         .set(
@@ -295,9 +296,9 @@ fn register_primitives(lua: &Lua, project: PathBuf, kb: Option<Arc<KnowledgeBase
             lua.create_function(move |_, bin: String| {
                 Ok(k.as_ref().is_some_and(|k| k.bins.contains_key(&bin)))
             })
-            .expect("register kb_known"),
+            .map_err(compile_err)?,
         )
-        .expect("set kb_known");
+        .map_err(compile_err)?;
     let k = kb.clone();
     lua.globals()
         .set(
@@ -309,40 +310,34 @@ fn register_primitives(lua: &Lua, project: PathBuf, kb: Option<Arc<KnowledgeBase
                     .and_then(|f| f.irreversible)
                     .unwrap_or(false))
             })
-            .expect("register kb_irreversible"),
+            .map_err(compile_err)?,
         )
-        .expect("set kb_irreversible");
+        .map_err(compile_err)?;
     lua.globals()
         .set(
             "kb_present",
             lua.create_function(move |_, ()| Ok(kb.is_some()))
-                .expect("register kb_present"),
+                .map_err(compile_err)?,
         )
-        .expect("set kb_present");
+        .map_err(compile_err)?;
+    Ok(())
 }
 
 /// 注册全局 `decision` 表：四常量为 [`ScriptDecision`] userdata（构造封闭，
 /// 脚本无法拼出第四种决策值；`__eq` 按变体比较见 UserData impl）。
 fn register_decision_table(lua: &Lua) -> Result<(), ScriptError> {
-    let t = lua
-        .create_table()
-        .map_err(|e| ScriptError::Compile(e.to_string()))?;
-    t.set("ALLOW", ScriptDecision::Allow)
-        .map_err(|e| ScriptError::Compile(e.to_string()))?;
+    let t = lua.create_table().map_err(compile_err)?;
+    t.set("ALLOW", ScriptDecision::Allow).map_err(compile_err)?;
     t.set("CONFIRM", ScriptDecision::Confirm)
-        .map_err(|e| ScriptError::Compile(e.to_string()))?;
-    t.set("DENY", ScriptDecision::Deny)
-        .map_err(|e| ScriptError::Compile(e.to_string()))?;
-    t.set("PASS", ScriptDecision::Pass)
-        .map_err(|e| ScriptError::Compile(e.to_string()))?;
-    lua.globals()
-        .set("decision", t)
-        .map_err(|e| ScriptError::Compile(e.to_string()))
+        .map_err(compile_err)?;
+    t.set("DENY", ScriptDecision::Deny).map_err(compile_err)?;
+    t.set("PASS", ScriptDecision::Pass).map_err(compile_err)?;
+    lua.globals().set("decision", t).map_err(compile_err)
 }
 
 /// 机制 3：运行时双保险——`allow(name)` 执行时再校验 name ∈ 声明集；
 /// 未声明 → 运行时错误 → 调用方 fail-safe confirm。
-fn register_allow(lua: &Lua, decls: ScriptAllowDecls) {
+fn register_allow(lua: &Lua, decls: ScriptAllowDecls) -> Result<(), ScriptError> {
     let f = lua
         .create_function(move |_, name: String| {
             if decls.scope_of(&name).is_some() {
@@ -354,8 +349,8 @@ fn register_allow(lua: &Lua, decls: ScriptAllowDecls) {
                 )))
             }
         })
-        .expect("register allow");
-    lua.globals().set("allow", f).expect("set allow");
+        .map_err(compile_err)?;
+    lua.globals().set("allow", f).map_err(compile_err)
 }
 
 /// 机制 1（Lua 侧，加载期字面量提取）：保守扫描脚本源中 `allow("…")` /

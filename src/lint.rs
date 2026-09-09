@@ -50,10 +50,7 @@ pub fn lint_file(
 ) -> Vec<Lint> {
     let mut out = Vec::new();
     lint_script_allow(&mut out, file, kb, script_allows);
-    let precedence = file
-        .precedence
-        .clone()
-        .unwrap_or_else(|| DEFAULT_PRECEDENCE.to_vec());
+    let precedence = file.precedence.as_deref().unwrap_or(&DEFAULT_PRECEDENCE);
     let rank = |d: Decision| -> usize {
         precedence
             .iter()

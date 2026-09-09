@@ -2,6 +2,12 @@
 
 This file records substantive progress in reverse-chronological order — newest entry at the top, right below this line. Keep each entry short — summary and pointer only; conclusions settle into `cairn/<topic>.md`.
 
+## 2026-09-09 · 三 Rust skill 全库审查：代码卫生收口 + clippy 门禁加固
+
+- **按 rust-best-practices / rust-testing / rust-async-patterns 三 skill 通读全部 src/ 与 tests/**，整体结论：架构与测试形态健康（错误处理 thiserror 风格手工实现、fail-safe 语义一致、测试覆盖充分），本轮只收卫生债不改行为。rust-async-patterns 无适用改动（项目为 std::thread 串行 accept 设计，rhai Engine 非 Send 的选型已文档化）。
+- **改动**：① `lookup.rs` classify_section flag 命中双重 find 收敛为单次 + zip/and_then 结构简化；② lookup 规范形化两处「collect→into_iter→fold」中间分配去掉；③ `lint.rs` precedence 免克隆改借用；④ `script/lua.rs` 18 处注册 `.expect()` 改 `Result` 传播（`compile_err` 助手，与同文件 register_decision_table 风格统一）；⑤ 双引擎删除与 trait 完全重复的 inherent `decls()`/`allow_literals()`；⑥ `Cargo.toml` 新增 `[lints.clippy]` redundant_clone/needless_collect=deny——**新门禁首跑即抓到 `tests/fixture/mod.rs` 一处真实冗余克隆**（kb.clone() 后即弃），门禁自证有效。
+- Details: 本条即全部（无设计变更，不新增主题文档）；门禁经 fmt/clippy/test/audit 四道全绿验证。
+
 ## 2026-09-09 深夜 · M7.3 收官：agent-matrix 首跑全绿（CI 三层落地闭环）
 
 - **首跑实质链路即通**：CI 全新未信任环境 + `DISABLE_GROWTHBOOK=1` 下 claude hooks 触发（ci-perm/ci-post 落盘、Linux 工具=Bash），crush job 挂在 tar 解包路径。两处机械修（解包后 find 定位二进制；dump 嵌套转义 JSON 断言去引号）+ setup-uv v6 / actions v7 消 Node20 警告后，814c0ee 双 job success（~1 分钟/轮）。
