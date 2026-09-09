@@ -66,7 +66,7 @@ def make_mock(log_body):
         else:
             yield ("content_block_start", {"type": "content_block_start", "index": 0,
                                            "content_block": {"type": "tool_use", "id": block["id"],
-                                                             "name": block["name"], "input": ""}})
+                                                             "name": block["name"], "input": {}}})
             yield ("content_block_delta", {"type": "content_block_delta", "index": 0,
                                            "delta": {"type": "input_json_delta",
                                                      "partial_json": json.dumps(block["input"])}})
