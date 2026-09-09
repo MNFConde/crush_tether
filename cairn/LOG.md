@@ -2,6 +2,12 @@
 
 This file records substantive progress in reverse-chronological order — newest entry at the top, right below this line. Keep each entry short — summary and pointer only; conclusions settle into `cairn/<topic>.md`.
 
+## 2026-09-09 · M7.3 更正：headless hooks 为条件性加载（受控重测推翻初判）
+
+- **初判「headless 不加载」错误**：根因 = 误信 `Registered 0 hooks` / `Found 0 total hooks in registry` 日志计数——受控重测证明 hook 实际执行时该计数仍打印 0。**方法论沉淀：hook 执行判定以 dump 物理副作用 + `[INFO] Slow PreToolUse hooks` 行为准，日志计数仅作参考。**
+- **修正结论**：claude-code `-p` hooks 为**条件性加载**（随 GrowthBook 灰度 cold↔热翻动：下午 cold 全不执行，晚间起 3/3 执行且全语义正常）；`CLAUDE_CODE_ENABLE_FUNCTION_HOOKS` 无关；`--settings` 不屏蔽（hooks 聚合 2 hooks 并存）；crush `run` 跨日复测仍不执行——固有行为，与 claude 定性分开。官方文档「矛盾」撤消。
+- Details: `doc/agent-compat-matrix.md`（headless 节重写）、`cairn/ROADMAP.md`（M7.3 更正段）。
+
 ## 2026-09-09 · M7.3 实测收口：锚点 0 全轴闭环 + headless hooks 失效重大发现
 
 - **两 agent 锚点 0 全轴实测闭环**（交互会话，探针 + 控制文件切实验）：三档全链（claude allow 直通/`ask` 弹窗批准/deny exit 2 阻断；crush npm confirm 走原生权限/git push deny 阻断）、`updated_input` 两侧采纳（echo 改写执行）、fail-open（claude exit 3 non-blocking）、crush exit 49 halt（引擎不用，三 agent 统一单命令阻断）、claude 超时（45s>30s 放行且改写未送达）——两契约节升实测定稿。

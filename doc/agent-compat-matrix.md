@@ -16,7 +16,7 @@
 | 能力 | ClaudeCode 2.1.263 | Crush 0.92.0 | zcode |
 |---|---|---|---|
 | 交互会话加载 hooks | ✅（`/hooks` 显示 2 hooks） | ✅（TUI 显示 `Hook hook-probe → OK`） | ✅（M7 前置） |
-| **headless 加载 hooks** | **❌ `-p` 注册表恒 0**（2.1.195/2.1.263 一致） | **❌ `crush run` 不执行**（同文件 providers 生效证配置被读） | n/a（无 headless 形态） |
+| **headless 加载 hooks** | **✅ 条件性**（灰度使能后 `-p` 全语义正常执行；cold 窗口内缺席，见 headless 节更正） | ❌ `crush run` 不执行（**跨日复测确认**，非灰度窗口——0.92.0 run 模式固有；claude 同日已使能） | n/a（无 headless 形态） |
 | allow 直通 | ✅ `permissionDecision:"allow"` exit 0 | ✅ `{"decision":"allow"}` exit 0 | ✅ 三值 JSON |
 | confirm 弹确认 | ✅ `permissionDecision:"ask"` → 原生确认 → 批准后执行 | ✅ 无意见（exit 0 无输出）→ 原生权限提示 | ✅ ask 转确认流程 |
 | deny 阻断 | ✅ exit 2 + stderr（工具调用不执行） | ✅ exit 2 + stderr（`git push blocked`） | ✅ |
@@ -32,14 +32,33 @@
 
 ## 关键发现
 
-### 1. headless/非交互模式下 hooks 静默失效（两 agent 一致）
+### 1. headless/非交互模式下的 hooks 加载（**2026-09-09 晚重大更正**：条件性加载，非恒定关闭）
 
-`claude -p`（含 `--settings`/项目级/用户级全配置路径、`CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1` 开关开启前后、`--include-hook-events` 观察确认零 hook 事件）与 `crush run`（项目级/全局级、matcher 有无、探针/inline 命令全组合）下 hooks 均不加载/不执行，且**无任何告警**——agent 正常对话并执行工具。已排除：`--bare`（本机所有 `-p` 实验均未加 `--bare`）、环境变量污染（会话内无 CLAUDE/ANTHROPIC 变量）、配置格式（同一配置在交互会话全部生效）。
+> **⚠️ 更正声明**：本节初版（69f6741）「headless 下 hooks 整体不加载」的绝对结论**已被受控重测推翻**。初版的判定方法有缺陷——误信了 `Registered 0 hooks` / `Found 0 total hooks in registry` 日志计数，而受控重测证明**该计数与实际执行管线脱节**（hook 实际执行时它仍显示 0）。hook 执行的判定必须以**物理副作用**（探针 dump 落盘）+ **`[INFO] Slow PreToolUse hooks` 日志行**为准。以下保留初版排查过程作为历史记录，结论以本更正为准。
 
-- **与官方文档的矛盾（待跟进）**：官方 `--bare` 文案（"skip hooks"）与社区资料均指向「普通 `-p` 应加载 hooks」；官方 hooks 文档亦承诺 settings hooks 在未信任目录的 `-p` 运行中执行。本机实测（2.1.195/2.1.263）与此矛盾——疑似 2.1.x hooks 重构引入的门控或回归（如 rollout flag 未对本机灰度；`tengu_plugin_hooks_modules` 默认 false，GrowthBook 冷缓存无 payload）。精确条件需官方侧信息（候选动作：提 GitHub issue 附本矩阵复现步骤）。
-- **失效层辨析**：社区将 headless 失效归因于「权限完全放行（`--dangerously-skip-permissions` / `allowedTools:["*"]`）时跳过权限检查管道，hook 阻断依赖该管道故失灵」——该解释描述的是「**hook 已运行但回包被忽略**」层。本仓库实测证据指向更上游：headless 下 **hook 进程根本未被拉起**（探针 dump 零记录、claude debug 日志 `Found 0 total hooks in registry`、crush 同配置文件 providers 生效而 hook 零痕迹），与权限模式参数无关。两层可能并存（bypassPermissions 交互形态未实测，见待补测）。物理阻断类 workaround（hook 内做 chmod 等副作用代替 exit 2）只对「hook 已运行但回包被忽略」层有效，对「hook 不被拉起」层**无效**；且其前提（hook 可执行任意物理副作用）本身扩大信任面，本门不采用。测试方法论上的「可验证副作用」思路已在使用：探针 dump.jsonl / hook-fired 文件即 hook 触发的物理证据。
-- **部署含义**：CI、脚本、自动化、任何非 TTY 场景中本权限门**当前静默缺席**（以实测为准，无论文档承诺）——部署验收的「确认 hook 确实触发」必须在**交互会话**形态下进行。
-- **对 CI 矩阵的影响**：agent 的 hooks 行为无法在 CI（无 TTY）自动化实测——本矩阵 hooks 行格的数据来源 = 人工交互实测；CI 保留「headless hooks 有效性探测」（无 hook 冒烟 + 探针注册探测，该哨兵对「文档承诺」与「实测失效」两种解释都稳健：若未来 agent 使 headless hooks 生效，dump 出现即自动发现并报警扩展 CI 矩阵）。
+**受控重测（2026-09-09，三发 `claude -p`，perm 探针 + delay=45s 控制文件）**：
+
+| 条件 | 结果 |
+|---|---|
+| 无 `--settings`、无特殊 env | ✅ hook 执行（dump 落盘 + `Slow PreToolUse hooks: 30100ms (1 hooks)` + 30s timeout 杀后放行） |
+| `--settings`（env 指向 mock） | 无效样本（mock 未起，API 连接失败） |
+| `CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1` | ✅ hook 执行（同上，30100ms） |
+
+加上前此一发（00:39，无 --settings）共 **3/3 执行**，行为完全正确（拉起 → 读载荷 → 挂起 → 30s timeout 杀 → 放行）。
+
+**修正后的结论**：
+
+1. **`-p` 下 hooks 能且确实正常执行**——全部语义（拉起、载荷、timeout、放行）与交互会话一致，与官方文档及 `--bare` 文案（仅 bare 跳过）**不再矛盾**。
+2. **存在随时间变化的使能开关（claude-code）**：同机同配置，2026-09-08 下午 16:4x 的全部 headless 实验 hooks 未执行（日志明示 `cold GrowthBook cache, no payload yet`），当晚 00:39 起全部执行（cold 行消失 = payload 已拉到/缓存生效）。时间线与 GrowthBook 灰度状态（`tengu_plugin_hooks_modules` 等默认 false 的 flag）冷→热完全吻合。**灰度窗口内 hooks 静默缺席**——这才是初版误判的根源。
+   - **crush 侧定性不同（跨日复测）**：`crush run` 在 claude 侧灰度已使能的次日复测**仍不执行 hooks**（dump 零记录、mock 对话正常）——非灰度窗口，0.92.0 run 模式的固有行为（hooks 大概率仅在交互 TUI 会话装配）。两 agent 的 headless 定性因此分开：claude-code = 条件性（灰度使能后可用）；crush = run 模式固定不执行。
+3. **`CLAUDE_CODE_ENABLE_FUNCTION_HOOKS` 与加载与否无关**（③ 带此 env 照常执行；其真实作用是控制插件 hooks 模块加载，二进制考古所得）。
+4. **`--settings` 不屏蔽 hooks（补验证实）**：flag 使能后带 `--settings`（含 hooks 键）重跑——`Slow PreToolUse hooks (2 hooks)`，`--settings` 的 hooks 与项目级 hooks **聚合并存执行**（同 command 各自计一个，串行各 30s timeout 后放行）。下午不跑的唯一解释即灰度窗口。
+5. **方法论教训（已并入探针方法实践）**：hook 是否执行的判定 = dump 物理副作用优先，日志计数仅作参考；`Registered/Found 0 hooks` 在 hooks 实际执行时仍打印 0，是本次误判的直接原因。
+
+- **部署含义（修正）**：headless（CI/脚本/自动化）权限门**可用但使能状态随灰度翻动**——新装环境/冷缓存窗口内静默缺席。部署验收仍须实测 hook 确实触发（且注意验收时点与灰度状态相关）。
+- **对 CI 的含义（修正）**：headless hooks 探测哨兵从「负向探测」升级为**双向探测**——dump 出现与否都记录，跟踪灰度状态翻动；协议回放与冒烟层不变。
+- **失效层辨析**（保留，仍然成立）：「权限管道跳过导致阻断被忽略」层与「hook 未被拉起」层是两回事；本仓库实测到的 headless 行为为后者（灰度窗口内）——物理阻断 workaround 对灰度缺席同样无效。
+- ~~claude-code 侧开关线索~~（保留历史）：`CLAUDE_CODE_ENABLE_FUNCTION_HOOKS` 控制插件 hooks 模块加载（`tengu_plugin_hooks_modules` 默认 false，GrowthBook 远程覆盖）——受控重测证明它不影响 settings hooks 的执行。
 
 ### 2. 三档裁决语义两侧一致且与 design.md 契约节吻合
 
