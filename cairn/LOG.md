@@ -2,6 +2,13 @@
 
 This file records substantive progress in reverse-chronological order — newest entry at the top, right below this line. Keep each entry short — summary and pointer only; conclusions settle into `cairn/<topic>.md`.
 
+## 2026-09-09 · M7.3 实测收口：锚点 0 全轴闭环 + headless hooks 失效重大发现
+
+- **两 agent 锚点 0 全轴实测闭环**（交互会话，探针 + 控制文件切实验）：三档全链（claude allow 直通/`ask` 弹窗批准/deny exit 2 阻断；crush npm confirm 走原生权限/git push deny 阻断）、`updated_input` 两侧采纳（echo 改写执行）、fail-open（claude exit 3 non-blocking）、crush exit 49 halt（引擎不用，三 agent 统一单命令阻断）、claude 超时（45s>30s 放行且改写未送达）——两契约节升实测定稿。
+- **重大发现：headless（`claude -p`、`crush run`）下 hooks 整体不加载**——hook 进程根本不被拉起（非「阻断被忽略」层），跨配置路径/版本/开关一致且无告警：CI/自动化场景权限门静默缺席，部署验收必须在交互会话实测触发。物理阻断 workaround 对该层无效。
+- mock 双协议 LLM 后端零凭证验证通过（CI 方案根基）；CI 三层混合设计定稿（协议回放/冒烟/负向探测/版本追踪 + 发版触发人工清单）；crush 模型层 banned 预拦截、PostToolUse 信号差异（权限学习降级依据）等全录矩阵。
+- Details: `doc/agent-compat-matrix.md`（初版）、`cairn/ROADMAP.md`（M7.3 执行结果 + 剩余项）、`doc/design.md`（两契约节定稿 + 失效模式 #2 补注）。
+
 ## 2026-09-09 · M7.3 开工：方案定稿（一次性实机实测 + CI 常态回归）
 
 - 方案要点与三层触发器全录 ROADMAP M7.3 条：mock LLM 后端驱动 agent（hook 链路 = agent 进程本地行为，与 LLM 无关——mock 固定 tool_use 响应即可让 agent 走完 hook 全链，零凭证零费用可重复，CI 矩阵成立的根基，spike 待证）；锚点 0 最新版全轴出基线、历史锚点静态不重测按需二分；push = pinned smoke + paths 过滤 agent 耦合面，cron = latest smoke + 新版自动全轴 + bot commit 矩阵机器层（scoop 模式），dispatch = 全矩阵人工回溯排查。

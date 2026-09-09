@@ -347,7 +347,7 @@ pub trait Channel {
 - **OpenCode**：延后至版本稳定（存在 V1 `permission`/`bash` 与 V2 `permissions`/`shell` 分叉、插件 in-process、命令改写 bug），**不先适配**。
 - 其他候选（Cursor / Continue.dev / Gemini CLI / Cline / Roo）仅列空壳，后续按需扩展。
 
-#### Crush 契约（核实）
+#### Crush 契约（实测定稿，2026-09-09）
 
 - 输入：stdin JSON `{event, session_id, cwd, tool_name, tool_input:{command}}`；env `CRUSH_PROJECT_DIR`/`CRUSH_TOOL_INPUT_COMMAND`/`CRUSH_CWD`/`CRUSH_EVENT`/`CRUSH_TOOL_NAME`/`CRUSH_SESSION_ID`。
 - 输出（exit 0 + JSON envelope）：`{version:1, decision:"allow"|"deny", halt, reason, context, updated_input}`。
@@ -355,8 +355,9 @@ pub trait Channel {
   - confirm → 不输出 JSON、exit 0（走正常权限流程）
   - deny → exit 2（stderr 作 reason）**或** JSON `{"decision":"deny"}` exit 0
 - 聚合：`deny > allow > 无意见`；`decision:"allow"` 需 exit 0。
+- **实测定稿（2026-09-09，锚点 0，交互会话）**：三档全链（allow 直通 / confirm 无意见走原生权限提示 / deny exit 2 阻断）、`updated_input` 浅合并改写真实生效（TUI 标记 Rewrote Output）、fail-open、exit 49 halt（**引擎不使用**——保持三 agent 单命令阻断统一）全部实测吻合。注意：crush 的 system prompt 内置 banned commands 规则，confirm/deny 类命令（curl/sudo 等）常被模型层劝退而不触达 hook 层（方向更保守，非安全缺口）。数据见 `doc/agent-compat-matrix.md`。
 
-#### ClaudeCode 契约（核实）
+#### ClaudeCode 契约（实测定稿，2026-09-09）
 
 - 输入：stdin JSON `{tool_name:"Bash", tool_input:{command,description,timeout,run_in_background}, cwd, session_id, prompt_id, permission_mode, transcript_path, hook_event_name, tool_use_id}`；env `CLAUDE_PROJECT_DIR`（session 起点绝对根；**无 `CLAUDE_MODEL`**）。
 - 权限来源基准：`cwd`（stdin）优先，回退 `CLAUDE_PROJECT_DIR`。
@@ -366,6 +367,7 @@ pub trait Channel {
   - deny → exit 2 + stderr，**或** JSON `permissionDecision:"deny"` exit 0
 - 规则：`deny > defer > ask > allow`；exit 2 会覆盖 JSON。
 - **Crush 兼容**：Crush 接受 Claude 的 `hookSpecificOutput` 信封，仅 `updated_input` 语义不同（Crush 浅合并 vs Claude 全替换）。ClaudeCode adapter 可复用 Crush 大部分输出逻辑，仅改 env/输入键名与 `updated_input` 语义。
+- **实测定稿（2026-09-09，锚点 0，交互会话）**：三值信封全部被采纳——allow 直通 / `permissionDecision:"ask"` 弹原生确认、批准后执行 / deny 走 exit 2 阻断（工具调用不执行）；`updatedInput` 改写真实生效；fail-open 时 UI 明示 `non-blocking status code` 并放行；PostToolUse 载荷含完整 `tool_response`（权限学习信号源在此可用）。**headless（`-p`）下 hooks 不加载**：注册表恒 0，跨配置路径（项目级/`--settings`/用户级）、版本（2.1.195/2.1.263）与 `CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1` 开关一致。数据见 `doc/agent-compat-matrix.md`。
 
 #### Hook 接入失效模式与保障边界（定稿）
 
@@ -376,12 +378,12 @@ hook 接入是权限门的「最后一米」——管线内部的 fail-safe 再�
 | # | 失效模式 | 兜底层 | 说明与验证 |
 |---|---|---|---|
 | 1 | 配置文件 hook 默认禁用被忘开（zcode 配置文件形态特有，须显式 `hooks.enabled: true` 才跑） | A | 插件贡献的 hook 自动启用 hook runner（zcode 配置指南核实）。验证：M5.3 探针「插件分发实际触发」（含启用路径）。 |
-| 2 | hook 二进制路径失效 / 被卸载（hook 进程根本起不来） | **C（部署验收实测）** | **2026-09-06 zcode 实测（严格范围：进程已启动但以非 2 退出码结束 → agent 侧 fail-open（放行））**；「路径不存在 / 进程根本起不来」未直接实测，推断走同一错误处理分支（fail-open），随 M7 前置正式插件验证时一并确认——agent 不兜底，我方 fail-safe 只覆盖「进程起来后」的失效；因此「二进制已安装 + 路径可达」是部署必查项，且部署验收必须实测 hook 确实触发（探针方法见[hook 探针方法（定稿）](#hook-探针方法定稿)，参考实现 = `script/hook_probe.py`，M7.2）。 |
+| 2 | hook 二进制路径失效 / 被卸载（hook 进程根本起不来） | **C（部署验收实测）** | **2026-09-06 zcode 实测（严格范围：进程已启动但以非 2 退出码结束 → agent 侧 fail-open（放行））**；「路径不存在 / 进程根本起不来」未直接实测，推断走同一错误处理分支（fail-open），随 M7 前置正式插件验证时一并确认——agent 不兜底，我方 fail-safe 只覆盖「进程起来后」的失效；因此「二进制已安装 + 路径可达」是部署必查项，且部署验收必须实测 hook 确实触发（探针方法见[hook 探针方法（定稿）](#hook-探针方法定稿)，参考实现 = `script/hook_probe.py`，M7.2）。**2026-09-09 补（M7.3）**：headless/非交互会话形态（claude `-p`、crush run）下 hooks 体系**整体不加载**——非 hook 进程失败，而是无任何告警的静默缺席；部署验收必须在交互会话实测触发，CI/自动化场景权限门静默失效，详见 `doc/agent-compat-matrix.md`「headless 失效」节。 |
 | 3 | hook 进程已拉起，但内部崩溃 / 超时 / serve 端点不可达 | B | fail-safe confirm（裁决前任何异常落 confirm）+ connect-or-spawn 降级（serve 不可达 → 本进程跑全量管线，绝不无裁决放行）。既有单测与契约测试覆盖（M4.1、P1 起）。 |
 | 4 | Crush 类「配置即生效、无启用门槛」形态的静默失效（配错路径 / 拼写错，无任何机制提醒） | C | 无机制可堵，部署验收实测触发是唯一覆盖：M5.2 契约用例集（实现层）+ 部署后实测 hook 确实触发。 |
 | 5 | 用户手动禁用插件 / 删除配置 | — | 信任边界，不设防，如实声明。 |
 
-ClaudeCode / Crush 实机部署形态是否存在类似 zcode 的启用门槛：**未核实**，实机验证时一并确认后回填本表。
+~~ClaudeCode / Crush 实机部署形态是否存在类似 zcode 的启用门槛~~（2026-09-09 M7.3 已核实：两者均**无**启用门槛、配置即生效；但存在更强的会话形态限制——headless/非交互下 hooks 整体不加载，见上表 #2 补注与 `doc/agent-compat-matrix.md`）。
 
 #### hook 探针方法（定稿）
 
