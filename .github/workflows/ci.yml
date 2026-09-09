@@ -25,7 +25,7 @@ jobs:
         run: cargo clippy -- -D warnings
       - name: test
         run: cargo test
-      - uses: astral-sh/setup-uv@v5
+      - uses: astral-sh/setup-uv@v6
       - name: check-links
         run: uv run python script/check-links.py
       # D-08：rhai 传递依赖 smartstring unmaintained（RUSTSEC-2026-0249，无 CVE）

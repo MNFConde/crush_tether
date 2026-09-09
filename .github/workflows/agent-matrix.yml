@@ -122,7 +122,8 @@ jobs:
           lines=$(wc -l < .hook-probe/dump.jsonl)
           echo "probe dump lines: $lines"
           test "$lines" -ge 1
-          grep -q '"tool_name"' .hook-probe/dump.jsonl
+          # dump 行的 stdin 是嵌套转义 JSON，键名不带引号匹配
+          grep -q 'tool_name' .hook-probe/dump.jsonl
 
       - name: Upload artifacts
         if: always()
@@ -155,10 +156,13 @@ jobs:
       - name: Install crush ${{ steps.ver.outputs.ver }}
         run: |
           v="${{ steps.ver.outputs.ver }}"
+          rm -rf /tmp/crush-pkg && mkdir -p /tmp/crush-pkg
           curl -fsSL -o /tmp/crush.tar.gz \
             "https://github.com/charmbracelet/crush/releases/download/v${v}/crush_${v}_Linux_x86_64.tar.gz"
-          tar -xzf /tmp/crush.tar.gz -C /tmp
-          sudo install /tmp/crush /usr/local/bin/crush
+          tar -xzf /tmp/crush.tar.gz -C /tmp/crush-pkg
+          bin=$(find /tmp/crush-pkg -type f -name crush | head -1)
+          test -n "$bin"
+          sudo install "$bin" /usr/local/bin/crush
           crush --version
 
       - name: Start mock LLM backend
