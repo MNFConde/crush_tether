@@ -2,6 +2,12 @@
 
 This file records substantive progress in reverse-chronological order — newest entry at the top, right below this line. Keep each entry short — summary and pointer only; conclusions settle into `cairn/<topic>.md`.
 
+## 2026-09-09 深夜 · M7.3 收官：agent-matrix 首跑全绿（CI 三层落地闭环）
+
+- **首跑实质链路即通**：CI 全新未信任环境 + `DISABLE_GROWTHBOOK=1` 下 claude hooks 触发（ci-perm/ci-post 落盘、Linux 工具=Bash），crush job 挂在 tar 解包路径。两处机械修（解包后 find 定位二进制；dump 嵌套转义 JSON 断言去引号）+ setup-uv v6 / actions v7 消 Node20 警告后，814c0ee 双 job success（~1 分钟/轮）。
+- **教训**：① goreleaser tar 包二进制可能不在解包根，安装用 find 定位；② dump 行 stdin 为嵌套转义 JSON，跨层断言按去引号键名匹配；③ 首跑失败 ≠ 机制失败——先看工件（artifact 证实 hook 已触发）再修断言。
+- Details: `cairn/ROADMAP.md`（M7.3 剩余项二次更新）、`.github/workflows/agent-matrix.yml`。
+
 ## 2026-09-09 深夜 · M7.3 执行：CI workflow 落地 + crush 超时实测收口 + 测试资产退役
 
 - **agent-matrix workflow 落地**（42d5b57）：`.github/workflows/agent-matrix.yml` 三层（push/PR pinned smoke + weekly cron latest 上游哨兵 + dispatch 指定版本），正向断言 dump 出现；mock 固化 `script/mock_llm.py`（双协议/SSE/工具名自适应，三坑写进脚本头），`scripts.md` 登记。双侧本地预演全过后提交；**首跑验证待 push**。
