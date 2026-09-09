@@ -16,7 +16,7 @@
 | 能力 | ClaudeCode 2.1.263 | Crush 0.92.0 | zcode |
 |---|---|---|---|
 | 交互会话加载 hooks | ✅（`/hooks` 显示 2 hooks） | ✅（TUI 显示 `Hook hook-probe → OK`） | ✅（M7 前置） |
-| **headless 加载 hooks** | **✅ 条件性**（灰度使能后 `-p` 全语义正常执行；cold 窗口内缺席，见 headless 节更正） | ❌ `crush run` 不执行（**跨日复测确认**，非灰度窗口——0.92.0 run 模式固有；claude 同日已使能） | n/a（无 headless 形态） |
+| **headless 加载 hooks** | **✅ 条件性**（灰度使能后 `-p` 全语义正常执行；cold 窗口内缺席，见 headless 节更正） | ❌ `crush run` 不执行（**源码+日志实锤**：交互 TUI 5 条 `Hook completed` INFO vs run 零 hook 日志——`runner.Run` 未被调用；三种注册途径含 crushrc `hook add` builtin 全无效；0.92.0 run 路径未接线） | n/a（无 headless 形态） |
 | allow 直通 | ✅ `permissionDecision:"allow"` exit 0 | ✅ `{"decision":"allow"}` exit 0 | ✅ 三值 JSON |
 | confirm 弹确认 | ✅ `permissionDecision:"ask"` → 原生确认 → 批准后执行 | ✅ 无意见（exit 0 无输出）→ 原生权限提示 | ✅ ask 转确认流程 |
 | deny 阻断 | ✅ exit 2 + stderr（工具调用不执行） | ✅ exit 2 + stderr（`git push blocked`） | ✅ |
@@ -102,6 +102,11 @@ crush 的 system prompt 内置 banned commands 规则（curl/sudo 等），confi
 ### bot commit 边界
 
 矩阵机器层（版本号、headless 探测结果、协议回放结果）可由 bot commit（scoop 模式：`[skip ci]` + 限定路径 + 最小权限）；hooks 行为行标注「人工交互实测 + 版本/日期」，永远人工维护。
+
+### 实验操作细节（复现本矩阵实验的实操知识）
+
+- **claude-code**：settings env 优先级 = shell 环境变量 < 用户级 `~/.claude/settings.json` 的 `env` 块（**会覆盖 shell 环境变量**——实验端点注入必须走下一级）< `--settings` 传入（可再覆盖前者）；hook 观察 = `--debug hooks --debug-file <file>`（看装配，但 `Registered/Found 0` 计数不可信）+ `--include-hook-events`（事件流带 hook 生命周期）+ 交互 `/hooks` 菜单（只读）；模型弃用警告不影响请求；`-p` 下 workspace trust dialog 被跳过。
+- **crush**：项目级 `crush.json` 可同时承载 `providers`（`openai-compat` + `base_url` 指向本地 mock 即零费用实验）与 `hooks`；全局 `~/.config/crush/crushrc` 是 provider add 命令脚本（非 JSON）且另有 `hook add <event> --command CMD [--name] [--matcher] [--timeout]` builtin；`-y --yolo` 是 root flag（`run` 子命令无 yolo）；模型选择 `-m provider/model`；hook 执行的日志判据 = `Hook completed` INFO 行（runner.go），`crush logs` 查看。
 
 ## 版本记录
 

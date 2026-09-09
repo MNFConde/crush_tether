@@ -6,6 +6,7 @@ This file records substantive progress in reverse-chronological order — newest
 
 - **初判「headless 不加载」错误**：根因 = 误信 `Registered 0 hooks` / `Found 0 total hooks in registry` 日志计数——受控重测证明 hook 实际执行时该计数仍打印 0。**方法论沉淀：hook 执行判定以 dump 物理副作用 + `[INFO] Slow PreToolUse hooks` 行为准，日志计数仅作参考。**
 - **修正结论**：claude-code `-p` hooks 为**条件性加载**（随 GrowthBook 灰度 cold↔热翻动：下午 cold 全不执行，晚间起 3/3 执行且全语义正常）；`CLAUDE_CODE_ENABLE_FUNCTION_HOOKS` 无关；`--settings` 不屏蔽（hooks 聚合 2 hooks 并存）；crush `run` 跨日复测仍不执行——固有行为，与 claude 定性分开。官方文档「矛盾」撤消。
+- **crush 侧源码+日志实锤（晚间追加）**：run 下 `runner.Run` 未被调用（交互 TUI 5 条 `Hook completed` INFO / run 零 hook 日志），三种注册途径含 crushrc `hook add` builtin 全无效——0.92.0 run 路径未接线，提 issue 素材齐备；DeepWiki/源码核对补聚合全序、updated_input 语义、hooks 信任模型与上游 #3482/#3389。
 - Details: `doc/agent-compat-matrix.md`（headless 节重写）、`cairn/ROADMAP.md`（M7.3 更正段）。
 
 ## 2026-09-09 · M7.3 实测收口：锚点 0 全轴闭环 + headless hooks 失效重大发现

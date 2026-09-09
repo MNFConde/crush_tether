@@ -356,6 +356,7 @@ pub trait Channel {
   - deny → exit 2（stderr 作 reason）**或** JSON `{"decision":"deny"}` exit 0
 - 聚合：`deny > allow > 无意见`；`decision:"allow"` 需 exit 0。
 - **实测定稿（2026-09-09，锚点 0，交互会话）**：三档全链（allow 直通 / confirm 无意见走原生权限提示 / deny exit 2 阻断）、`updated_input` 浅合并改写真实生效（TUI 标记 Rewrote Output）、fail-open、exit 49 halt（**引擎不使用**——保持三 agent 单命令阻断统一）全部实测吻合。注意：crush 的 system prompt 内置 banned commands 规则，confirm/deny 类命令（curl/sudo 等）常被模型层劝退而不触达 hook 层（方向更保守，非安全缺口）。数据见 `doc/agent-compat-matrix.md`。
+- **源码/日志补充（2026-09-09，DeepWiki + v0.92.0 源码核对）**：聚合优先级全序 = halt > deny > allow；`updated_input` 取配置序最后一个提供者；`decision` 显式支持 `"none"`；hooks 视为可信用户配置、**不受 bash 工具黑名单（BlockFuncs）限制**；crushrc 另有第三注册途径 `hook add <event> --command CMD [--name] [--matcher] [--timeout]` builtin；上游已知 issue：#3482（payload 事件字段为 `event` 非 Claude 的 `hook_event_name`，单脚本按事件分支时静默 fall-through——本门探针按角色参数分支不受影响）、#3389（Windows `$HOME` 含反斜杠时 `~` 展开坑）。**headless 定性实锤**：`crush run` 下 `runner.Run` 未被调用（交互 TUI 5 条 `Hook completed` INFO vs run 零 hook 日志、零错误告警），三种注册途径（全局/项目 crush.json、crushrc `hook add`）均无效——判定 0.92.0 run 路径未接线（装配缺口），候选动作 = 提 crush issue 附复现步骤。
 
 #### ClaudeCode 契约（实测定稿，2026-09-09）
 
