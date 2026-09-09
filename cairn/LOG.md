@@ -2,6 +2,14 @@
 
 This file records substantive progress in reverse-chronological order — newest entry at the top, right below this line. Keep each entry short — summary and pointer only; conclusions settle into `cairn/<topic>.md`.
 
+## 2026-09-10 深夜 · zcode headless 形态证实（更正「无 headless」）+ 插件轨 headless 实证 + 入 CI 卡点查明
+
+- **更正**：矩阵旧结论「zcode 无 headless 形态」不成立——App 内嵌 CLI（`resources/glm/zcode.cjs`，版本轨道 0.16.5）有 `-p/--prompt` 非交互一次性形态；此前结论成因 = 入口不在 PATH、只探了 `zcode` 命令不存在。
+- **实证链**：provider 配置（`provider.<id>.options` 端点/密钥 + `model.main` 仅接受 `"provider/model"` 字符串）指向 mock_llm → `-p` 全回合跑通（mock 见工具结果回 spike done）；修 mock SSE `input` 须为对象（zcode AI SDK 严格校验，claude/crush 宽容）；**插件轨 hook 在 headless 拉起**（`decisions.jsonl` 落 allow 裁决），config 轨则被工作区信任门挡死（headless 无 capable host 不可首授，信任按 工作区+声明 digest 持久化）。
+- **入 CI 卡点**：非能力而是发行——npm 无官方包（`zcode-app-cli`/`zcode-acp-server` 均第三方），本机仅证 win32-x64 内嵌 bundle；前提清单入矩阵 §5。
+- 测试后已复原 `~/.zcode/cli/config.json`（插件停用 + model 段移除），mock 进程已停，tmp 产物已清。
+- Details: `doc/agent-compat-matrix.md`（注6/§1.2 headless 行/§2/§3 步骤2/§4 行9-11/§5）、`cairn/agent-hook-testing.md`（更正三）、`cairn/ROADMAP.md`（M7.3）。
+
 ## 2026-09-10 · zcode 模式交叉两案定论 + 测试流程固化（M7.3 人工待补清零）
 
 - **确认模式 × hook 三值**：allow **跳过原生弹窗**（touch 变更类实证——hook 评估先于原生权限并预批准）；ask 弹窗，**反证实验钉死人工性**（弹窗点拒绝 → agent 收 Denied）；deny 不弹直接阻断。

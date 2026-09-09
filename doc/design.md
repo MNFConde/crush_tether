@@ -370,6 +370,16 @@ pub trait Channel {
 - **Crush 兼容**：Crush 接受 Claude 的 `hookSpecificOutput` 信封，仅 `updated_input` 语义不同（Crush 浅合并 vs Claude 全替换）。ClaudeCode adapter 可复用 Crush 大部分输出逻辑，仅改 env/输入键名与 `updated_input` 语义。
 - **实测定稿（2026-09-09，锚点 0，交互会话）**：三值信封全部被采纳——allow 直通 / `permissionDecision:"ask"` 弹原生确认、批准后执行 / deny 走 exit 2 阻断（工具调用不执行）；`updatedInput` 改写真实生效；fail-open 时 UI 明示 `non-blocking status code` 并放行；PostToolUse 载荷含完整 `tool_response`（权限学习信号源在此可用）。**headless（`-p`）下 hooks 不加载**：注册表恒 0，跨配置路径（项目级/`--settings`/用户级）、版本（2.1.195/2.1.263）与 `CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1` 开关一致（**此段已被受控重测更正为「条件性加载」，见失效模式表 #2 补注与矩阵 headless 节**）。数据见 `doc/agent-compat-matrix.md`。
 
+#### zcode 契约（实测定稿，2026-09-10）
+
+- 输入：stdin JSON 蛇形+驼峰双命名并存（`session_id`/`sessionId` 等，M6.3 实测）；本门只依赖命令字段，双命名不敏感。
+- 输出：复用 ClaudeCode 信封（M5.3）——`hookSpecificOutput.permissionDecision` 三值；`updatedInput` **全替换**语义采纳（实测整条复合命令被替换执行）；crush 式顶层 `updated_input` 信封不采纳。`PermissionRequest` 事件存在但 JSON 回包不被采纳（挂点保持 PreToolUse）；hook 非 2 退出 → exit 3 语义的 fail-open 放行（M5.3）。
+- hook 加载双轨（2026-09-10 定性）：
+  - **插件轨**（交付形态）：marketplace 安装 + 会话重启即武装，**无信任门**；headless `-p` 下实测 hook 照常拉起、引擎裁决落盘。
+  - **config 轨**（测试/实验用）：工作区 `.zcode/config.json` → `hooks.enabled:true` + **`events.<Event>`** 声明（注意形状与插件 envelope 不同，顶层事件键写错仅 `config.file.invalid` 日志）；须 Desktop App UI 批准**工作区信任门**（trust 按 工作区+声明 digest 持久化于 `~/.zcode/security/workspace-hook-trust-v1.json`，[更正登记](#更正登记对既有定稿) 21）——headless CLI 无宿主审查流，**不可首授**。
+- headless：`-p/--prompt` 非交互形态存在（App 内嵌 CLI `resources/glm/zcode.cjs`，版本轨道与 App 号独立）；模型后端走 `~/.zcode/cli/config.json` 的 `provider.<id>.options` + `model.main`（字符串 `"provider/model"`）。三档/`updated_input`/超时的 headless 全轴未测（矩阵 §5）。
+- 原生模式 × hook（确认/计划模式）实测定稿见矩阵 §1.3；hook 评估先于原生权限并可覆盖 yolo（346 行）。
+
 #### Hook 接入失效模式与保障边界（定稿）
 
 hook 接入是权限门的「最后一米」——管线内部的 fail-safe 再完备，hook 没被拉起来就全盘失效。本节把各 agent 接入形态的失效模式与兜底责任固定成表，作为**后续新 agent 接入的验收对照表**：每接入一个新 agent（OpenCode / Codex 等），逐行核对「该失效模式在其形态下是否存在、由哪层兜住、怎么验证」，不重新推导。

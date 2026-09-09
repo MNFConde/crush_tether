@@ -1,11 +1,11 @@
 ---
 type: project_topic
 status: active
-summary: M7.3 agent hook 兼容性测试的方法论与过程沉淀：判定准则（hook 执行以探针 dump 物理副作用为准，日志计数与 tool result 回执不可尽信）、mock 三坑（schema 必填字段/工具名环境差异/OpenAI SSE）、灰度可官方 env 钉死（DISABLE_GROWTHBOOK）、crush run 悬案插桩排查全记录（三假设判据/五处插桩/证据代码位置）与三次更正史链条。确定性结论的现役事实在 doc/agent-compat-matrix.md。
-tags: [crush_tether, hook, testing, mock, claude-code, crush, methodology]
+summary: M7.3 agent hook 兼容性测试的方法论与过程沉淀：判定准则（hook 执行以探针 dump 物理副作用为准，日志计数与 tool result 回执不可尽信）、mock 四坑（schema 必填字段/工具名环境差异/OpenAI SSE/SSE input 对象校验）、灰度可官方 env 钉死（DISABLE_GROWTHBOOK）、crush run 悬案插桩排查全记录（三假设判据/五处插桩/证据代码位置）与四次更正史链条（含 zcode headless 形态与插件轨/config 轨信任门分化定性）。确定性结论的现役事实在 doc/agent-compat-matrix.md。
+tags: [crush_tether, hook, testing, mock, claude-code, crush, zcode, headless, methodology]
 contains: [lesson, decision, pattern]
 created: 2026-09-09
-updated: 2026-09-09
+updated: 2026-09-10
 related: [doc/agent-compat-matrix.md, doc/design.md, script/mock_llm.py, script/hook_probe.py]
 authoring_mode: ai_generated
 ---
@@ -14,14 +14,25 @@ authoring_mode: ai_generated
 
 > 确定性事实的现役版本（矩阵/覆盖口径/配方）在 `doc/agent-compat-matrix.md`；本文沉淀**过程史、更正链条与可复用方法论**。逐日流水见 LOG，里程碑口径见 ROADMAP M7.3 条。
 
-## 三次更正史（链条摘要）
+## 四次更正史（链条摘要）
 
 1. **初判（2026-09-08）**「headless（`claude -p`/`crush run`）hooks 整体不加载」——判定依据是 `Registered 0 hooks` 日志计数。
 2. **一更（09-09 受控重测）**：claude 侧推翻——headless 为**条件性加载**（GrowthBook 灰度冷↔热翻动，冷窗口静默缺席）；日志计数与执行管线脱节（执行时仍打 0）。crush 侧当时仍判「run 固有不执行」。
 3. **二更（09-09 深夜插桩）**：crush 侧推翻——`crush run` **一直正常执行 hooks**，根因是我方 mock 的工具调用缺必填 `description` 被 fantasy 静默拒绝（详见下文排查记录）；「TUI 触发/run 不触发」从头是「真实模型 vs mock」混杂。
 4. **三更（09-09 深夜官方文档+实测）**：claude 灰度可用 `DISABLE_GROWTHBOOK=1` 官方钉死——CI 两侧统一为正向硬断言，灰度翻动不再是不稳定源。
+5. **四更（09-10 深夜）**：zcode 侧推翻——「无 headless 形态」不成立，App 内嵌 CLI（`resources/glm/zcode.cjs`，0.16.5）有 `-p/--prompt` 非交互形态；成因 = 入口不在 PATH（`which zcode` 落空后即下结论，未探 App 安装树）。教训同母题：**「命令不存在」≠「能力不存在」**，发行形态未查全前不下能力结论。
 
 教训母题：**误判从不来自测不到，而来自信错了信号**（日志计数、tool result 回执）；唯一可信判据是物理副作用。
+
+## zcode headless 定性记录（2026-09-10 深夜）
+
+- **发现路径**：用户给出 `D:\Software\Scoop\apps\zcode\3.11.2\resources\glm\zcode.cjs` → `--help` 直揭 `-p/--print`、`--mode`、`--settings`、`--max-turns`、`app-server` 等全套 headless 面；`doctor` 确认 CLI 版本轨道 0.16.5（与 App 3.11.2 双轨）。
+- **provider 配置 schema**（bundle 逆向 + 试错定位）：用户级 `~/.zcode/cli/config.json` 增 `provider.<id>` 注册表（`kind`/`name`/`options.baseURL`/`options.apiKey`——端点密钥必须在 `options` 下，条目顶层写法被忽略）+ `model.main` 只接受 `"provider/model"` 字符串（对象形态被 schema 静默丢弃，报错仅 "Model config is missing"）；anthropic kind 走 env `ANTHROPIC_API_KEY` 兜底。
+- **mock 第四坑**：zcode 的 Vercel AI SDK 严格校验 Anthropic SSE——`content_block_start` 的 tool_use `input` 必须是对象，固化版 mock 回 `""` 即整回合 `AI_TypeValidationError` 失败；claude/crush 对空串宽容。已修 `script/mock_llm.py`（`"input": {}`）。
+- **hook 两轨 headless 分化**（本日核心定性）：
+  - **插件轨 ✅**：`enabledPlugins` 开启后 `-p` 下 hook 正常拉起，`decisions.jsonl` 落引擎裁决（`echo mock-hook-test → allow`），全程零 UI 零交互——CI 可自动化路径。
+  - **config 轨 ❌（headless）**：项目 hooks 声明形状是 `hooks.events.<Event>`（非插件 envelope 的 `hooks.<Event>`，写错仅 `config.file.invalid` 日志）；解析后必挂 `config_project_hooks_pending_trust`，信任由 capable host（Desktop App UI 审查流）授予并按 工作区+声明 digest 持久化于 `~/.zcode/security/workspace-hook-trust-v1.json`；headless CLI 无宿主审查流 → `workspace_hooks_require_trust_capable_host`/`workspace_hooks_feature_disabled`，**不可首授**（已信工作区可复用记录，但声明变 digest 即失效）。
+- **入 CI 判定**：能力具备、卡发行——npm 无官方包（`zcode-app-cli`、`zcode-acp-server` 为第三方，后者佐证 headless 生态）；本机仅证 win32-x64 内嵌 bundle；Linux 渠道与插件无人值守 provisioning（`~/.zcode/cli/plugins` 文件级装配）挂矩阵 §5 待办。
 
 ## 判定准则（lessons）
 
@@ -29,11 +40,12 @@ authoring_mode: ai_generated
 - mock 驱动下「有 tool result」≠「工具执行过」——参数校验失败、工具名缺席都会静默回 error tool result，无任何日志告警。
 - 「对话正常 + exit 0」不等于链路健康：mock 的松回包逻辑（见任意 tool result 即回包）会把失败伪装成成功。
 
-## mock 三坑（固化于 script/mock_llm.py，改前必读）
+## mock 四坑（固化于 script/mock_llm.py，改前必读）
 
 1. 工具参数必须含 agent schema 全部必填字段（缺 `description` → fantasy 静默拒绝）。
 2. 工具名从请求 tools 列表自适应选取（Windows 下 claude `-p` 可能提供 `PowerShell` 无 `Bash`）。
 3. OpenAI 协议 `stream=true` 必须回 SSE 分块，回 JSON 得 unexpected EOF。
+4. Anthropic SSE `content_block_start` 的 tool_use `input` 必须是对象（zcode AI SDK 严格校验，回 `""` 整回合失败；claude/crush 宽容）。
 
 ## 灰度机制（decision + 事实）
 

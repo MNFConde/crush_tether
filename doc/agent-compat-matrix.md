@@ -11,14 +11,22 @@
 |---|---|---|
 | 2.1.263（pinned）：通过 | 0.92.0（pinned）：通过 | 3.11.2（Desktop App）：通过 |
 
-注：本表只维护**当前状态**，格子只记通过/未通过；版本由不过转为通过时仅更新格子，变更流水记 §2。新版本（cron/dispatch）实测后**补一行**——与 pinned 同版且结果无差异则不变更；仅一个 agent 有新版时，新行其它 agent 格留空；latest 未实测不记录。pinned 不通过 = 「我方破坏」，latest 不通过 = 「上游信号」。
+注：
+1. 本表只维护**当前状态**，格子只记通过/未通过
+2. 版本由不过转为通过时仅更新格子，变更流水记 §2。新版本（cron/dispatch）实测后**补一行**——与 pinned 同版且结果无差异则不变更
+3. 仅一个 agent 有新版时，新行其它 agent 格留空
+4. latest 未实测不记录
+5. pinned 不通过 = 「我方破坏」，latest 不通过 = 「上游信号」。
+6. zcode 未入 CI：headless 形态已证实（App 内嵌 CLI `-p`，见 §1.2），卡点在**发行**——无官方独立 CI 可装渠道（npm 无官方包，本机为 Desktop App 内嵌 bundle）；入 CI 前提清单见 §5
 
 ### 1.2 当前 pinned 能力快照（锚点 0 实测）
+
+> 本表各列绑定 §1.1 的当前通过版本；agent 换版本后重跑批 1 清单 + headless 冒烟，逐格复核更新，未复核格以 §2 最新流水为准。
 
 | 能力 | claude-code 2.1.263 | crush 0.92.0 | zcode |
 |---|---|---|---|
 | 交互会话加载 hooks | ✅（`/hooks` 显示注册数） | ✅（TUI 显示 `Hook hook-probe → OK`） | ✅（M7 前置） |
-| headless 加载 hooks | ✅ 可钉死（`DISABLE_GROWTHBOOK=1`，内置默认=开） | ✅ 无条件（配置即生效） | n/a（无 headless 形态） |
+| headless 加载 hooks | ✅ 可钉死（`DISABLE_GROWTHBOOK=1`，内置默认=开） | ✅ 无条件（配置即生效） | ✅ `-p` 非交互（内嵌 CLI 0.16.5，mock 驱动全回合；hook 走插件轨可拉起，config 轨信任门 headless 不可首授，见 §4） |
 | allow 直通 | ✅ `permissionDecision:"allow"` exit 0 | ✅ `{"decision":"allow"}` exit 0 | ✅ 三值 JSON |
 | confirm 弹确认 | ✅ `permissionDecision:"ask"` → 原生确认 → 批准后执行 | ✅ 无意见（exit 0 无输出）→ 原生权限提示 | ✅ ask 转确认流程 |
 | deny 阻断 | ✅ exit 2 + stderr（工具调用不执行） | ✅ exit 2 + stderr，或 JSON deny | ✅ |
@@ -30,9 +38,21 @@
 | 用户选择回传 | ❌（PostToolUse 仅执行结果） | ❌（无 post 类事件） | ❌（仅执行结果） |
 | PostToolUse 事件 | ✅ 载荷含完整 `tool_response`（权限学习信号源） | ❌ 仅有 PreToolUse | ✅ |
 | 模型层命令预拦截 | ❌ 未观测到 | ✅ banned commands 内置（curl/sudo 被劝退，更保守非缺口） | 未观测到 |
-| 项目级 hooks 启用门槛 | ❌ 无 | ❌ 无（配置即生效） | ✅ 工作区审核门 |
-| 原生确认模式 × hook | 未测 | 未测 | ✅ allow **跳过原生弹窗**（变更类写操作实证）/ ask 弹窗（人工批准）/ deny 不弹直接阻断 |
-| 计划模式 × hook | 未测 | 未测 | ✅ hook 照常评估；allow 只读命令放行；计划模式只读分类器**短路 ask**（不弹窗直接拦）；第一道门在 agent 层（系统硬约束禁写，先于 hook——「hook allow 写操作」不可达） |
+| 项目级 hooks 启用门槛 | ❌ 无 | ❌ 无（配置即生效） | ✅ 工作区信任门（headless 不可首授，见 §4） |
+| 原生模式 × hook | 未测（§1.3） | 未测（§1.3） | ✅（见 §1.3） |
+
+### 1.3 原生模式 × hook 交叉（按 agent）
+
+各 agent 模式集不同，逐 agent 记录；§1.2 只留汇总行引用本节。
+
+**zcode**（3.11.2 Desktop App 插件链路，2026-09-10 人工实测）
+
+- 确认模式 × hook：allow **跳过原生弹窗**（变更类写操作实证）；ask 弹窗（人工批准）；deny 不弹直接阻断
+- 反证实验：弹窗上点拒绝 → agent 侧收 Denied，证实弹窗人工性
+- 计划模式 × hook：hook 照常评估（裁决日志增量可证）；计划模式只读分类器**短路 ask**（不弹窗直接拦）；agent 层系统硬约束禁写先于 hook（「hook allow 写操作」不可达）
+
+**claude-code**：未测（permission_mode 交叉挂 §5）
+**crush**：未测（yolo 语义有源码级核对，模式交叉挂 §5）
 
 ## 2. 版本测试结果记录
 
@@ -47,6 +67,7 @@
 | 2026-09-09 | zcode | 本机 CLI | 人工（config 轨探针四轮） | ✅ | `updated_input` 采纳定论：Claude 式 `updatedInput` 全替换（整条复合命令被替换执行）；crush 式顶层 `updated_input` 信封不采纳。测试后 config 轨已退役 |
 | 2026-09-10 | zcode | 3.11.2 | 人工（插件链路，确认模式） | ✅ | 确认模式 × hook 三值：allow 跳过原生弹窗（touch 变更类实证）/ ask 弹窗批准 / deny 直接阻断；反证实验（弹窗点拒绝 → agent 收 Denied）证实弹窗人工性 |
 | 2026-09-10 | zcode | 3.11.2 | 人工（插件链路，计划模式） | ✅ | 计划模式 × hook：照常评估；allow 只读放行；只读分类器短路 ask（不弹窗）；agent 层硬约束先于 hook |
+| 2026-09-10 | zcode | 0.16.5 CLI（App 3.11.2 内嵌） | headless `-p`（mock 驱动） | ✅ | headless 形态证实（**更正**「无 headless 形态」旧结论）；插件轨 hook 拉起 + 引擎裁决落盘实证；config 轨事件声明在 `hooks.events.*`，工作区信任门 headless 不可首授（见 §4） |
 
 ## 3. 测试如何进行
 
@@ -72,14 +93,15 @@ mock LLM 后端驱动 agent 完成一轮固定 tool_use（`echo mock-hook-test`�
 
 ### zcode 人工测试流程（无 CI 自动化，每版本照此走）
 
-1. **前置**：`crush-tether` 在 PATH（`cargo install --path .`，更新引擎后重装）；插件安装 = Plugin Management → Discover → `+` → 本地目录选仓库 `plugin/` → 安装 crush-tether → **重启会话**（hook 自动武装，无需审核门）
-2. **武装判定**：跑任意命令后查 `.crush-tether/decisions.jsonl` 增量——每 hook 触发记一条裁决；`type:"load"` 行为配置加载留痕
-3. **三档**：`echo hi`（allow）→ `curl --version`（ask）→ `sudo --version`（deny），读日志断言
-4. **`updated_input`**：插件卸载 + 探针 config 轨（`.zcode/config.json` 写 `hooks.enabled: true` + PreToolUse perm 角色，指向 `script/hook_probe.py`）→ 新会话武装 → 控制文件 `perm-out.txt` 切信封（Claude 式 `updatedInput` / crush 式对照）→ 看执行输出是否被改写 → **测后退役 config 轨**（防与插件双轨叠跑）
-5. **模式交叉**（确认模式/计划模式，人在场看弹窗）：
+1. **前置**：`crush-tether` 在 PATH（`cargo install --path .`，更新引擎后重装）；插件安装 = Plugin Management → Discover → `+` → 本地目录选仓库 `plugin/` → 安装 crush-tether → **重启会话**（hook 自动武装，无需信任门）
+2. **headless 冒烟**（可自动化，每版本建议加做）：`node <App安装目录>/resources/glm/zcode.cjs -p "<一句驱动 Bash 的指令>"`；模型后端写 `~/.zcode/cli/config.json` 的 `provider` + `model` 键（`model.main` 只接受 `"provider/model"` 字符串，端点与密钥在 `provider.<id>.options` 下）；hook 验证走**插件轨**（读 `.crush-tether/decisions.jsonl` 增量断言）；config 轨信任门 headless 不可首授，仅交互会话可用（见 §4）
+3. **武装判定**：跑任意命令后查 `.crush-tether/decisions.jsonl` 增量——每 hook 触发记一条裁决；`type:"load"` 行为配置加载留痕
+4. **三档**：`echo hi`（allow）→ `curl --version`（ask）→ `sudo --version`（deny），读日志断言
+5. **`updated_input`**：插件停用 + 探针 config 轨（`.zcode/config.json` 写 `hooks.enabled: true` + `events.PreToolUse` perm 角色，指向 `script/hook_probe.py`）→ 交互会话批准信任门武装 → 控制文件 `perm-out.txt` 切信封（Claude 式 `updatedInput` / crush 式对照）→ 看执行输出是否被改写 → **测后退役 config 轨**（防与插件双轨叠跑）
+6. **模式交叉**（确认模式/计划模式，人在场看弹窗）：
    - 确认模式：跑 allow/ask/deny 三类，观察弹窗——allow 应跳过弹窗、ask 应弹、deny 不弹直接挡；**区分「人工批准 vs 自动放行」用反证实验**：弹窗上点拒绝，agent 侧收到 Denied 即弹窗为真
    - 计划模式：hook 照常评估（日志增量可证）；计划模式只读分类器会**短路 ask**（不弹窗直接拦）；agent 层被系统硬约束禁写，「hook allow 写操作」不可达
-6. **版本记录**：ZCode Desktop App 版本随测随记入 §1.1/§2（当前 3.11.2）
+7. **版本记录**：ZCode Desktop App 版本随测随记入 §1.1/§2（当前 3.11.2，内嵌 CLI 版本轨道独立以 `zcode.cjs version` 为准，当前 0.16.5）
 
 ## 4. agent 差异与规避
 
@@ -93,6 +115,9 @@ mock LLM 后端驱动 agent 完成一轮固定 tool_use（`echo mock-hook-test`�
 | 6 | crush：banned commands 模型层预拦截（curl/sudo 在工具调用前被劝退，不触达 hook 层） | 测试用黑名单外命令 |
 | 7 | **判定准则（通用）**：mock 驱动下「有 tool result」≠「工具执行过」（校验拒绝/工具缺席都会回 error result）；hook 执行以**探针 dump 物理副作用**判定；日志计数（`Registered 0 hooks`）与回执均不可尽信 | 探针 dump 为唯一判据 |
 | 8 | zcode 探针 config 轨：hook 在命令**执行前**读控制文件（天然差一拍），且 `updatedInput` 全替换会把同调用内的写文件操作一并废掉 | 改控制文件用**非 Bash 工具**（hook matcher 只匹配 Bash）；每轮只发纯探测命令 |
+| 9 | zcode：非交互入口不在 PATH——CLI 是 App 内嵌 bundle（`resources/glm/zcode.cjs`），版本轨道与 App 版本号独立（App 3.11.2 / CLI 0.16.5） | `node <app>/resources/glm/zcode.cjs -p "<指令>"`；双版本号分别记录 |
+| 10 | zcode config 轨：事件声明在 `hooks.events.<Event>` 下（非插件 envelope 的 `hooks.<Event>`，写错仅日志 `config.file.invalid` 提示）；项目 hooks 需工作区信任，信任由 **capable host**（Desktop App UI）授予、按 工作区+声明 digest 持久化于 `~/.zcode/security/workspace-hook-trust-v1.json`——headless **不可首授** | headless/CI 一律走**插件轨**（免信任，实测 hook 可拉起）；config 轨仅交互会话用 |
+| 11 | zcode：Anthropic SSE `content_block_start` 的 `input` 字段严格校验（须为对象），mock 回空串即整回合失败（`AI_TypeValidationError`） | mock 固化版已修正为 `"input": {}`（claude/crush 对空串宽容） |
 
 ## 5. 待补测
 
@@ -100,5 +125,5 @@ mock LLM 后端驱动 agent 完成一轮固定 tool_use（`echo mock-hook-test`�
 - exit 2 与 JSON 回包并发时的覆盖规则——**上游聚合语义引用（halt > deny > allow），非我方行为面**，仅可选抽查以验证 design.md 契约节引用的准确性
 - claude-code 非默认 permission_mode（plan/bypassPermissions 交互）× hook 交叉
 - crush 原生确认/计划模式 × hook 交叉（yolo 语义已有源码级核对，模式交叉未实测）
-
-已收口：~~zcode 确认模式 × hook 三值弹窗行为~~ 与 ~~zcode 计划模式 × hook 链序~~（2026-09-10 插件链路实测，见 §1.2/§2）；~~zcode `updated_input` 采纳~~（2026-09-09 config 轨探针实测）；~~crush hook 超时的实机验证~~（同日 headless 实测 33s 非阻断放行）。
+- zcode headless 全轴：三档语义（现 mock 只发固定 `echo`，deny/confirm 需扩展 mock 或换规则）、`updated_input`、模式交叉在 headless 形态下的表现
+- zcode 入 CI 前提：Linux 发行渠道（现仅证 win32-x64 内嵌 bundle，npm 无官方包）；插件无人值守 provisioning（`~/.zcode/cli/plugins` 目录 + `enabledPlugins` 文件级装配，未验证）
