@@ -2,6 +2,13 @@
 
 This file records substantive progress in reverse-chronological order — newest entry at the top, right below this line. Keep each entry short — summary and pointer only; conclusions settle into `cairn/<topic>.md`.
 
+## 2026-09-09 深夜 · 矩阵文档按「事实/过程分离」原则重构（存档 v1）
+
+- **doc/agent-compat-matrix.md 重写**为确定性事实五节：兼容性矩阵（新增 agent × 版本二维覆盖表 + pinned 能力快照）、版本测试结果记录（日期/版本/触发器/结果流水）、测试如何进行（CI 三层 + 本地复现）、agent 差异与规避（七行表格化）、待补测（exit2+JSON 并发降级为「上游语义引用，非我方行为面」——用户裁定聚合属 agent 领域）。原「实测环境」节撤销：版本+日期已内嵌于各结论行，OS 特有项归 §4 差异表。
+- **过程史迁 cairn**：新主题笔记 `cairn/agent-hook-testing.md`（三次更正史链条/判定准则/mock 三坑/灰度机制/聚合归属裁决/crush run 悬案插桩排查全记录含证据代码位置）；doc 内更正叙事删除（LOG/ROADMAP 既有条目已完整承载）。
+- **约束落档**：doc/AGENTS.md 新增「确定性事实与过程史分离」写作约定（含指针不得指向未追踪文件）；重写前已按存档规则快照 `doc/archive_doc_v1/`。
+- Details: `doc/agent-compat-matrix.md`（重构版）、`cairn/agent-hook-testing.md`（新主题笔记）。
+
 ## 2026-09-09 · 三 Rust skill 全库审查：代码卫生收口 + clippy 门禁加固
 
 - **按 rust-best-practices / rust-testing / rust-async-patterns 三 skill 通读全部 src/ 与 tests/**，整体结论：架构与测试形态健康（错误处理 thiserror 风格手工实现、fail-safe 语义一致、测试覆盖充分），本轮只收卫生债不改行为。rust-async-patterns 无适用改动（项目为 std::thread 串行 accept 设计，rhai Engine 非 Send 的选型已文档化）。
