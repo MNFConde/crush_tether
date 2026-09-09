@@ -2,6 +2,13 @@
 
 This file records substantive progress in reverse-chronological order — newest entry at the top, right below this line. Keep each entry short — summary and pointer only; conclusions settle into `cairn/<topic>.md`.
 
+## 2026-09-10 · zcode 模式交叉两案定论 + 测试流程固化（M7.3 人工待补清零）
+
+- **确认模式 × hook 三值**：allow **跳过原生弹窗**（touch 变更类实证——hook 评估先于原生权限并预批准）；ask 弹窗，**反证实验钉死人工性**（弹窗点拒绝 → agent 收 Denied）；deny 不弹直接阻断。
+- **计划模式 × hook**：hook 照常评估（allow/confirm 两例全中日志）；allow 只读命令放行；计划模式只读分类器**短路 ask**（不弹窗直接拦，用户证实）；第一道门在 agent 层（系统硬约束禁写、先于 hook——「hook allow 写操作 × 计划模式」不可达，如实记录）。
+- **流程固化与入档**：zcode 版本入档 3.11.2（Desktop App）；六步人工测试流程固化于矩阵 §3（前置/武装判定/三档/updated_input config 轨/模式交叉/版本记录）；§1.1 zcode 升「通过（3.11.2）」，§1.2 增两行模式交叉，§4 增控制文件差一拍坑，§5 zcode 项全收口。
+- Details: `doc/agent-compat-matrix.md`（§1.1/§1.2/§2/§3/§4/§5）、`cairn/ROADMAP.md`（M7.3 剩余项）。
+
 ## 2026-09-09 深夜 · zcode `updated_input` 实测定论：Claude 式全替换采纳（待补测再收一项）
 
 - **结论**：zcode 采纳 Claude 式 `hookSpecificOutput.updatedInput`——**全替换语义实证**：探针回包把整条复合命令（含 heredoc 写文件+echo）替换成单条 `echo BBB-REWRITTEN`，控制文件因而连读三拍旧值，恰好成为三次采纳的重复证据；crush 式顶层 `updated_input` 信封不采纳（原样执行）。与 zcode 复用 ClaudeCode 信封（M5.3）一致。

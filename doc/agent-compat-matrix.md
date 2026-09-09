@@ -9,7 +9,7 @@
 
 | claude-code | crush | zcode |
 |---|---|---|
-| 2.1.263（pinned）：通过 | 0.92.0（pinned）：通过 | 通过 |
+| 2.1.263（pinned）：通过 | 0.92.0（pinned）：通过 | 3.11.2（Desktop App）：通过 |
 
 注：本表只维护**当前状态**，格子只记通过/未通过；版本由不过转为通过时仅更新格子，变更流水记 §2。新版本（cron/dispatch）实测后**补一行**——与 pinned 同版且结果无差异则不变更；仅一个 agent 有新版时，新行其它 agent 格留空；latest 未实测不记录。pinned 不通过 = 「我方破坏」，latest 不通过 = 「上游信号」。
 
@@ -31,6 +31,8 @@
 | PostToolUse 事件 | ✅ 载荷含完整 `tool_response`（权限学习信号源） | ❌ 仅有 PreToolUse | ✅ |
 | 模型层命令预拦截 | ❌ 未观测到 | ✅ banned commands 内置（curl/sudo 被劝退，更保守非缺口） | 未观测到 |
 | 项目级 hooks 启用门槛 | ❌ 无 | ❌ 无（配置即生效） | ✅ 工作区审核门 |
+| 原生确认模式 × hook | 未测 | 未测 | ✅ allow **跳过原生弹窗**（变更类写操作实证）/ ask 弹窗（人工批准）/ deny 不弹直接阻断 |
+| 计划模式 × hook | 未测 | 未测 | ✅ hook 照常评估；allow 只读命令放行；计划模式只读分类器**短路 ask**（不弹窗直接拦）；第一道门在 agent 层（系统硬约束禁写，先于 hook——「hook allow 写操作」不可达） |
 
 ## 2. 版本测试结果记录
 
@@ -43,6 +45,8 @@
 | 2026-09-09 | claude-code | 2.1.263 | CI 首跑（ubuntu，pinned） | ✅ | Linux 首证：headless 正向断言通过 |
 | 2026-09-09 | crush | 0.92.0 | CI 首跑（ubuntu，pinned） | ✅ | 同上（tar 安装修复后全绿） |
 | 2026-09-09 | zcode | 本机 CLI | 人工（config 轨探针四轮） | ✅ | `updated_input` 采纳定论：Claude 式 `updatedInput` 全替换（整条复合命令被替换执行）；crush 式顶层 `updated_input` 信封不采纳。测试后 config 轨已退役 |
+| 2026-09-10 | zcode | 3.11.2 | 人工（插件链路，确认模式） | ✅ | 确认模式 × hook 三值：allow 跳过原生弹窗（touch 变更类实证）/ ask 弹窗批准 / deny 直接阻断；反证实验（弹窗点拒绝 → agent 收 Denied）证实弹窗人工性 |
+| 2026-09-10 | zcode | 3.11.2 | 人工（插件链路，计划模式） | ✅ | 计划模式 × hook：照常评估；allow 只读放行；只读分类器短路 ask（不弹窗）；agent 层硬约束先于 hook |
 
 ## 3. 测试如何进行
 
@@ -66,6 +70,17 @@ mock LLM 后端驱动 agent 完成一轮固定 tool_use（`echo mock-hook-test`�
 
 预设注册与控制文件 → 交互会话照单跑：`echo hi`（allow 直通）→ `curl --version`（confirm 弹窗批准后执行）→ `sudo --version`（deny 阻断）→ 控制文件切 exit 3 后任一命令（fail-open 放行）→ 读 dump 断言回填 §2。
 
+### zcode 人工测试流程（无 CI 自动化，每版本照此走）
+
+1. **前置**：`crush-tether` 在 PATH（`cargo install --path .`，更新引擎后重装）；插件安装 = Plugin Management → Discover → `+` → 本地目录选仓库 `plugin/` → 安装 crush-tether → **重启会话**（hook 自动武装，无需审核门）
+2. **武装判定**：跑任意命令后查 `.crush-tether/decisions.jsonl` 增量——每 hook 触发记一条裁决；`type:"load"` 行为配置加载留痕
+3. **三档**：`echo hi`（allow）→ `curl --version`（ask）→ `sudo --version`（deny），读日志断言
+4. **`updated_input`**：插件卸载 + 探针 config 轨（`.zcode/config.json` 写 `hooks.enabled: true` + PreToolUse perm 角色，指向 `script/hook_probe.py`）→ 新会话武装 → 控制文件 `perm-out.txt` 切信封（Claude 式 `updatedInput` / crush 式对照）→ 看执行输出是否被改写 → **测后退役 config 轨**（防与插件双轨叠跑）
+5. **模式交叉**（确认模式/计划模式，人在场看弹窗）：
+   - 确认模式：跑 allow/ask/deny 三类，观察弹窗——allow 应跳过弹窗、ask 应弹、deny 不弹直接挡；**区分「人工批准 vs 自动放行」用反证实验**：弹窗上点拒绝，agent 侧收到 Denied 即弹窗为真
+   - 计划模式：hook 照常评估（日志增量可证）；计划模式只读分类器会**短路 ask**（不弹窗直接拦）；agent 层被系统硬约束禁写，「hook allow 写操作」不可达
+6. **版本记录**：ZCode Desktop App 版本随测随记入 §1.1/§2（当前 3.11.2）
+
 ## 4. agent 差异与规避
 
 | # | 差异 | 规避 |
@@ -77,11 +92,13 @@ mock LLM 后端驱动 agent 完成一轮固定 tool_use（`echo mock-hook-test`�
 | 5 | claude：settings env 三级优先级（shell < 用户级 `env` 块 < `--settings`），shell 注入会被覆盖 | 实验端点注入走 `--settings` |
 | 6 | crush：banned commands 模型层预拦截（curl/sudo 在工具调用前被劝退，不触达 hook 层） | 测试用黑名单外命令 |
 | 7 | **判定准则（通用）**：mock 驱动下「有 tool result」≠「工具执行过」（校验拒绝/工具缺席都会回 error result）；hook 执行以**探针 dump 物理副作用**判定；日志计数（`Registered 0 hooks`）与回执均不可尽信 | 探针 dump 为唯一判据 |
+| 8 | zcode 探针 config 轨：hook 在命令**执行前**读控制文件（天然差一拍），且 `updatedInput` 全替换会把同调用内的写文件操作一并废掉 | 改控制文件用**非 Bash 工具**（hook matcher 只匹配 Bash）；每轮只发纯探测命令 |
 
 ## 5. 待补测
 
 - claude-code **交互 + 全放行形态**（`--dangerously-skip-permissions` / `allowedTools:["*"]`）下 hook 是否仍被评估——社区「权限管道跳过」假说（zcode 侧已有同构结论：hook 评估先于原生权限并可覆盖 yolo）
 - exit 2 与 JSON 回包并发时的覆盖规则——**上游聚合语义引用（halt > deny > allow），非我方行为面**，仅可选抽查以验证 design.md 契约节引用的准确性
-- claude-code 非默认 permission_mode（plan/bypassPermissions 交互）× hook 交叉；zcode 计划模式交叉（需重装插件后人工验证）
+- claude-code 非默认 permission_mode（plan/bypassPermissions 交互）× hook 交叉
+- crush 原生确认/计划模式 × hook 交叉（yolo 语义已有源码级核对，模式交叉未实测）
 
-已收口：~~zcode `updated_input` 采纳~~（2026-09-09 深夜 config 轨探针实测：Claude 式 `updatedInput` 全替换采纳、crush 式信封不采纳，见 §1.2/§2）；~~crush hook 超时的实机验证~~（同日 headless 实测 33s 非阻断放行）。
+已收口：~~zcode 确认模式 × hook 三值弹窗行为~~ 与 ~~zcode 计划模式 × hook 链序~~（2026-09-10 插件链路实测，见 §1.2/§2）；~~zcode `updated_input` 采纳~~（2026-09-09 config 轨探针实测）；~~crush hook 超时的实机验证~~（同日 headless 实测 33s 非阻断放行）。
