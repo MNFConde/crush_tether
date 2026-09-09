@@ -50,7 +50,7 @@
 
 1. **`-p` 下 hooks 能且确实正常执行**——全部语义（拉起、载荷、timeout、放行）与交互会话一致，与官方文档及 `--bare` 文案（仅 bare 跳过）**不再矛盾**。
 2. **存在随时间变化的使能开关（claude-code）**：同机同配置，2026-09-08 下午 16:4x 的全部 headless 实验 hooks 未执行（日志明示 `cold GrowthBook cache, no payload yet`），当晚 00:39 起全部执行（cold 行消失 = payload 已拉到/缓存生效）。时间线与 GrowthBook 灰度状态（`tengu_plugin_hooks_modules` 等默认 false 的 flag）冷→热完全吻合。**灰度窗口内 hooks 静默缺席**——这才是初版误判的根源。
-   - **crush 侧定性二次更正（2026-09-09 深夜，源码插桩排查）**：~~`crush run` 固定不执行~~ **错误，`crush run` 一直正常执行 hooks，两 agent headless 定性统一为「均可用」**。根因链：① 此前全部「run 不触发」实验（三种注册途径、跨日复测）均由 `tmp/mock_llm.py` 驱动，其 OpenAI-compat 路径返回的工具参数**缺必填的 `description`**；② fantasy（v0.42.0）在工具分发前按 schema 校验参数，缺参调用**静默拒绝**（产出 `missing required parameter: description` 的 error tool result，工具不执行、hook 不运行、无任何日志告警）；③ mock 的「见到 tool result 即回 `spike done`」逻辑把失败伪装成成功（exit 0、对话正常）；④ 触发过 hooks 的 TUI 实验实为**真实供应商模型**驱动（deepseek 的工具调用参数自然完整）——「TUI 触发 / run 不触发」从头被「真实模型 vs mock」混杂。实锤：修正 mock 一行后 `crush run -m mockspike` 全链触发（探针 dump 落盘 + `Hook completed event=PreToolUse` INFO + 插桩 `hookedTool.Run` 实跑）；插桩另证 run 模式下 hook 接线全程健康（buildTools `pre_hooks=1` → wrap 26/26 → SetTools → 回合快照 26/26 全为 hookedTool）。编译版与 scoop 版同 commit（559ec80）同行为，二进制无罪。**方法论教训追加：mock 驱动的 agent 测试中「有 tool result」≠「工具执行过」——参数校验失败会静默产出 error tool result；判定以物理副作用为准的准则再次制胜。**
+   - **crush 侧定性二次更正（2026-09-09 深夜，源码插桩排查）**：~~`crush run` 固定不执行~~ **错误，`crush run` 一直正常执行 hooks，两 agent headless 定性统一为「均可用」**。根因链：① 此前全部「run 不触发」实验（三种注册途径、跨日复测）均由 `tmp/mock_llm.py`（现固化 `script/mock_llm.py`）驱动，其 OpenAI-compat 路径返回的工具参数**缺必填的 `description`**；② fantasy（v0.42.0）在工具分发前按 schema 校验参数，缺参调用**静默拒绝**（产出 `missing required parameter: description` 的 error tool result，工具不执行、hook 不运行、无任何日志告警）；③ mock 的「见到 tool result 即回 `spike done`」逻辑把失败伪装成成功（exit 0、对话正常）；④ 触发过 hooks 的 TUI 实验实为**真实供应商模型**驱动（deepseek 的工具调用参数自然完整）——「TUI 触发 / run 不触发」从头被「真实模型 vs mock」混杂。实锤：修正 mock 一行后 `crush run -m mockspike` 全链触发（探针 dump 落盘 + `Hook completed event=PreToolUse` INFO + 插桩 `hookedTool.Run` 实跑）；插桩另证 run 模式下 hook 接线全程健康（buildTools `pre_hooks=1` → wrap 26/26 → SetTools → 回合快照 26/26 全为 hookedTool）。编译版与 scoop 版同 commit（559ec80）同行为，二进制无罪。**方法论教训追加：mock 驱动的 agent 测试中「有 tool result」≠「工具执行过」——参数校验失败会静默产出 error tool result；判定以物理副作用为准的准则再次制胜。**
 3. **`CLAUDE_CODE_ENABLE_FUNCTION_HOOKS` 与加载与否无关**（③ 带此 env 照常执行；其真实作用是控制插件 hooks 模块加载，二进制考古所得）。
 4. **`--settings` 不屏蔽 hooks（补验证实）**：flag 使能后带 `--settings`（含 hooks 键）重跑——`Slow PreToolUse hooks (2 hooks)`，`--settings` 的 hooks 与项目级 hooks **聚合并存执行**（同 command 各自计一个，串行各 30s timeout 后放行）。下午不跑的唯一解释即灰度窗口。
 5. **方法论教训（已并入探针方法实践）**：hook 是否执行的判定 = dump 物理副作用优先，日志计数仅作参考；`Registered/Found 0 hooks` 在 hooks 实际执行时仍打印 0，是本次误判的直接原因。
@@ -121,6 +121,51 @@ crush 的 system prompt 内置 banned commands 规则（curl/sudo 等），confi
 
 - claude-code **交互 + 全放行形态**（`--dangerously-skip-permissions` / `allowedTools:["*"]`）下 hook 是否仍被评估——社区「权限管道跳过」假说的直接验证（zcode 侧已有同构结论：hook 评估先于原生权限并可覆盖 yolo）
 - exit 2 与 JSON 回包并发时的覆盖规则（契约：exit 2 覆盖 JSON；未单独实测）
-- crush hook 超时的实机验证（文档语义：cancel → 非阻断放行）
 - claude-code 非默认 permission_mode（plan/bypassPermissions 交互）× hook 交叉；zcode 计划模式交叉（原 M7.3 待补两项）
 - zcode `updated_input` 采纳
+
+已收口：~~crush hook 超时的实机验证~~（2026-09-09 深夜 headless 实测：探针 delay 45s > timeout 30 → 33s 后非阻断放行，与 claude ~32s 行为一致）。
+
+## 附录：crush run 悬案插桩排查记录（已结案，2026-09-09 深夜）
+
+> 本附录由曾存于 `tmp/m73-crush-src-investigation-plan.md` 的排查计划与其执行结果合并存档
+> （原 tmp/ 载体已删；自约束起文档不得以 git 未追踪文件为内容载体）。结论正文见 headless 节二次更正。
+
+### 背景与假设
+
+crush v0.92.0 交互 TUI hooks 全语义正常（`crush logs` 5 条 `Hook completed` INFO），`crush run` 三种注册途径（全局/项目 crush.json、crushrc `hook add` builtin）跨日均不执行（探针 dump 零记录、`runner.Run` 未被调用）。源码静态分析预测 run 应执行——动态与静态矛盾未闭合。三假设分支判据（插桩一次 run 即分胜负）：
+
+| 日志现象 | 结论 | 下一步 |
+|---|---|---|
+| `len(preToolHooks)==0` | config 加载层丢 hooks | 追 `internal/config/load.go` 合并逻辑 |
+| len>0 且已包装，但 `hookedTool.Run` 不打印 | run 执行路径绕过 hookedTool | 追 currentAgent 工具链 / run 专用 agent 构建 |
+| `hookedTool.Run` 打印但探针 dump 无 | spawn/shell 层失败 | 追内嵌 POSIX shell（mvdan.cc/sh）执行与 PATH |
+
+### 插桩点（最终五处，各 3-5 行 slog）
+
+1. `internal/agent/coordinator.go` buildTools 的 hookRunner 构造处：打 `len(preToolHooks)` 与 `isSubAgent`
+2. 同文件 `wrapToolsWithHooks` 调用后：打包装后工具数与 runner 是否 nil
+3. `internal/agent/hooked_tool.go` `wrapToolsWithHooks` 入口：打入参工具数/runner_nil/is_sub
+4. 同文件 `hookedTool.Run` 入口：打工具名
+5. `internal/agent/agent.go` `SetTools` 与回合快照（`Run` 内 `a.tools.Copy()` 处）：各打 total/hooked 计数
+
+### 排查过程（证据链）
+
+1. **编译基线**：clone v0.92.0（commit `559ec80`，与 scoop 发布二进制 `go version -m` 所载 vcs.revision 一致、vcs.modified=false、旗标同为 CGO_ENABLED=0 + GOEXPERIMENT=greenteagc）→ 编译版 run 反而**触发** hooks（dump 4→42 行）——二进制假说出局
+2. **2×2 对照**（二进制 × `-m`）：不触发的两格均为 mockspike（mock）驱动、触发格走真实供应商 → 真判别变量 = **mock vs 真实模型**
+3. **五处插桩**：run 模式下接线全程健康（`pre_hooks=1` → wrap 26/26 → SetTools → 回合快照 26/26 全为 hookedTool），但 `hookedTool.Run` 零调用——工具从未执行
+4. **crush.db 会话记录定案**：mock 的 OpenAI-compat 路径返回的工具调用缺必填 `description`，fantasy 分发前按 schema 校验、缺参**静默拒绝**（error tool result「missing required parameter: description」，无日志）；mock「见 tool result 即回 spike done」伪装成功
+5. **修正 mock 一行**（补 description）后 `crush run -m mockspike` 全链触发（dump 落盘 + `Hook completed` INFO + `hookedTool.Run` 实跑）
+
+### 证据代码位置（upstream v0.92.0 / fantasy v0.42.0，替代原 tmp/*.go 样本）
+
+- `internal/cmd/root.go`：`useClientServer()` 只认 `CRUSH_CLIENT_SERVER` env——默认走本地路径（`run.go:157`）
+- `internal/cmd/run.go`：本地路径 = `App().RunNonInteractive`；client/server 路径 = `connectToServer` + `runNonInteractive`
+- `internal/app/app.go`：`RunNonInteractive` 先 `InitCoderAgentNonInteractive` 再（有 `-m` 时）`overrideModelsForNonInteractive`（:521 override INFO、:568 unknown-provider WARN）→ `UpdateModels`
+- `internal/agent/coordinator.go`：buildTools 的 hookRunner 构造（读 `c.cfg.Config().Hooks[EventPreToolUse]`）与 `wrapToolsWithHooks(filteredTools, hookRunner, isSubAgent)`；`UpdateModels` = SetModels + buildTools + SetTools
+- `internal/agent/agent.go`：回合开始 `a.tools.Copy()` 快照 → `fantasy.NewAgent(WithTools(...))`；`PrepareStep` 内 `prepared.Tools = a.tools.Copy()`
+- fantasy `agent.go`：`validateAndRepairToolCall` 按 tool schema 校验（crush 未设 repair 函数，缺参即 invalid，**不执行不分发**）；`executeTools` 以 `toolMap[toolCall.ToolName].Run` 分发
+
+### 存档说明
+
+排查产物（crush-src clone、crush-dbg.exe、crush-instr.exe、tmp 版 mock）已清理；重建 = clone v0.92.0 + 按「插桩点」重打 + `CGO_ENABLED=0 GOEXPERIMENT=greenteagc go build`。现行 CI 复用同套排查面：`script/mock_llm.py`（固化版）+ `script/hook_probe.py`。
