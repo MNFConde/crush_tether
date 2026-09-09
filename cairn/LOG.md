@@ -2,6 +2,27 @@
 
 This file records substantive progress in reverse-chronological order — newest entry at the top, right below this line. Keep each entry short — summary and pointer only; conclusions settle into `cairn/<topic>.md`.
 
+## 2026-09-09 深夜 · M7.3 追加：claude 灰度可官方 env 钉死 + Windows 工具名坑——CI 配方两侧确定化
+
+- **官方文档结论**（`code.claude.com/docs/en/env-vars`）：`DISABLE_GROWTHBOOK=1` 禁用灰度拉取、所有 flag 落二进制内置默认值（`CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC`/`DISABLE_TELEMETRY`/`DO_NOT_TRACK` 同效）。实测带此 env 跑 `claude -p` + mock **hooks 照常全链触发**（内置默认=开）——**claude CI 哨兵升级为正向硬断言，与 crush 对齐，灰度翻动不再是 CI 不稳定源**。
+- **新坑（Windows 工具名）**：claude `-p` 的 shell 工具按运行环境选择——本机 zcode 环境提供 `PowerShell` 无 `Bash`，用户终端提供 `Bash`；mock 盲发 `Bash` 被静默拒（`No such tool available: Bash`，error tool result 伪装成功，与 crush 侧 fantasy 校验拒绝同款）。修法：mock 从请求 tools 列表自适应选工具名（`tmp/mock_llm.py` 已实现）+ matcher 放宽 `"Bash|PowerShell"`（`TestProject/.claude/spike-settings.json` 已改）。修后连跑两发（含 GB-off）dump 各 +3 全触发。
+- **CI 配方定稿**：claude = `DISABLE_GROWTHBOOK=1` + 自适应 mock + 宽 matcher + 正向断言；crush = mock + `crush run` + 正向断言。两侧零费用零灰度零凭据全确定。
+- Details: `doc/agent-compat-matrix.md`（headless 节深夜追加 + CI 三层节 + 能力表 claude 格）。
+
+## 2026-09-09 深夜 · M7.3 二次更正：crush run 一直执行 hooks，「不执行」系 mock 缺陷假象（插桩排查定案）
+
+- **悬案告破**：按 `tmp/m73-crush-src-investigation-plan.md` 编译 v0.92.0（与 scoop 同 commit 559ec80）复现时发现编译版 run **触发** hooks；2×2 对照（二进制 × `-m`）锁定真判别变量 = mock vs 真实模型；五处插桩证明 run 接线全程健康但工具从未执行；crush.db 会话记录定案根因——**mock 的 OpenAI-compat 路径返回的工具调用缺必填 `description`，fantasy 分发前按 schema 校验、缺参静默拒绝**（error tool result、无日志），mock「见 tool result 即回 spike done」伪装成功；触发过的 TUI 实验全是真实模型驱动。
+- **修正结论**：`crush run` 无条件正常执行 hooks（与 TUI 同链路）；两 agent headless 统一「均可用」（claude 条件性/灰度、crush 无条件）；提 crush issue 作废（无 bug）；CI crush 哨兵恢复正向 + mock 参数必须含全部 schema 必填字段。**方法论教训 +1：mock 驱动测试中「有 tool result」≠「工具执行过」，物理副作用判定准则再次制胜。**
+- 同步更正：矩阵（能力表/headless 节/CI 哨兵）、design.md（Crush 契约/387 行/claude 契约更正指针）、AGENTS.md 状态行、ROADMAP M7.3。
+- Details: `doc/agent-compat-matrix.md`（headless 节二次更正）、`cairn/ROADMAP.md`（深夜二次更正段）。
+
+## 2026-09-09 · M7.3 补充：DeepWiki 对照 + crush run 双执行路径发现
+
+- DeepWiki 问答（「无头会触发 hook」）与我方静态分析完全同源（coordinator 共用、hookRunner 不看 interactive），且其 Notes 自认「未直接展示 run.go 完整源码」——属静态应然推断、无动态验证；我方动态证据（交互 TUI 5 条 `Hook completed` INFO vs run 零日志、dump 零记录）优先。
+- **新发现：run 子命令实为双执行路径**（run.go 全文走查）：client/server 模式（`runNonInteractive`，连 `-H` server 或自动拉起）vs 本地模式（`AppWorkspace.App().RunNonInteractive`）——此前分析未纳入；server 长驻进程持有旧 config 为新排查线索。
+- 源码插桩排查计划已落 `tmp/m73-crush-src-investigation-plan.md`（clone v0.92.0 → 三处插桩 → 三假设分支判据；前置 = `scoop install go`，本机暂无 Go）。
+- Details: `doc/agent-compat-matrix.md`（headless 节）、`cairn/ROADMAP.md`（M7.3 更正段）。
+
 ## 2026-09-09 · M7.3 更正：headless hooks 为条件性加载（受控重测推翻初判）
 
 - **初判「headless 不加载」错误**：根因 = 误信 `Registered 0 hooks` / `Found 0 total hooks in registry` 日志计数——受控重测证明 hook 实际执行时该计数仍打印 0。**方法论沉淀：hook 执行判定以 dump 物理副作用 + `[INFO] Slow PreToolUse hooks` 行为准，日志计数仅作参考。**

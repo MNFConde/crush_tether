@@ -356,7 +356,7 @@ pub trait Channel {
   - deny → exit 2（stderr 作 reason）**或** JSON `{"decision":"deny"}` exit 0
 - 聚合：`deny > allow > 无意见`；`decision:"allow"` 需 exit 0。
 - **实测定稿（2026-09-09，锚点 0，交互会话）**：三档全链（allow 直通 / confirm 无意见走原生权限提示 / deny exit 2 阻断）、`updated_input` 浅合并改写真实生效（TUI 标记 Rewrote Output）、fail-open、exit 49 halt（**引擎不使用**——保持三 agent 单命令阻断统一）全部实测吻合。注意：crush 的 system prompt 内置 banned commands 规则，confirm/deny 类命令（curl/sudo 等）常被模型层劝退而不触达 hook 层（方向更保守，非安全缺口）。数据见 `doc/agent-compat-matrix.md`。
-- **源码/日志补充（2026-09-09，DeepWiki + v0.92.0 源码核对）**：聚合优先级全序 = halt > deny > allow；`updated_input` 取配置序最后一个提供者；`decision` 显式支持 `"none"`；hooks 视为可信用户配置、**不受 bash 工具黑名单（BlockFuncs）限制**；crushrc 另有第三注册途径 `hook add <event> --command CMD [--name] [--matcher] [--timeout]` builtin；上游已知 issue：#3482（payload 事件字段为 `event` 非 Claude 的 `hook_event_name`，单脚本按事件分支时静默 fall-through——本门探针按角色参数分支不受影响）、#3389（Windows `$HOME` 含反斜杠时 `~` 展开坑）。**headless 定性实锤**：`crush run` 下 `runner.Run` 未被调用（交互 TUI 5 条 `Hook completed` INFO vs run 零 hook 日志、零错误告警），三种注册途径（全局/项目 crush.json、crushrc `hook add`）均无效——判定 0.92.0 run 路径未接线（装配缺口），候选动作 = 提 crush issue 附复现步骤。
+- **源码/日志补充（2026-09-09，DeepWiki + v0.92.0 源码核对）**：聚合优先级全序 = halt > deny > allow；`updated_input` 取配置序最后一个提供者；`decision` 显式支持 `"none"`；hooks 视为可信用户配置、**不受 bash 工具黑名单（BlockFuncs）限制**；crushrc 另有第三注册途径 `hook add <event> --command CMD [--name] [--matcher] [--timeout]` builtin；上游已知 issue：#3482（payload 事件字段为 `event` 非 Claude 的 `hook_event_name`，单脚本按事件分支时静默 fall-through——本门探针按角色参数分支不受影响）、#3389（Windows `$HOME` 含反斜杠时 `~` 展开坑）。**headless 定性实锤**：`crush run` 下 `runner.Run` 未被调用（交互 TUI 5 条 `Hook completed` INFO vs run 零 hook 日志、零错误告警），三种注册途径（全局/项目 crush.json、crushrc `hook add`）均无效——判定 0.92.0 run 路径未接线（装配缺口），候选动作 = 提 crush issue 附复现步骤。**→ 2026-09-09 深夜二次更正（插桩排查，判定错误、「提 crush issue」作废）**：根因是我方 mock（`tmp/mock_llm.py` OpenAI-compat 路径）返回的工具调用**缺必填 `description`**——fantasy 在工具分发前按 schema 校验，缺参**静默拒绝**（产出 error tool result，工具与 hook 从未执行，无日志）；而触发过 hooks 的 TUI 实验均为真实供应商模型驱动（参数自然完整）。「TUI 触发 / run 不触发」实为「真实模型 vs mock」混杂。修正 mock 一行后 `crush run -m mockspike` 全链触发（探针 dump + `Hook completed` INFO + 插桩 `hookedTool.Run` 实跑）；插桩另证 run 下接线全程健康（buildTools `pre_hooks=1` → wrap 26/26 → SetTools → 回合快照 26/26 全为 hookedTool）。**结论：`crush run` 正常执行 hooks，与 TUI 同链路，无装配缺口；编译版与 scoop 版同 commit（559ec80）同行为。**
 
 #### ClaudeCode 契约（实测定稿，2026-09-09）
 
@@ -368,7 +368,7 @@ pub trait Channel {
   - deny → exit 2 + stderr，**或** JSON `permissionDecision:"deny"` exit 0
 - 规则：`deny > defer > ask > allow`；exit 2 会覆盖 JSON。
 - **Crush 兼容**：Crush 接受 Claude 的 `hookSpecificOutput` 信封，仅 `updated_input` 语义不同（Crush 浅合并 vs Claude 全替换）。ClaudeCode adapter 可复用 Crush 大部分输出逻辑，仅改 env/输入键名与 `updated_input` 语义。
-- **实测定稿（2026-09-09，锚点 0，交互会话）**：三值信封全部被采纳——allow 直通 / `permissionDecision:"ask"` 弹原生确认、批准后执行 / deny 走 exit 2 阻断（工具调用不执行）；`updatedInput` 改写真实生效；fail-open 时 UI 明示 `non-blocking status code` 并放行；PostToolUse 载荷含完整 `tool_response`（权限学习信号源在此可用）。**headless（`-p`）下 hooks 不加载**：注册表恒 0，跨配置路径（项目级/`--settings`/用户级）、版本（2.1.195/2.1.263）与 `CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1` 开关一致。数据见 `doc/agent-compat-matrix.md`。
+- **实测定稿（2026-09-09，锚点 0，交互会话）**：三值信封全部被采纳——allow 直通 / `permissionDecision:"ask"` 弹原生确认、批准后执行 / deny 走 exit 2 阻断（工具调用不执行）；`updatedInput` 改写真实生效；fail-open 时 UI 明示 `non-blocking status code` 并放行；PostToolUse 载荷含完整 `tool_response`（权限学习信号源在此可用）。**headless（`-p`）下 hooks 不加载**：注册表恒 0，跨配置路径（项目级/`--settings`/用户级）、版本（2.1.195/2.1.263）与 `CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1` 开关一致（**此段已被受控重测更正为「条件性加载」，见失效模式表 #2 补注与矩阵 headless 节**）。数据见 `doc/agent-compat-matrix.md`。
 
 #### Hook 接入失效模式与保障边界（定稿）
 
@@ -384,7 +384,7 @@ hook 接入是权限门的「最后一米」——管线内部的 fail-safe 再�
 | 4 | Crush 类「配置即生效、无启用门槛」形态的静默失效（配错路径 / 拼写错，无任何机制提醒） | C | 无机制可堵，部署验收实测触发是唯一覆盖：M5.2 契约用例集（实现层）+ 部署后实测 hook 确实触发。 |
 | 5 | 用户手动禁用插件 / 删除配置 | — | 信任边界，不设防，如实声明。 |
 
-~~ClaudeCode / Crush 实机部署形态是否存在类似 zcode 的启用门槛~~（2026-09-09 M7.3 已核实：两者均**无**启用门槛、配置即生效；但存在更强的会话形态限制——headless/非交互下 hooks 整体不加载，见上表 #2 补注与 `doc/agent-compat-matrix.md`）。
+~~ClaudeCode / Crush 实机部署形态是否存在类似 zcode 的启用门槛~~（2026-09-09 M7.3 已核实：两者均**无**启用门槛、配置即生效；~~但存在更强的会话形态限制——headless/非交互下 hooks 整体不加载~~ **2026-09-09 深夜二次更正：headless 均可执行**——claude = 条件性（灰度窗口内缺席，见 #2 补注）；crush = 无条件（此前「run 不执行」系 mock 工具参数缺陷造成的实验假象，见 Crush 契约节二次更正）。见 `doc/agent-compat-matrix.md`）。
 
 #### hook 探针方法（定稿）
 
