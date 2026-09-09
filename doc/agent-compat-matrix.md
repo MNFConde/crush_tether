@@ -79,7 +79,7 @@ crush 的 system prompt 内置 banned commands 规则（curl/sudo 等），confi
 
 ## 测试方法与自动化策略（headless 受限下的设计）
 
-前提事实（2026-09-09 深夜三次更正后）：headless（`claude -p` / `crush run`）hooks 均可执行且**可钉死为确定行为**——claude 经 `DISABLE_GROWTHBOOK=1` 关灰度（内置默认=开，实测过）、crush 无条件；CI 一律**正向硬断言**。mock 驱动时：工具名自适应 agent 实际提供的列表（Windows claude 可能提供 `PowerShell` 非 `Bash`）、工具参数含全部 schema 必填字段（缺参会被 fantasy 静默拒绝）。agent 兼容性测试按可自动化性拆三层：
+前提事实（2026-09-09 深夜三次更正后）：headless（`claude -p` / `crush run`）hooks 均可执行且**可钉死为确定行为**——claude 经 `DISABLE_GROWTHBOOK=1` 关灰度（内置默认=开，实测过）、crush 无条件；CI 一律**正向硬断言**。mock 驱动时：工具名自适应 agent 实际提供的列表（Windows claude 可能提供 `PowerShell` 非 `Bash`）、工具参数含全部 schema 必填字段（缺参会被 fantasy 静默拒绝）。agent 兼容性测试按可自动化性拆三层（**已落地 `.github/workflows/agent-matrix.yml`：push/PR pinned smoke + weekly cron latest 哨兵 + dispatch 指定版本回溯，2026-09-09；首跑待 push 验证**）：
 
 ### CI 常态层（全自动，cron 驱动，零凭证）
 

@@ -1,0 +1,214 @@
+# M7.3 agent 兼容矩阵 CI（doc/agent-compat-matrix.md「测试方法」节定稿的三层实现）
+#
+# 正向断言：headless（claude -p / crush run）+ 本地 mock LLM 驱动一轮 tool_use，
+# 断言探针 dump 出现 = 「hook 被拉起且裁决流转」。零凭证零费用（mock 后端），
+# 行为确定（DISABLE_GROWTHBOOK=1 钉死 claude 灰度态；crush 无灰度机制）。
+#
+# 层次：
+# - push/PR：pinned 版本 smoke，paths 过滤 agent 耦合面；红灯归因「我方破坏」
+# - weekly cron：latest 版本 smoke——上游破坏性变更的哨兵（红灯 = 上游信号）
+# - workflow_dispatch：手动指定版本回溯/排查
+#
+# 版本 bump 人工主导：改下方 env 两个 pinned 值。
+# 说明：仅 ubuntu job。Windows 专属行为面由 ci.yml 的 windows job 覆盖（rust 测试）；
+# agent 侧 Windows 差异（claude 可能提供 PowerShell 工具）已由 mock 自适应 +
+# matcher "Bash|PowerShell" 兜住，但矩阵暂不跑 windows runner（成本/收益，需要时加）。
+
+name: agent-matrix
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - "src/channel/**"
+      - "plugin/**"
+      - "script/hook_probe.py"
+      - "script/mock_llm.py"
+      - ".github/workflows/agent-matrix.yml"
+  pull_request:
+    paths:
+      - "src/channel/**"
+      - "plugin/**"
+      - "script/hook_probe.py"
+      - "script/mock_llm.py"
+      - ".github/workflows/agent-matrix.yml"
+  workflow_dispatch:
+    inputs:
+      claude_version:
+        description: "claude-code version (npm spec, e.g. 2.1.263 / latest)"
+        required: false
+      crush_version:
+        description: "crush version without v prefix (e.g. 0.92.0 / latest)"
+        required: false
+  schedule:
+    - cron: "23 3 * * 1" # 每周一 UTC：latest 版本 smoke（上游哨兵）
+
+concurrency:
+  group: agent-matrix-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CLAUDE_VERSION_PINNED: "2.1.263"
+  CRUSH_VERSION_PINNED: "0.92.0"
+  MOCK_PORT: "8787"
+
+jobs:
+  claude-code:
+    name: claude-code headless hook smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve claude version spec
+        id: ver
+        run: |
+          spec="${{ inputs.claude_version }}"
+          if [ -z "$spec" ]; then spec="${CLAUDE_VERSION_PINNED}"; fi
+          if [ "${{ github.event_name }}" = "schedule" ]; then spec="latest"; fi
+          echo "spec=$spec" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install claude-code@${{ steps.ver.outputs.spec }}
+        run: npm install -g "@anthropic-ai/claude-code@${{ steps.ver.outputs.spec }}"
+
+      - name: Start mock LLM backend
+        run: |
+          python3 script/mock_llm.py --log "$PWD/mock-requests.jsonl" &
+          for i in $(seq 1 20); do
+            if (exec 3<>/dev/tcp/127.0.0.1/${MOCK_PORT}) 2>/dev/null; then exit 0; fi
+            sleep 0.5
+          done
+          exit 1
+
+      - name: Register probe hooks via settings file
+        run: |
+          mkdir -p .hook-probe
+          cat > ci-settings.json <<EOF
+          {
+            "env": {
+              "ANTHROPIC_BASE_URL": "http://127.0.0.1:${MOCK_PORT}",
+              "ANTHROPIC_AUTH_TOKEN": "dummy-matrix",
+              "ANTHROPIC_API_KEY": "dummy-matrix",
+              "ANTHROPIC_MODEL": "claude-sonnet-4-5"
+            },
+            "hooks": {
+              "PreToolUse": [
+                { "matcher": "Bash|PowerShell",
+                  "hooks": [{ "type": "command",
+                    "command": "python3 $PWD/script/hook_probe.py perm --agent claudecode --source ci --probe-dir $PWD/.hook-probe",
+                    "timeout": 30 }] }
+              ],
+              "PostToolUse": [
+                { "matcher": "Bash|PowerShell",
+                  "hooks": [{ "type": "command",
+                    "command": "python3 $PWD/script/hook_probe.py post --agent claudecode --source ci --probe-dir $PWD/.hook-probe",
+                    "timeout": 30 }] }
+              ]
+            }
+          }
+          EOF
+
+      - name: Headless run (mock-driven turn)
+        run: |
+          DISABLE_GROWTHBOOK=1 claude -p "请运行命令: echo agent-matrix-smoke" \
+            --settings ci-settings.json
+
+      - name: Assert probe dump exists (positive sentinel)
+        run: |
+          lines=$(wc -l < .hook-probe/dump.jsonl)
+          echo "probe dump lines: $lines"
+          test "$lines" -ge 1
+          grep -q '"tool_name"' .hook-probe/dump.jsonl
+
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: claude-code-probe-dump
+          path: |
+            .hook-probe/dump.jsonl
+            mock-requests.jsonl
+          if-no-files-found: warn
+
+  crush:
+    name: crush headless hook smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve crush version
+        id: ver
+        run: |
+          ver="${{ inputs.crush_version }}"
+          if [ -z "$ver" ]; then ver="${CRUSH_VERSION_PINNED}"; fi
+          if [ "${{ github.event_name }}" = "schedule" ]; then
+            ver=$(curl -fsSL https://api.github.com/repos/charmbracelet/crush/releases/latest \
+              | grep -o '"tag_name": "v[^"]*"' | head -1 | cut -d'"' -f4 | sed 's/^v//')
+          fi
+          echo "ver=$ver" >> "$GITHUB_OUTPUT"
+
+      - name: Install crush ${{ steps.ver.outputs.ver }}
+        run: |
+          v="${{ steps.ver.outputs.ver }}"
+          curl -fsSL -o /tmp/crush.tar.gz \
+            "https://github.com/charmbracelet/crush/releases/download/v${v}/crush_${v}_Linux_x86_64.tar.gz"
+          tar -xzf /tmp/crush.tar.gz -C /tmp
+          sudo install /tmp/crush /usr/local/bin/crush
+          crush --version
+
+      - name: Start mock LLM backend
+        run: |
+          python3 script/mock_llm.py --log "$PWD/mock-requests.jsonl" &
+          for i in $(seq 1 20); do
+            if (exec 3<>/dev/tcp/127.0.0.1/${MOCK_PORT}) 2>/dev/null; then exit 0; fi
+            sleep 0.5
+          done
+          exit 1
+
+      - name: Register probe hooks via project crush.json
+        run: |
+          mkdir -p .hook-probe
+          cat > crush.json <<EOF
+          {
+            "providers": {
+              "mockspike": {
+                "type": "openai-compat",
+                "base_url": "http://127.0.0.1:${MOCK_PORT}/v1",
+                "api_key": "dummy-matrix",
+                "models": [{"id": "mock-model", "name": "Mock Matrix Model",
+                            "context_window": 128000}]
+              }
+            },
+            "hooks": {
+              "PreToolUse": [
+                { "name": "hook-probe",
+                  "command": "python3 $PWD/script/hook_probe.py perm --agent crush --source ci --probe-dir $PWD/.hook-probe",
+                  "timeout": 30 }
+              ]
+            }
+          }
+          EOF
+
+      - name: Headless run (mock-driven turn)
+        run: crush run -m mockspike/mock-model "agent-matrix smoke"
+
+      - name: Assert probe dump exists (positive sentinel)
+        run: |
+          lines=$(wc -l < .hook-probe/dump.jsonl)
+          echo "probe dump lines: $lines"
+          test "$lines" -ge 1
+
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: crush-probe-dump
+          path: |
+            .hook-probe/dump.jsonl
+            mock-requests.jsonl
+          if-no-files-found: warn

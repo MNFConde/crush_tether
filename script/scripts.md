@@ -7,6 +7,7 @@
 | [check-links.py](check-links.py) | 校验 doc/ 与 cairn/ 各 Markdown 的跨文件与站内锚点引用一致性（平移自 mdor） | `uv run --directory script check-links.py` |
 | [check-commit-msg.py](check-commit-msg.py) | 校验 git 提交信息格式（Conventional Commits），由 `.githooks/commit-msg` 调用（平移自 mdor） | `uv run --directory script check-commit-msg.py <提交信息文件>` |
 | [hook_probe.py](hook_probe.py) | hook 探针（design.md「hook 探针方法（定稿）」的 python 参考实现，M7.2）：dump 载荷 / 转发真实引擎 / 控制文件切模式，注册进任意项目实测 hook 触发 | `uv run python hook_probe.py <bash\|perm\|post\|fail>`（可带 `--probe-dir`/`--engine` 等，见下） |
+| [mock_llm.py](mock_llm.py) | 双协议 LLM mock（agent-matrix CI 后端，M7.3）：驱动 agent 零凭证走完对话与 hook 全链 | `uv run --directory script mock_llm.py [--port 8787] [--log 请求日志.jsonl]` |
 
 ## check-links.py
 
@@ -33,6 +34,13 @@
 - **引擎解析**：`--engine` > 环境变量 `CRUSH_TETHER_EXE` > `crush-tether`（裸命令名 PATH 解析，与正式插件分发路线一致）
 - **退出码**：bash/perm/fail 按语义回传引擎或控制文件退出码；post 恒 0；探针自身故障不外泄（dump 写失败静默，引擎转发失败 stderr 告警 + exit 1）
 - **注**：`uv run python` 在无 pyproject 的目录走默认解释器临时环境，故外部项目（含 python 项目外的一般项目）可直接注册本脚本，无需自带脚本环境
+
+## mock_llm.py
+
+- **作用**：`.github/workflows/agent-matrix.yml` 的 mock LLM 后端——Anthropic `/v1/messages` + OpenAI `/v1/chat/completions` 双协议、stream（SSE）与非流式都支持；固定一轮 tool_use（`echo mock-hook-test`），见到工具结果回 `spike done`。hook 链路是 agent 本地行为、与 LLM 无关，故 mock 驱动即可零凭证测「hook 被拉起、裁决流转」
+- **用法**：`uv run --directory script mock_llm.py [--port 8787] [--log 请求日志.jsonl]`（`--log` 记录每轮 tool_use 的模型名与 agent 实际提供的工具名，诊断用；CI 用 `python3` 直跑）
+- **三坑实录（改此脚本前必读）**：① 工具参数必须含 agent schema 全部必填字段——缺 `description` 会被 crush/fantasy 静默拒绝（error tool result、无告警，2026-09-09 实证）；② 工具名从请求 `tools` 列表自适应选（Windows 下 claude `-p` 可能提供 `PowerShell` 无 `Bash`，盲发 `Bash` 报 No such tool available）；③ OpenAI 协议 `stream=true` 必须回 SSE 分块，回 JSON 是 unexpected EOF
+- **退出**：Ctrl+C / 杀进程；无守护逻辑（CI 后端，非长驻服务）
 
 ## 临时探针台账（三次法则登记处）
 
