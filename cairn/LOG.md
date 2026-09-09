@@ -2,6 +2,13 @@
 
 This file records substantive progress in reverse-chronological order — newest entry at the top, right below this line. Keep each entry short — summary and pointer only; conclusions settle into `cairn/<topic>.md`.
 
+## 2026-09-09 深夜 · M7.3 执行：CI workflow 落地 + crush 超时实测收口 + 测试资产退役
+
+- **agent-matrix workflow 落地**（42d5b57）：`.github/workflows/agent-matrix.yml` 三层（push/PR pinned smoke + weekly cron latest 上游哨兵 + dispatch 指定版本），正向断言 dump 出现；mock 固化 `script/mock_llm.py`（双协议/SSE/工具名自适应，三坑写进脚本头），`scripts.md` 登记。双侧本地预演全过后提交；**首跑验证待 push**。
+- **crush 超时实测 ✅**（待补测清单又收一项）：headless + delay 控制文件 45s > timeout 30 → 33s 后放行执行，与 claude ~32s 行为及 crush 文档语义一致——超时语义已可完全 headless 验证。
+- **测试资产退役 ✅**：TestProject 清至只剩空 `.git`（`.claude/`/`.crush/`/`.crush-tether/`/crush.json/调试日志全清，顺带终止两个 15h 前残留 crush.exe 解锁 db）；tmp 478MB→276K（claude-old/clone/两插桩二进制/旧 mock 全删，保留 .go 源码证据样本与排查计划——cairn 记录仍引用）。
+- Details: `cairn/ROADMAP.md`（M7.3 剩余项更新）、`script/scripts.md`（mock 登记）。
+
 ## 2026-09-09 深夜 · M7.3 追加：claude 灰度可官方 env 钉死 + Windows 工具名坑——CI 配方两侧确定化
 
 - **官方文档结论**（`code.claude.com/docs/en/env-vars`）：`DISABLE_GROWTHBOOK=1` 禁用灰度拉取、所有 flag 落二进制内置默认值（`CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC`/`DISABLE_TELEMETRY`/`DO_NOT_TRACK` 同效）。实测带此 env 跑 `claude -p` + mock **hooks 照常全链触发**（内置默认=开）——**claude CI 哨兵升级为正向硬断言，与 crush 对齐，灰度翻动不再是 CI 不稳定源**。
