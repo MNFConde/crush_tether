@@ -2,6 +2,13 @@
 
 This file records substantive progress in reverse-chronological order — newest entry at the top, right below this line. Keep each entry short — summary and pointer only; conclusions settle into `cairn/<topic>.md`.
 
+## 2026-09-09 深夜 · zcode `updated_input` 实测定论：Claude 式全替换采纳（待补测再收一项）
+
+- **结论**：zcode 采纳 Claude 式 `hookSpecificOutput.updatedInput`——**全替换语义实证**：探针回包把整条复合命令（含 heredoc 写文件+echo）替换成单条 `echo BBB-REWRITTEN`，控制文件因而连读三拍旧值，恰好成为三次采纳的重复证据；crush 式顶层 `updated_input` 信封不采纳（原样执行）。与 zcode 复用 ClaudeCode 信封（M5.3）一致。
+- **方法注记**：控制文件切实验存在「hook 先于命令执行读文件」的天然差一拍——改控制文件须用非 Bash 工具（matcher 只匹配 Bash）；被改写的调用会连带废掉同调用内的写文件操作。此坑已体现于矩阵 §4 判定准则语境。
+- **矩阵回填**：§1.1 zcode 格升「通过」；§1.2 行定论；§2 流水加行；§5 收项。config 轨探针测后即退役（`.zcode/config.json`+`hook-probe` 已删）。
+- Details: `doc/agent-compat-matrix.md`。
+
 ## 2026-09-09 深夜 · 矩阵文档按「事实/过程分离」原则重构（存档 v1）
 
 - **doc/agent-compat-matrix.md 重写**为确定性事实五节：兼容性矩阵（新增 agent × 版本二维覆盖表 + pinned 能力快照）、版本测试结果记录（日期/版本/触发器/结果流水）、测试如何进行（CI 三层 + 本地复现）、agent 差异与规避（七行表格化）、待补测（exit2+JSON 并发降级为「上游语义引用，非我方行为面」——用户裁定聚合属 agent 领域）。原「实测环境」节撤销：版本+日期已内嵌于各结论行，OS 特有项归 §4 差异表。

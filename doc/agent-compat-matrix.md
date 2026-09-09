@@ -9,7 +9,7 @@
 
 | claude-code | crush | zcode |
 |---|---|---|
-| 2.1.263（pinned）：通过 | 0.92.0（pinned）：通过 | 本机 CLI：部分通过（三档 ✅；headless n/a；`updated_input` 未测） |
+| 2.1.263（pinned）：通过 | 0.92.0（pinned）：通过 | 通过 |
 
 注：本表只维护**当前状态**，格子只记通过/未通过；版本由不过转为通过时仅更新格子，变更流水记 §2。新版本（cron/dispatch）实测后**补一行**——与 pinned 同版且结果无差异则不变更；仅一个 agent 有新版时，新行其它 agent 格留空；latest 未实测不记录。pinned 不通过 = 「我方破坏」，latest 不通过 = 「上游信号」。
 
@@ -22,7 +22,7 @@
 | allow 直通 | ✅ `permissionDecision:"allow"` exit 0 | ✅ `{"decision":"allow"}` exit 0 | ✅ 三值 JSON |
 | confirm 弹确认 | ✅ `permissionDecision:"ask"` → 原生确认 → 批准后执行 | ✅ 无意见（exit 0 无输出）→ 原生权限提示 | ✅ ask 转确认流程 |
 | deny 阻断 | ✅ exit 2 + stderr（工具调用不执行） | ✅ exit 2 + stderr，或 JSON deny | ✅ |
-| `updated_input` 改写采纳 | ✅ 全替换语义（echo 被改写执行） | ✅ 浅合并（配置序最后者赢；TUI 标记 `Rewrote Output`） | 待补测 |
+| `updated_input` 改写采纳 | ✅ 全替换语义（echo 被改写执行） | ✅ 浅合并（配置序最后者赢；TUI 标记 `Rewrote Output`） | ✅ 采纳——Claude 式 `updatedInput` 全替换（整条命令被替换执行）；crush 式顶层 `updated_input` 信封不采纳 |
 | fail-open（hook 非 2 退出） | ✅ UI 明示 `non-blocking status code`，放行 | ✅ 其他退出码 = 非阻断放行 | ✅ exit 3 放行（M5.3） |
 | hook 超时语义 | ✅ 挂 45s > timeout 30s → ~32s 放行 | ✅ headless 实测 33s 非阻断放行 | 未测 |
 | halt 整个回合 | ❌ 无此概念 | ✅ exit 49（**引擎不使用**，保持单命令阻断统一） | ❌ |
@@ -42,6 +42,7 @@
 | 2026-09-09 | claude-code + crush | pinned | 人工 headless | ✅ | headless 正向配方定稿；crush 超时 33s 放行实测 |
 | 2026-09-09 | claude-code | 2.1.263 | CI 首跑（ubuntu，pinned） | ✅ | Linux 首证：headless 正向断言通过 |
 | 2026-09-09 | crush | 0.92.0 | CI 首跑（ubuntu，pinned） | ✅ | 同上（tar 安装修复后全绿） |
+| 2026-09-09 | zcode | 本机 CLI | 人工（config 轨探针四轮） | ✅ | `updated_input` 采纳定论：Claude 式 `updatedInput` 全替换（整条复合命令被替换执行）；crush 式顶层 `updated_input` 信封不采纳。测试后 config 轨已退役 |
 
 ## 3. 测试如何进行
 
@@ -81,5 +82,6 @@ mock LLM 后端驱动 agent 完成一轮固定 tool_use（`echo mock-hook-test`�
 
 - claude-code **交互 + 全放行形态**（`--dangerously-skip-permissions` / `allowedTools:["*"]`）下 hook 是否仍被评估——社区「权限管道跳过」假说（zcode 侧已有同构结论：hook 评估先于原生权限并可覆盖 yolo）
 - exit 2 与 JSON 回包并发时的覆盖规则——**上游聚合语义引用（halt > deny > allow），非我方行为面**，仅可选抽查以验证 design.md 契约节引用的准确性
-- claude-code 非默认 permission_mode（plan/bypassPermissions 交互）× hook 交叉；zcode 计划模式交叉
-- zcode `updated_input` 采纳
+- claude-code 非默认 permission_mode（plan/bypassPermissions 交互）× hook 交叉；zcode 计划模式交叉（需重装插件后人工验证）
+
+已收口：~~zcode `updated_input` 采纳~~（2026-09-09 深夜 config 轨探针实测：Claude 式 `updatedInput` 全替换采纳、crush 式信封不采纳，见 §1.2/§2）；~~crush hook 超时的实机验证~~（同日 headless 实测 33s 非阻断放行）。
