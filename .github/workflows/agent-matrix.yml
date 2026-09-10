@@ -9,10 +9,16 @@
 # - weekly cron：latest 版本 smoke——上游破坏性变更的哨兵（红灯 = 上游信号）
 # - workflow_dispatch：手动指定版本回溯/排查
 #
-# 版本 bump 人工主导：改下方 env 两个 pinned 值。
-# 说明：仅 ubuntu job。Windows 专属行为面由 ci.yml 的 windows job 覆盖（rust 测试）；
+# runner 矩阵：ubuntu 双 job（claude/crush）+ windows 三 job（claude/crush/zcode）。
+# zcode 仅 windows：App 内嵌 CLI（zcode.cjs）为 win32-x64 bundle，从 extras bucket
+# manifest 解析版本 + CDN 直链下载，7z 两步解包取 cjs（不装 App，headless 只需 node +
+# cjs）；Linux 版内测中，公测后补 ubuntu job。zcode hook 走插件轨（config 轨信任门
+# headless 不可首授）：插件无人值守装配 = known_marketplaces/installed_plugins/
+# cache 拷贝 + enabledPlugins 置真（2026-09-10 本机 spike 验证：机械重建即被识别，
+# 无 transaction/digest 校验障碍），断言 = decisions.jsonl 落 allow 裁决。
+# 版本 bump 人工主导：改下方 env 三个 pinned 值。
 # agent 侧 Windows 差异（claude 可能提供 PowerShell 工具）已由 mock 自适应 +
-# matcher "Bash|PowerShell" 兜住，但矩阵暂不跑 windows runner（成本/收益，需要时加）。
+# matcher "Bash|PowerShell" 兜住。
 
 name: agent-matrix
 
@@ -40,6 +46,9 @@ on:
       crush_version:
         description: "crush version without v prefix (e.g. 0.92.0 / latest)"
         required: false
+      zcode_version:
+        description: "zcode version (e.g. 3.11.2 / latest = extras bucket 当前版)"
+        required: false
   schedule:
     - cron: "23 3 * * 1" # 每周一 UTC：latest 版本 smoke（上游哨兵）
 
@@ -50,6 +59,7 @@ concurrency:
 env:
   CLAUDE_VERSION_PINNED: "2.1.263"
   CRUSH_VERSION_PINNED: "0.92.0"
+  ZCODE_VERSION_PINNED: "3.11.2"
   MOCK_PORT: "8787"
 
 jobs:
@@ -214,5 +224,298 @@ jobs:
           name: crush-probe-dump
           path: |
             .hook-probe/dump.jsonl
+            mock-requests.jsonl
+          if-no-files-found: warn
+
+  claude-code-windows:
+    name: claude-code headless hook smoke (windows)
+    runs-on: windows-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Resolve claude version spec
+        id: ver
+        run: |
+          spec="${{ inputs.claude_version }}"
+          if [ -z "$spec" ]; then spec="${CLAUDE_VERSION_PINNED}"; fi
+          if [ "${{ github.event_name }}" = "schedule" ]; then spec="latest"; fi
+          echo "spec=$spec" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 20
+
+      - name: Install claude-code@${{ steps.ver.outputs.spec }}
+        run: npm install -g "@anthropic-ai/claude-code@${{ steps.ver.outputs.spec }}"
+
+      - name: Start mock LLM backend
+        run: |
+          python script/mock_llm.py --log mock-requests.jsonl &
+          for i in $(seq 1 40); do
+            if curl -s -o /dev/null "http://127.0.0.1:${MOCK_PORT}/"; then exit 0; fi
+            sleep 0.5
+          done
+          exit 1
+
+      - name: Register probe hooks via settings file
+        run: |
+          mkdir -p .hook-probe
+          ws="$(cygpath -m "$PWD")"
+          cat > ci-settings.json <<EOF
+          {
+            "env": {
+              "ANTHROPIC_BASE_URL": "http://127.0.0.1:${MOCK_PORT}",
+              "ANTHROPIC_AUTH_TOKEN": "dummy-matrix",
+              "ANTHROPIC_API_KEY": "dummy-matrix",
+              "ANTHROPIC_MODEL": "claude-sonnet-4-5"
+            },
+            "hooks": {
+              "PreToolUse": [
+                { "matcher": "Bash|PowerShell",
+                  "hooks": [{ "type": "command",
+                    "command": "python ${ws}/script/hook_probe.py perm --agent claudecode --source ci --probe-dir ${ws}/.hook-probe",
+                    "timeout": 30 }] }
+              ],
+              "PostToolUse": [
+                { "matcher": "Bash|PowerShell",
+                  "hooks": [{ "type": "command",
+                    "command": "python ${ws}/script/hook_probe.py post --agent claudecode --source ci --probe-dir ${ws}/.hook-probe",
+                    "timeout": 30 }] }
+              ]
+            }
+          }
+          EOF
+
+      - name: Headless run (mock-driven turn)
+        run: |
+          DISABLE_GROWTHBOOK=1 claude -p "Run exactly: echo agent-matrix-smoke" \
+            --settings ci-settings.json
+
+      - name: Assert probe dump exists (positive sentinel)
+        run: |
+          lines=$(wc -l < .hook-probe/dump.jsonl)
+          echo "probe dump lines: $lines"
+          test "$lines" -ge 1
+          grep -q 'tool_name' .hook-probe/dump.jsonl
+
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: claude-code-probe-dump-windows
+          path: |
+            .hook-probe/dump.jsonl
+            mock-requests.jsonl
+          if-no-files-found: warn
+
+  crush-windows:
+    name: crush headless hook smoke (windows)
+    runs-on: windows-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Resolve crush version
+        id: ver
+        run: |
+          ver="${{ inputs.crush_version }}"
+          if [ -z "$ver" ]; then ver="${CRUSH_VERSION_PINNED}"; fi
+          if [ "${{ github.event_name }}" = "schedule" ]; then
+            ver=$(curl -fsSL https://api.github.com/repos/charmbracelet/crush/releases/latest \
+              | grep -o '"tag_name": "v[^"]*"' | head -1 | cut -d'"' -f4 | sed 's/^v//')
+          fi
+          echo "ver=$ver" >> "$GITHUB_OUTPUT"
+
+      - name: Install crush ${{ steps.ver.outputs.ver }}
+        run: |
+          v="${{ steps.ver.outputs.ver }}"
+          curl -fsSL -o crush.zip \
+            "https://github.com/charmbracelet/crush/releases/download/v${v}/crush_${v}_Windows_x86_64.zip"
+          bindir="$(cygpath -m "$HOME")/bin"
+          mkdir -p "$HOME/bin"
+          7z x -y -o"$bindir" crush.zip >/dev/null
+          test -n "$(find "$HOME/bin" -name crush.exe)"
+          echo "$bindir" >> "$GITHUB_PATH"
+
+      - name: Check crush on PATH
+        run: crush --version
+
+      - name: Start mock LLM backend
+        run: |
+          python script/mock_llm.py --log mock-requests.jsonl &
+          for i in $(seq 1 40); do
+            if curl -s -o /dev/null "http://127.0.0.1:${MOCK_PORT}/"; then exit 0; fi
+            sleep 0.5
+          done
+          exit 1
+
+      - name: Register probe hooks via project crush.json
+        run: |
+          mkdir -p .hook-probe
+          ws="$(cygpath -m "$PWD")"
+          cat > crush.json <<EOF
+          {
+            "providers": {
+              "mockspike": {
+                "type": "openai-compat",
+                "base_url": "http://127.0.0.1:${MOCK_PORT}/v1",
+                "api_key": "dummy-matrix",
+                "models": [{"id": "mock-model", "name": "Mock Matrix Model",
+                            "context_window": 128000}]
+              }
+            },
+            "hooks": {
+              "PreToolUse": [
+                { "name": "hook-probe",
+                  "command": "python ${ws}/script/hook_probe.py perm --agent crush --source ci --probe-dir ${ws}/.hook-probe",
+                  "timeout": 30 }
+              ]
+            }
+          }
+          EOF
+
+      - name: Headless run (mock-driven turn)
+        run: crush run -m mockspike/mock-model "agent-matrix smoke"
+
+      - name: Assert probe dump exists (positive sentinel)
+        run: |
+          lines=$(wc -l < .hook-probe/dump.jsonl)
+          echo "probe dump lines: $lines"
+          test "$lines" -ge 1
+
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: crush-probe-dump-windows
+          path: |
+            .hook-probe/dump.jsonl
+            mock-requests.jsonl
+          if-no-files-found: warn
+
+  zcode-windows:
+    name: zcode headless hook smoke (windows)
+    runs-on: windows-latest
+    timeout-minutes: 25
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Resolve zcode version (extras bucket manifest)
+        id: ver
+        run: |
+          spec="${{ inputs.zcode_version }}"
+          if [ -z "$spec" ]; then spec="${ZCODE_VERSION_PINNED}"; fi
+          if [ "${{ github.event_name }}" = "schedule" ] || [ "$spec" = "latest" ]; then
+            ver=$(curl -fsSL https://raw.githubusercontent.com/ScoopInstaller/Extras/master/bucket/zcode.json \
+              | python -c "import json,sys; print(json.load(sys.stdin)['version'])")
+          else
+            ver="$spec"
+          fi
+          echo "ver=$ver" >> "$GITHUB_OUTPUT"
+
+      - name: Download and extract zcode CLI bundle
+        run: |
+          v="${{ steps.ver.outputs.ver }}"
+          cd "$(cygpath "$RUNNER_TEMP")"
+          curl -fsSL -o zcode-installer.exe \
+            "https://cdn-zcode.z.ai/zcode/electron/releases/${v}/windows-x64/ZCode-${v}-win-x64.exe"
+          7z x -y zcode-installer.exe >/dev/null
+          app7z=$(find '$PLUGINSDIR' -name 'app-*.7z' | head -1)
+          test -n "$app7z"
+          7z x -y "$app7z" >/dev/null
+          cjs=$(find . -path '*resources/glm/zcode.cjs' | head -1)
+          test -n "$cjs"
+          echo "ZCODE_CJS=$(cygpath -m "$PWD/$cjs")" >> "$GITHUB_ENV"
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+
+      - name: Install engine (crush-tether) to PATH
+        run: cargo install --path . --locked
+
+      - name: Provision crush-tether plugin (unattended, plugin track)
+        run: |
+          python - <<'PYEOF'
+          import json, os, shutil, uuid, time
+          root = os.path.join(os.path.expanduser("~"), ".zcode", "cli", "plugins")
+          repo_plugin = os.path.abspath("plugin")
+          mkt = "crush-tether-marketplace"
+          plug_id = "crush-tether@crush-tether-marketplace"
+          ver = json.load(open(os.path.join(repo_plugin, "crush-tether", ".zcode-plugin",
+                                            "plugin.json"), encoding="utf-8"))["version"]
+          shutil.copytree(repo_plugin, os.path.join(root, "marketplaces", mkt))
+          install_path = os.path.join(root, "cache", mkt, "crush-tether", ver)
+          shutil.copytree(os.path.join(repo_plugin, "crush-tether"), install_path)
+          now = time.strftime("%Y-%m-%dT%H:%M:%S.000Z", time.gmtime())
+          json.dump({"version": 1, "marketplaces": [{
+              "id": mkt, "source": {"source": "directory", "path": repo_plugin},
+              "name": mkt, "addedAt": now, "lastUpdated": now,
+              "pluginCount": 1, "cacheTransactionId": str(uuid.uuid4()),
+          }]}, open(os.path.join(root, "known_marketplaces.json"), "w", encoding="utf-8"), indent=2)
+          json.dump({"version": 1, "plugins": [{
+              "id": plug_id, "name": "crush-tether", "marketplace": mkt,
+              "version": ver, "installPath": install_path, "installedAt": now,
+              "updatedAt": now, "scope": "user", "source": "./crush-tether",
+              "cacheTransactionId": str(uuid.uuid4()),
+          }]}, open(os.path.join(root, "installed_plugins.json"), "w", encoding="utf-8"), indent=2)
+          print("provisioned:", plug_id, ver)
+          PYEOF
+
+      - name: Enable plugin and point model backend at mock
+        run: |
+          python - <<'PYEOF'
+          import json, os
+          p = os.path.join(os.path.expanduser("~"), ".zcode", "cli", "config.json")
+          json.dump({
+            "plugins": {"enabledPlugins": {"crush-tether@crush-tether-marketplace": True},
+                        "options": {}},
+            "provider": {"mockspike": {"kind": "anthropic", "name": "mockspike",
+                                       "options": {"baseURL": "http://127.0.0.1:8787",
+                                                   "apiKey": "dummy-matrix"}}},
+            "model": {"main": "mockspike/mock-model"},
+          }, open(p, "w", encoding="utf-8"), indent=2)
+          print("cli config written")
+          PYEOF
+
+      - name: Verify plugin registration
+        run: node "$ZCODE_CJS" plugins list | grep "crush-tether@crush-tether-marketplace"
+
+      - name: Start mock LLM backend
+        run: |
+          python script/mock_llm.py --log mock-requests.jsonl &
+          for i in $(seq 1 40); do
+            if curl -s -o /dev/null "http://127.0.0.1:${MOCK_PORT}/"; then exit 0; fi
+            sleep 0.5
+          done
+          exit 1
+
+      - name: Headless run (mock-driven turn)
+        run: |
+          node "$ZCODE_CJS" -p "Run exactly: echo agent-matrix-smoke"
+
+      - name: Assert engine decision logged (positive sentinel)
+        run: |
+          test -f .crush-tether/decisions.jsonl
+          grep -q '"command":"echo mock-hook-test"' .crush-tether/decisions.jsonl
+          grep -q '"decision":"allow"' .crush-tether/decisions.jsonl
+
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: zcode-decisions-windows
+          path: |
+            .crush-tether/decisions.jsonl
             mock-requests.jsonl
           if-no-files-found: warn
