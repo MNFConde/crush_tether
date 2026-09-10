@@ -340,8 +340,11 @@ jobs:
             "https://github.com/charmbracelet/crush/releases/download/v${v}/crush_${v}_Windows_x86_64.zip"
           bindir="$(cygpath -m "$HOME")/bin"
           mkdir -p "$HOME/bin"
-          7z x -y -o"$bindir" crush.zip >/dev/null
-          test -n "$(find "$HOME/bin" -name crush.exe)"
+          7z x -y -o"$HOME/bin" crush.zip >/dev/null
+          exe=$(find "$HOME/bin" -name crush.exe | head -1)
+          test -n "$exe"
+          # zip 资产带版本嵌套目录，crush.exe 归位到 PATH 根层
+          [ "$(dirname "$exe")" = "$HOME/bin" ] || cp "$exe" "$HOME/bin/crush.exe"
           echo "$bindir" >> "$GITHUB_PATH"
 
       - name: Check crush on PATH
