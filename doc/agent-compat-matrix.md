@@ -1,6 +1,6 @@
 # agent 兼容性矩阵（M7.3）
 
-> **定位**：只记确定性事实——兼容性矩阵、版本测试结果（带更新时间）、测试方法、agent 差异与规避。排查过程、错误结论与更正史一律在 cairn/（LOG、ROADMAP、[agent-hook-testing](../cairn/agent-hook-testing.md)），不进本文档。
+> **定位**：只记确定性事实——兼容性矩阵、版本测试结果（带更新时间）、测试方法、agent 差异与规避；维护口径见 §6。排查过程、错误结论与更正史一律在 cairn/（LOG、ROADMAP、[agent-hook-testing](../cairn/agent-hook-testing.md)），不进本文档。
 > **覆盖口径**：交互全语义（三档弹窗 / `updated_input` / halt / fail-open / 超时）= Windows 手工会话（锚点 0 人工批测）；headless hook 冒烟（正向断言）= CI runner（ubuntu 双 job：claude/crush；windows 三 job：claude/crush/zcode，pinned 每次 push/PR、latest 每周 cron）+ Windows 本机预演。除 §4 另注明外，结论均在 Windows 10 x64 实测。
 
 ## 1. 兼容性矩阵
@@ -21,25 +21,25 @@
 
 ### 1.2 当前 pinned 能力快照（锚点 0 实测）
 
-> 本表各列绑定 §1.1 的当前通过版本；agent 换版本后重跑批 1 清单 + headless 冒烟，逐格复核更新，未复核格以 §2 最新流水为准。
+> 列头 = §1.1 当前通过版本；换版本的更新动作（差异开新列/无差异并区间）、需要性标注口径、复核分层见 **§6 维护规则**。未复核格以 §2 最新流水为准。
 
-| 能力 | claude-code 2.1.263 | crush 0.92.0 | zcode |
-|---|---|---|---|
-| 交互会话加载 hooks | ✅（`/hooks` 显示注册数） | ✅（TUI 显示 `Hook hook-probe → OK`） | ✅（M7 前置） |
-| headless 加载 hooks | ✅ 可钉死（`DISABLE_GROWTHBOOK=1`，内置默认=开） | ✅ 无条件（配置即生效） | ✅ `-p` 非交互（内嵌 CLI 0.16.5，mock 驱动全回合；hook 走插件轨可拉起，config 轨信任门 headless 不可首授，见 §4） |
-| allow 直通 | ✅ `permissionDecision:"allow"` exit 0 | ✅ `{"decision":"allow"}` exit 0 | ✅ 三值 JSON |
-| confirm 弹确认 | ✅ `permissionDecision:"ask"` → 原生确认 → 批准后执行 | ✅ 无意见（exit 0 无输出）→ 原生权限提示 | ✅ ask 转确认流程 |
-| deny 阻断 | ✅ exit 2 + stderr（工具调用不执行） | ✅ exit 2 + stderr，或 JSON deny | ✅ |
-| `updated_input` 改写采纳 | ✅ 全替换语义（echo 被改写执行） | ✅ 浅合并（配置序最后者赢；TUI 标记 `Rewrote Output`） | ✅ 采纳——Claude 式 `updatedInput` 全替换（整条命令被替换执行）；crush 式顶层 `updated_input` 信封不采纳 |
-| fail-open（hook 非 2 退出） | ✅ UI 明示 `non-blocking status code`，放行 | ✅ 其他退出码 = 非阻断放行 | ✅ exit 3 放行（M5.3） |
-| hook 超时语义 | ✅ 挂 45s > timeout 30s → ~32s 放行 | ✅ headless 实测 33s 非阻断放行 | 未测 |
-| halt 整个回合 | ❌ 无此概念 | ✅ exit 49（**引擎不使用**，保持单命令阻断统一） | ❌ |
-| `PermissionRequest` 事件 | ❌ 无同语义事件 | ❌ | ✅ 存在但 JSON 回包不被采纳（M5.3） |
-| 用户选择回传 | ❌（PostToolUse 仅执行结果） | ❌（无 post 类事件） | ❌（仅执行结果） |
-| PostToolUse 事件 | ✅ 载荷含完整 `tool_response`（权限学习信号源） | ❌ 仅有 PreToolUse | ✅ |
-| 模型层命令预拦截 | ❌ 未观测到 | ✅ banned commands 内置（curl/sudo 被劝退，更保守非缺口） | 未观测到 |
-| 项目级 hooks 启用门槛 | ❌ 无 | ❌ 无（配置即生效） | ✅ 工作区信任门（headless 不可首授，见 §4） |
-| 原生模式 × hook | 未测（§1.3） | 未测（§1.3） | ✅（见 §1.3） |
+| 能力 | 需要性 | claude-code 2.1.263 | crush 0.92.0 | zcode 3.11.2（Desktop App） |
+|---|---|---|---|---|
+| 交互会话加载 hooks | 需要 | ✅（`/hooks` 显示注册数） | ✅（TUI 显示 `Hook hook-probe → OK`） | ✅（M7 前置） |
+| headless 加载 hooks | 需要 | ✅ 可钉死（`DISABLE_GROWTHBOOK=1`，内置默认=开） | ✅ 无条件（配置即生效） | ✅ `-p` 非交互（内嵌 CLI 0.16.5，mock 驱动全回合；hook 走插件轨可拉起，config 轨信任门 headless 不可首授，见 §4） |
+| allow 直通 | 需要 | ✅ `permissionDecision:"allow"` exit 0 | ✅ `{"decision":"allow"}` exit 0 | ✅ 三值 JSON |
+| confirm 弹确认 | 需要 | ✅ `permissionDecision:"ask"` → 原生确认 → 批准后执行 | ✅ 无意见（exit 0 无输出）→ 原生权限提示 | ✅ ask 转确认流程 |
+| deny 阻断 | 需要 | ✅ exit 2 + stderr（工具调用不执行） | ✅ exit 2 + stderr，或 JSON deny | ✅ |
+| `updated_input` 改写采纳 | 备用 | ✅ 全替换语义（echo 被改写执行） | ✅ 浅合并（配置序最后者赢；TUI 标记 `Rewrote Output`） | ✅ 采纳——Claude 式 `updatedInput` 全替换（整条命令被替换执行）；crush 式顶层 `updated_input` 信封不采纳 |
+| fail-open（hook 非 2 退出） | 需要 | ✅ UI 明示 `non-blocking status code`，放行 | ✅ 其他退出码 = 非阻断放行 | ✅ exit 3 放行（M5.3） |
+| hook 超时语义 | 需要 | ✅ 挂 45s > timeout 30s → ~32s 放行 | ✅ headless 实测 33s 非阻断放行 | 未测 |
+| halt 整个回合 | 认知 | ❌ 无此概念 | ✅ exit 49（**引擎不使用**，保持单命令阻断统一） | ❌ |
+| `PermissionRequest` 事件 | 认知 | ❌ 无同语义事件 | ❌ | ✅ 存在但 JSON 回包不被采纳（M5.3，挂点定 PreToolUse 的依据） |
+| 用户选择回传 | 备用 | ❌（PostToolUse 仅执行结果） | ❌（无 post 类事件） | ❌（仅执行结果） |
+| PostToolUse 事件 | 备用 | ✅ 载荷含完整 `tool_response`（权限学习信号源） | ❌ 仅有 PreToolUse | ✅ |
+| 模型层命令预拦截 | 认知 | ❌ 未观测到 | ✅ banned commands 内置（curl/sudo 被劝退，更保守非缺口） | 未观测到 |
+| 项目级 hooks 启用门槛 | 需要 | ❌ 无 | ❌ 无（配置即生效） | ✅ 工作区信任门（headless 不可首授，见 §4） |
+| 原生模式 × hook | 需要 | 未测（§1.3） | 未测（§1.3） | ✅（见 §1.3） |
 
 ### 1.3 原生模式 × hook 交叉（按 agent）
 
@@ -132,3 +132,34 @@ mock LLM 后端驱动 agent 完成一轮固定 tool_use（`echo mock-hook-test`�
 - zcode headless 全轴：三档语义（现 mock 只发固定 `echo`，deny/confirm 需扩展 mock 或换规则）、`updated_input`、模式交叉在 headless 形态下的表现
 - zcode ubuntu job：Linux 版内测中，公测后补（发行渠道落地即可平移 windows job 配方）
 - zcode cron latest 哨兵的首个自动触发尚待观察（每周一 UTC）
+
+已收口的项不再留痕于 §5（测完即删，过程史在 cairn）。
+
+## 6. 维护规则
+
+本节是本文档的维护口径，改动 §1/§2 前先读。
+
+### 6.1 §1.1（版本结论表）
+
+- 只维护当前状态，格子只记通过/未通过，细则见 §1.1 注 1–5（新版本实测后补行、单 agent 新版其它格留空、latest 未实测不记录、pinned 红 = 我方破坏 / latest 红 = 上游信号）
+
+### 6.2 §1.2（能力快照）——版本演进
+
+- **列头 = §1.1 当前通过版本**。agent 出现实测通过的新版本时：
+  - 能力面**有差异** → 该 agent **开新列**，逐格填新版本结论
+  - 能力面**无差异** → 不开新列，当前列头并入版本区间（如 `2.1.263–2.1.264`）
+  - 两种情况 §2 都必须记一行流水（日期/版本/触发器/结果/变更点）——**§2 是全文档唯一的版本时间维度**
+- **换版本复核分层**（不是每格都重测）：
+  - CI 自动兜底：headless 加载、allow 直通（pinned bump 后每次 push 跑，cron latest 常态盯）
+  - 人工批 1 清单（~5 分钟，发版触发）：confirm 弹窗、deny 阻断、fail-open
+  - 专项实验行（`updated_input`/超时/halt/`PermissionRequest`/回传/PostToolUse/预拦截/模式交叉）：**不随版本主动重测**，格子语义 = 「最后一次实测的结论随列头推进」；cron 哨兵红灯或上游大版本才触发专项复测，出差异即改格 + §2 流水
+- **需要性标注**（「需要性」列，对当前引擎版本而言）：
+  - `需要` = 交付/部署直接依赖；`备用` = 契约面或未来特性信号源，当前未用；`认知` = 验证过的行为差异或不采用的决策记录
+  - 本项目引擎自身出现版本分化、能力需要性随引擎版本不同时，**另维护一张「能力 × 引入版本」表**（哪个引擎版本引入/移除对该能力的需要），不在本表混记
+- **新增能力行默认填「未测」**；追溯测试随时可做（`workflow_dispatch` 指定老版本跑 CI + 人工批测交互语义），但上游发行资产可回装无永久承诺，追溯宜早
+
+### 6.3 CI 覆盖边界（谁测什么）
+
+- **CI 机测面（push/PR/cron 全部 job）**：headless 下 hook 被拉起 + allow 裁决流转——mock 单发固定 `echo`、引擎默认规则 allow，断言探针 dump（claude/crush）或 `decisions.jsonl`（zcode）
+- **不在 CI 内**：confirm 弹窗（人工性本质不可机测）、fail-open、`updated_input`、超时、模式交叉、zcode config 轨（信任门 headless 不可首授）——由人工批 1 / 专项实验维护
+- deny 路径**可以**机测（规则侧把 `echo` 设 deny 即可无 UI 断言），未立项，待拍板
