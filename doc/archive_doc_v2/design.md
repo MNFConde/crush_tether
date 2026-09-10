@@ -377,7 +377,7 @@ pub trait Channel {
 - hook 加载双轨（2026-09-10 定性）：
   - **插件轨**（交付形态）：marketplace 安装 + 会话重启即武装，**无信任门**；headless `-p` 下实测 hook 照常拉起、引擎裁决落盘。
   - **config 轨**（测试/实验用）：工作区 `.zcode/config.json` → `hooks.enabled:true` + **`events.<Event>`** 声明（注意形状与插件 envelope 不同，顶层事件键写错仅 `config.file.invalid` 日志）；须 Desktop App UI 批准**工作区信任门**（trust 按 工作区+声明 digest 持久化于 `~/.zcode/security/workspace-hook-trust-v1.json`，[更正登记](#更正登记对既有定稿) 21）——headless CLI 无宿主审查流，**不可首授**。
-- headless：`-p/--prompt` 非交互形态存在（App 内嵌 CLI `resources/glm/zcode.cjs`，版本轨道与 App 号独立）；模型后端走 `~/.zcode/cli/config.json` 的 `provider.<id>.options` + `model.main`（字符串 `"provider/model"`）。三档/`updated_input`/超时的 headless 全轴未测（[test-and-ci.md §5](test-and-ci.md#5-测试规划与挂账)）。
+- headless：`-p/--prompt` 非交互形态存在（App 内嵌 CLI `resources/glm/zcode.cjs`，版本轨道与 App 号独立）；模型后端走 `~/.zcode/cli/config.json` 的 `provider.<id>.options` + `model.main`（字符串 `"provider/model"`）。三档/`updated_input`/超时的 headless 全轴未测（矩阵 §5）。
 - 原生模式 × hook（确认/计划模式）实测定稿见矩阵 §1.3；hook 评估先于原生权限并可覆盖 yolo（346 行）。
 
 #### Hook 接入失效模式与保障边界（定稿）
@@ -389,7 +389,7 @@ hook 接入是权限门的「最后一米」——管线内部的 fail-safe 再�
 | # | 失效模式 | 兜底层 | 说明与验证 |
 |---|---|---|---|
 | 1 | 配置文件 hook 默认禁用被忘开（zcode 配置文件形态特有，须显式 `hooks.enabled: true` 才跑） | A | 插件贡献的 hook 自动启用 hook runner（zcode 配置指南核实）。验证：M5.3 探针「插件分发实际触发」（含启用路径）。 |
-| 2 | hook 二进制路径失效 / 被卸载（hook 进程根本起不来） | **C（部署验收实测）** | **2026-09-06 zcode 实测（严格范围：进程已启动但以非 2 退出码结束 → agent 侧 fail-open（放行））**；「路径不存在 / 进程根本起不来」未直接实测，推断走同一错误处理分支（fail-open），随 M7 前置正式插件验证时一并确认——agent 不兜底，我方 fail-safe 只覆盖「进程起来后」的失效；因此「二进制已安装 + 路径可达」是部署必查项，且部署验收必须实测 hook 确实触发（探针方法见 [test-and-ci.md §6](test-and-ci.md#6-探针与工具设计)，参考实现 = `script/hook_probe.py`，M7.2）。**2026-09-09 补（M7.3，次日晚更正）**：headless（`claude -p`）hooks 执行为**条件性**——受灰度状态（GrowthBook flag 冷/热）影响，使能后 headless 全语义正常（含 timeout/放行），冷窗口内静默缺席；初版「整体不加载」结论因误信注册表日志计数（实际执行时仍打印 0）被受控重测推翻——hook 执行判定以 dump 物理副作用 + `Slow PreToolUse hooks` 行为准。部署验收实测触发的要求不变。详见 `doc/agent-compat-matrix.md` headless 节。 |
+| 2 | hook 二进制路径失效 / 被卸载（hook 进程根本起不来） | **C（部署验收实测）** | **2026-09-06 zcode 实测（严格范围：进程已启动但以非 2 退出码结束 → agent 侧 fail-open（放行））**；「路径不存在 / 进程根本起不来」未直接实测，推断走同一错误处理分支（fail-open），随 M7 前置正式插件验证时一并确认——agent 不兜底，我方 fail-safe 只覆盖「进程起来后」的失效；因此「二进制已安装 + 路径可达」是部署必查项，且部署验收必须实测 hook 确实触发（探针方法见[hook 探针方法（定稿）](#hook-探针方法定稿)，参考实现 = `script/hook_probe.py`，M7.2）。**2026-09-09 补（M7.3，次日晚更正）**：headless（`claude -p`）hooks 执行为**条件性**——受灰度状态（GrowthBook flag 冷/热）影响，使能后 headless 全语义正常（含 timeout/放行），冷窗口内静默缺席；初版「整体不加载」结论因误信注册表日志计数（实际执行时仍打印 0）被受控重测推翻——hook 执行判定以 dump 物理副作用 + `Slow PreToolUse hooks` 行为准。部署验收实测触发的要求不变。详见 `doc/agent-compat-matrix.md` headless 节。 |
 | 3 | hook 进程已拉起，但内部崩溃 / 超时 / serve 端点不可达 | B | fail-safe confirm（裁决前任何异常落 confirm）+ connect-or-spawn 降级（serve 不可达 → 本进程跑全量管线，绝不无裁决放行）。既有单测与契约测试覆盖（M4.1、P1 起）。 |
 | 4 | Crush 类「配置即生效、无启用门槛」形态的静默失效（配错路径 / 拼写错，无任何机制提醒） | C | 无机制可堵，部署验收实测触发是唯一覆盖：M5.2 契约用例集（实现层）+ 部署后实测 hook 确实触发。 |
 | 5 | 用户手动禁用插件 / 删除配置 | — | 信任边界，不设防，如实声明。 |
@@ -398,7 +398,15 @@ hook 接入是权限门的「最后一米」——管线内部的 fail-safe 再�
 
 #### hook 探针方法（定稿）
 
-> 本节已迁 [test-and-ci.md §6 探针与工具设计](test-and-ci.md#6-探针与工具设计)（2026-09-11 测试设计独立成档：测试**结果**在 [agent-compat-matrix.md](agent-compat-matrix.md)，测试**方法与工具设计**在 [test-and-ci.md](test-and-ci.md)）。
+部署验收与新 agent 接入对照表都要实测「hook 真的被拉起来、裁决真的被采纳」，探针是与 agent 无关的标准方法。**方法论语言无关**——示例实现用过的解释器只是当时本机可用工具的选择，不是依赖：
+
+1. **dump wrapper**：hook 注册一个 wrapper 进程（任何解释器/语言均可），把 stdin 载荷原样落盘（JSONL 追加），再原样转发给 `crush-tether hook --agent <slug>` 并回传其 stdout 与退出码——观测到的是 agent 真实下发的载荷与我方引擎的原话裁决；
+2. **控制文件切模式**：wrapper 每次调用读小控制文件决定行为（如 perm 回包内容 / 退出码覆写 / fail 模拟退出码），换实验不改注册、不重启会话；
+3. **来源标记**：多注册来源（配置文件轨 vs 插件轨）各打标记进 dump，确认哪一层真的在触发（zcode 实测：插件轨触发、配置轨未生效，即靠此法区分）；
+4. **exit / close 双事件观测**：排查「hook 挂死」类问题先区分**进程退出**与**输出流关闭**两个时刻（node 下即 `exit` vs `close` 事件）——句柄被孙进程继承时二者分离，这是 M4.1 句柄继承洞（更正登记 20）的定位手法；
+5. **idle 缩放实验**：把 serve 的 `--idle-exit` 调小，若某等待时长同步缩短，即证明持有者是 serve 的存活期——因果坐实而不靠猜。
+
+注册面要点：zcode 插件 `hooks/hooks.json` 用 `type:"process"`（`command`/`args`/`timeoutMs` 三字段严格，勿混入 `statusMessage`）+ `${ZCODE_PLUGIN_ROOT}` 相对路径；dump/控制目录用参数传入而非写死。参考实现：`script/hook_probe.py`（M7.2 已落地，python 零第三方依赖，经 `uv run python` 调用；探针目录与引擎全参数化——`--probe-dir`/`HOOK_PROBE_DIR`、`--engine`/`CRUSH_TETHER_EXE`，用法见 `script/scripts.md`）。
 
 #### 插件分发形态与装载守卫（分析登记，2026-09-08，未定稿）
 

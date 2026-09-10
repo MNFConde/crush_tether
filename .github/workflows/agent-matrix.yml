@@ -1,4 +1,5 @@
-# M7.3 agent 兼容矩阵 CI（doc/agent-compat-matrix.md「测试方法」节定稿的三层实现）
+# M7.3 agent 兼容矩阵 CI（测试方法与三层触发的定稿见 doc/test-and-ci.md §1；
+# 测试结果在 doc/agent-compat-matrix.md）
 #
 # 正向断言：headless（claude -p / crush run）+ 本地 mock LLM 驱动一轮 tool_use，
 # 断言探针 dump 出现 = 「hook 被拉起且裁决流转」。零凭证零费用（mock 后端），

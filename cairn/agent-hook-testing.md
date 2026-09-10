@@ -1,18 +1,18 @@
 ---
 type: project_topic
 status: active
-summary: M7.3 agent hook 兼容性测试的方法论与过程沉淀：判定准则（hook 执行以探针 dump 物理副作用为准，日志计数与 tool result 回执不可尽信）、mock 四坑（schema 必填字段/工具名环境差异/OpenAI SSE/SSE input 对象校验）、灰度可官方 env 钉死（DISABLE_GROWTHBOOK）、crush run 悬案插桩排查全记录（三假设判据/五处插桩/证据代码位置）与四次更正史链条（含 zcode headless 形态与插件轨/config 轨信任门分化定性）。确定性结论的现役事实在 doc/agent-compat-matrix.md。
+summary: M7.3 agent hook 兼容性测试的方法论与过程沉淀：判定准则（hook 执行以探针 dump 物理副作用为准，日志计数与 tool result 回执不可尽信）、mock 四坑（schema 必填字段/工具名环境差异/OpenAI SSE/SSE input 对象校验）、灰度可官方 env 钉死（DISABLE_GROWTHBOOK）、crush run 悬案插桩排查全记录（三假设判据/五处插桩/证据代码位置）与四次更正史链条（含 zcode headless 形态与插件轨/config 轨信任门分化定性）。确定性结论的现役事实在 doc/agent-compat-matrix.md，测试方法与挂账在 doc/test-and-ci.md。
 tags: [crush_tether, hook, testing, mock, claude-code, crush, zcode, headless, methodology]
 contains: [lesson, decision, pattern]
 created: 2026-09-09
-updated: 2026-09-10
-related: [doc/agent-compat-matrix.md, doc/design.md, script/mock_llm.py, script/hook_probe.py]
+updated: 2026-09-11
+related: [doc/agent-compat-matrix.md, doc/test-and-ci.md, doc/design.md, script/mock_llm.py, script/hook_probe.py]
 authoring_mode: ai_generated
 ---
 
 # agent hook 兼容性测试：方法论、教训与排查记录
 
-> 确定性事实的现役版本（矩阵/覆盖口径/配方）在 `doc/agent-compat-matrix.md`；本文沉淀**过程史、更正链条与可复用方法论**。逐日流水见 LOG，里程碑口径见 ROADMAP M7.3 条。
+> 确定性事实的现役版本（矩阵/覆盖口径）在 `doc/agent-compat-matrix.md`，测试方法/CI 设计/挂账在 `doc/test-and-ci.md`；本文沉淀**过程史、更正链条与可复用方法论**。逐日流水见 LOG，里程碑口径见 ROADMAP M7.3 条。
 
 ## 四次更正史（链条摘要）
 
@@ -32,7 +32,7 @@ authoring_mode: ai_generated
 - **hook 两轨 headless 分化**（本日核心定性）：
   - **插件轨 ✅**：`enabledPlugins` 开启后 `-p` 下 hook 正常拉起，`decisions.jsonl` 落引擎裁决（`echo mock-hook-test → allow`），全程零 UI 零交互——CI 可自动化路径。
   - **config 轨 ❌（headless）**：项目 hooks 声明形状是 `hooks.events.<Event>`（非插件 envelope 的 `hooks.<Event>`，写错仅 `config.file.invalid` 日志）；解析后必挂 `config_project_hooks_pending_trust`，信任由 capable host（Desktop App UI 审查流）授予并按 工作区+声明 digest 持久化于 `~/.zcode/security/workspace-hook-trust-v1.json`；headless CLI 无宿主审查流 → `workspace_hooks_require_trust_capable_host`/`workspace_hooks_feature_disabled`，**不可首授**（已信工作区可复用记录，但声明变 digest 即失效）。
-- **入 CI 判定**：能力具备、卡发行——npm 无官方包（`zcode-app-cli`、`zcode-acp-server` 为第三方，后者佐证 headless 生态）；本机仅证 win32-x64 内嵌 bundle；Linux 渠道与插件无人值守 provisioning（`~/.zcode/cli/plugins` 文件级装配）挂矩阵 §5 待办。
+- **入 CI 判定**：能力具备、卡发行——npm 无官方包（`zcode-app-cli`、`zcode-acp-server` 为第三方，后者佐证 headless 生态）；本机仅证 win32-x64 内嵌 bundle；Linux 渠道与插件无人值守 provisioning（`~/.zcode/cli/plugins` 文件级装配）挂 doc/test-and-ci.md §5 待办。
 
 ## 判定准则（lessons）
 

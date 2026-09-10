@@ -3,7 +3,7 @@
 
 固定一轮 tool_use（echo mock-hook-test），见到工具结果回 end_turn。stream（SSE）与
 非流式都支持。hook 链路是 agent 本地行为、与 LLM 无关，故 mock 驱动即可零凭证走完
-agent 对话与 hook 全链（doc/agent-compat-matrix.md「测试方法」节）。
+agent 对话与 hook 全链（doc/test-and-ci.md「测试方法」节）。
 
 要点（三坑实录，勿回退）：
 - 工具参数必须含 agent schema 的全部必填字段（Bash 的 description 缺失会被
