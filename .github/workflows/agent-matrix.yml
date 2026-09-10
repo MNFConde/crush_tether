@@ -1,8 +1,10 @@
 # M7.3 agent 兼容矩阵 CI（测试方法与三层触发的定稿见 doc/test-and-ci.md §1；
 # 测试结果在 doc/agent-compat-matrix.md）
 #
-# 正向断言：headless（claude -p / crush run）+ 本地 mock LLM 驱动一轮 tool_use，
-# 断言探针 dump 出现 = 「hook 被拉起且裁决流转」。零凭证零费用（mock 后端），
+# 正向断言：headless（claude -p / crush run / zcode -p）+ 本地 mock LLM 驱动一轮
+# tool_use，五 job 全部串联真引擎——探针 bash 角色转发 `crush-tether hook`（claude/
+# crush）或正式插件直挂引擎（zcode），断言 `.crush-tether/decisions.jsonl` 落 allow
+# 裁决 = 「hook 被拉起 + 引擎裁决 + agent 采纳」全链。零凭证零费用（mock 后端），
 # 行为确定（DISABLE_GROWTHBOOK=1 钉死 claude 灰度态；crush 无灰度机制）。
 #
 # 层次：
@@ -27,14 +29,14 @@ on:
   push:
     branches: [master]
     paths:
-      - "src/channel/**"
+      - "src/**"
       - "plugin/**"
       - "script/hook_probe.py"
       - "script/mock_llm.py"
       - ".github/workflows/agent-matrix.yml"
   pull_request:
     paths:
-      - "src/channel/**"
+      - "src/**"
       - "plugin/**"
       - "script/hook_probe.py"
       - "script/mock_llm.py"
@@ -86,6 +88,9 @@ jobs:
       - name: Install claude-code@${{ steps.ver.outputs.spec }}
         run: npm install -g "@anthropic-ai/claude-code@${{ steps.ver.outputs.spec }}"
 
+      - name: Install engine (crush-tether) to PATH
+        run: cargo install --path . --locked
+
       - name: Start mock LLM backend
         run: |
           python3 script/mock_llm.py --log "$PWD/mock-requests.jsonl" &
@@ -110,7 +115,7 @@ jobs:
               "PreToolUse": [
                 { "matcher": "Bash|PowerShell",
                   "hooks": [{ "type": "command",
-                    "command": "python3 $PWD/script/hook_probe.py perm --agent claudecode --source ci --probe-dir $PWD/.hook-probe",
+                    "command": "python3 $PWD/script/hook_probe.py bash --agent claudecode --source ci --probe-dir $PWD/.hook-probe",
                     "timeout": 30 }] }
               ],
               "PostToolUse": [
@@ -128,13 +133,15 @@ jobs:
           DISABLE_GROWTHBOOK=1 claude -p "请运行命令: echo agent-matrix-smoke" \
             --settings ci-settings.json
 
-      - name: Assert probe dump exists (positive sentinel)
+      - name: Assert engine decision logged (positive sentinel)
         run: |
           lines=$(wc -l < .hook-probe/dump.jsonl)
           echo "probe dump lines: $lines"
           test "$lines" -ge 1
-          # dump 行的 stdin 是嵌套转义 JSON，键名不带引号匹配
           grep -q 'tool_name' .hook-probe/dump.jsonl
+          test -f .crush-tether/decisions.jsonl
+          grep -q '"command":"echo mock-hook-test"' .crush-tether/decisions.jsonl
+          grep -q '"decision":"allow"' .crush-tether/decisions.jsonl
 
       - name: Upload artifacts
         if: always()
@@ -143,6 +150,7 @@ jobs:
           name: claude-code-probe-dump
           path: |
             .hook-probe/dump.jsonl
+            .crush-tether/decisions.jsonl
             mock-requests.jsonl
           if-no-files-found: warn
 
@@ -176,6 +184,9 @@ jobs:
           sudo install "$bin" /usr/local/bin/crush
           crush --version
 
+      - name: Install engine (crush-tether) to PATH
+        run: cargo install --path . --locked
+
       - name: Start mock LLM backend
         run: |
           python3 script/mock_llm.py --log "$PWD/mock-requests.jsonl" &
@@ -202,7 +213,7 @@ jobs:
             "hooks": {
               "PreToolUse": [
                 { "name": "hook-probe",
-                  "command": "python3 $PWD/script/hook_probe.py perm --agent crush --source ci --probe-dir $PWD/.hook-probe",
+                  "command": "python3 $PWD/script/hook_probe.py bash --agent crush --source ci --probe-dir $PWD/.hook-probe",
                   "timeout": 30 }
               ]
             }
@@ -212,11 +223,14 @@ jobs:
       - name: Headless run (mock-driven turn)
         run: crush run -m mockspike/mock-model "agent-matrix smoke"
 
-      - name: Assert probe dump exists (positive sentinel)
+      - name: Assert engine decision logged (positive sentinel)
         run: |
           lines=$(wc -l < .hook-probe/dump.jsonl)
           echo "probe dump lines: $lines"
           test "$lines" -ge 1
+          test -f .crush-tether/decisions.jsonl
+          grep -q '"command":"echo mock-hook-test"' .crush-tether/decisions.jsonl
+          grep -q '"decision":"allow"' .crush-tether/decisions.jsonl
 
       - name: Upload artifacts
         if: always()
@@ -225,6 +239,7 @@ jobs:
           name: crush-probe-dump
           path: |
             .hook-probe/dump.jsonl
+            .crush-tether/decisions.jsonl
             mock-requests.jsonl
           if-no-files-found: warn
 
@@ -253,6 +268,9 @@ jobs:
       - name: Install claude-code@${{ steps.ver.outputs.spec }}
         run: npm install -g "@anthropic-ai/claude-code@${{ steps.ver.outputs.spec }}"
 
+      - name: Install engine (crush-tether) to PATH
+        run: cargo install --path . --locked
+
       - name: Start mock LLM backend
         run: |
           python script/mock_llm.py --log mock-requests.jsonl &
@@ -278,7 +296,7 @@ jobs:
               "PreToolUse": [
                 { "matcher": "Bash|PowerShell",
                   "hooks": [{ "type": "command",
-                    "command": "python ${ws}/script/hook_probe.py perm --agent claudecode --source ci --probe-dir ${ws}/.hook-probe",
+                    "command": "python ${ws}/script/hook_probe.py bash --agent claudecode --source ci --probe-dir ${ws}/.hook-probe",
                     "timeout": 30 }] }
               ],
               "PostToolUse": [
@@ -296,12 +314,15 @@ jobs:
           DISABLE_GROWTHBOOK=1 claude -p "Run exactly: echo agent-matrix-smoke" \
             --settings ci-settings.json
 
-      - name: Assert probe dump exists (positive sentinel)
+      - name: Assert engine decision logged (positive sentinel)
         run: |
           lines=$(wc -l < .hook-probe/dump.jsonl)
           echo "probe dump lines: $lines"
           test "$lines" -ge 1
           grep -q 'tool_name' .hook-probe/dump.jsonl
+          test -f .crush-tether/decisions.jsonl
+          grep -q '"command":"echo mock-hook-test"' .crush-tether/decisions.jsonl
+          grep -q '"decision":"allow"' .crush-tether/decisions.jsonl
 
       - name: Upload artifacts
         if: always()
@@ -310,6 +331,7 @@ jobs:
           name: claude-code-probe-dump-windows
           path: |
             .hook-probe/dump.jsonl
+            .crush-tether/decisions.jsonl
             mock-requests.jsonl
           if-no-files-found: warn
 
@@ -351,6 +373,9 @@ jobs:
       - name: Check crush on PATH
         run: crush --version
 
+      - name: Install engine (crush-tether) to PATH
+        run: cargo install --path . --locked
+
       - name: Start mock LLM backend
         run: |
           python script/mock_llm.py --log mock-requests.jsonl &
@@ -378,7 +403,7 @@ jobs:
             "hooks": {
               "PreToolUse": [
                 { "name": "hook-probe",
-                  "command": "python ${ws}/script/hook_probe.py perm --agent crush --source ci --probe-dir ${ws}/.hook-probe",
+                  "command": "python ${ws}/script/hook_probe.py bash --agent crush --source ci --probe-dir ${ws}/.hook-probe",
                   "timeout": 30 }
               ]
             }
@@ -388,11 +413,14 @@ jobs:
       - name: Headless run (mock-driven turn)
         run: crush run -m mockspike/mock-model "agent-matrix smoke"
 
-      - name: Assert probe dump exists (positive sentinel)
+      - name: Assert engine decision logged (positive sentinel)
         run: |
           lines=$(wc -l < .hook-probe/dump.jsonl)
           echo "probe dump lines: $lines"
           test "$lines" -ge 1
+          test -f .crush-tether/decisions.jsonl
+          grep -q '"command":"echo mock-hook-test"' .crush-tether/decisions.jsonl
+          grep -q '"decision":"allow"' .crush-tether/decisions.jsonl
 
       - name: Upload artifacts
         if: always()
@@ -401,6 +429,7 @@ jobs:
           name: crush-probe-dump-windows
           path: |
             .hook-probe/dump.jsonl
+            .crush-tether/decisions.jsonl
             mock-requests.jsonl
           if-no-files-found: warn
 
