@@ -1,7 +1,7 @@
 # agent 兼容性矩阵（M7.3）
 
 > **定位**：只记确定性事实——兼容性矩阵、版本测试结果（带更新时间）、测试方法、agent 差异与规避。排查过程、错误结论与更正史一律在 cairn/（LOG、ROADMAP、[agent-hook-testing](../cairn/agent-hook-testing.md)），不进本文档。
-> **覆盖口径**：交互全语义（三档弹窗 / `updated_input` / halt / fail-open / 超时）= Windows 手工会话（锚点 0 人工批测）；headless hook 冒烟（正向断言）= Linux CI runner（pinned 每次 push/PR、latest 每周 cron）+ Windows 本机预演。除 §4 另注明外，结论均在 Windows 10 x64 实测。
+> **覆盖口径**：交互全语义（三档弹窗 / `updated_input` / halt / fail-open / 超时）= Windows 手工会话（锚点 0 人工批测）；headless hook 冒烟（正向断言）= CI runner（ubuntu 双 job：claude/crush；windows 三 job：claude/crush/zcode，pinned 每次 push/PR、latest 每周 cron）+ Windows 本机预演。除 §4 另注明外，结论均在 Windows 10 x64 实测。
 
 ## 1. 兼容性矩阵
 
@@ -17,7 +17,7 @@
 3. 仅一个 agent 有新版时，新行其它 agent 格留空
 4. latest 未实测不记录
 5. pinned 不通过 = 「我方破坏」，latest 不通过 = 「上游信号」。
-6. zcode 未入 CI：headless 形态已证实（App 内嵌 CLI `-p`，见 §1.2），卡点在**发行**——无官方独立 CI 可装渠道（npm 无官方包，本机为 Desktop App 内嵌 bundle）；入 CI 前提清单见 §5
+6. zcode 已入 CI（仅 windows）：App 内嵌 CLI 为 win32-x64 bundle，版本从 scoop extras bucket manifest 解析（latest）+ CDN 直链下载，7z 两步解包取 `zcode.cjs`（不装 App）；hook 走**插件轨**无人值守装配（`known_marketplaces`/`installed_plugins`/`cache` 拷贝 + `enabledPlugins`，本机 spike 验证无校验障碍）；hook 装配的前提项（工作区信任门）不适用插件轨。Linux zcode 内测中，公测后补 ubuntu job
 
 ### 1.2 当前 pinned 能力快照（锚点 0 实测）
 
@@ -68,6 +68,9 @@
 | 2026-09-10 | zcode | 3.11.2 | 人工（插件链路，确认模式） | ✅ | 确认模式 × hook 三值：allow 跳过原生弹窗（touch 变更类实证）/ ask 弹窗批准 / deny 直接阻断；反证实验（弹窗点拒绝 → agent 收 Denied）证实弹窗人工性 |
 | 2026-09-10 | zcode | 3.11.2 | 人工（插件链路，计划模式） | ✅ | 计划模式 × hook：照常评估；allow 只读放行；只读分类器短路 ask（不弹窗）；agent 层硬约束先于 hook |
 | 2026-09-10 | zcode | 0.16.5 CLI（App 3.11.2 内嵌） | headless `-p`（mock 驱动） | ✅ | headless 形态证实（**更正**「无 headless 形态」旧结论）；插件轨 hook 拉起 + 引擎裁决落盘实证；config 轨事件声明在 `hooks.events.*`，工作区信任门 headless 不可首授（见 §4） |
+| 2026-09-10 | claude-code | 2.1.263 | CI 首跑（windows，pinned） | ✅ | windows runner 首证：matcher `Bash\|PowerShell` + mock 自适应覆盖 Windows 工具面 |
+| 2026-09-10 | crush | 0.92.0 | CI 首跑（windows，pinned） | ✅ | zip 资产带版本嵌套目录（crush.exe 需归位 PATH 根，首跑 127 修 68d1055） |
+| 2026-09-10 | zcode | 3.11.2（内嵌 CLI 0.16.5） | CI 首跑（windows，pinned） | ✅ | **zcode 首次入 CI**：CDN 直链 + 7z 解包取内嵌 CLI + 插件无人值守装配 + mock 驱动 headless，decisions.jsonl allow 断言通过 |
 
 ## 3. 测试如何进行
 
@@ -77,11 +80,12 @@ mock LLM 后端驱动 agent 完成一轮固定 tool_use（`echo mock-hook-test`�
 
 ### 三层触发（[.github/workflows/agent-matrix.yml](../.github/workflows/agent-matrix.yml)）
 
-- **push/PR**：pinned smoke + `paths` 过滤 agent 耦合面（`src/channel/`、`plugin/`、探针/mock 脚本）——红灯归因「我方破坏」
+- **push/PR**：pinned smoke（ubuntu 双 job + windows 三 job）+ `paths` 过滤 agent 耦合面（`src/channel/`、`plugin/`、探针/mock 脚本）——红灯归因「我方破坏」
 - **weekly cron**：latest smoke——上游破坏性变更哨兵（红灯 = 上游信号）
 - **workflow_dispatch**：手动指定版本回溯/排查
-- **明确不做**：交互 TUI 自动化（脆弱，维护成本远超每版本 5 分钟人工）；agent SDK headless API（不走同一 hooks 路径）
-- **后置**：协议回放（dump 样本驱动引擎）、bot commit 矩阵机器层（测完自动改表提交，`[skip ci]`）
+- **zcode windows job 配方**：extras bucket manifest 解析版本（pinned = `ZCODE_VERSION_PINNED`，latest = cron/dispatch）→ CDN 直链下载 NSIS 安装器 → 7z 两步解包取 `resources/glm/zcode.cjs`（只需 node，不装 App）→ `cargo install --path .` 供插件轨 hook 命令 → 插件无人值守装配四件套 + `enabledPlugins` 置真 → mock 驱动 `-p` → 断言 `decisions.jsonl` 落 allow 裁决
+- **明确不做**：交互 TUI 自动化（脆弱，维护成本远超每版本 5 分钟人工）；agent SDK headless API（不走同一 hooks 路径）；zcode config 轨 CI 化（信任门 headless 不可首授）
+- **后置**：协议回放（dump 样本驱动引擎）、bot commit 矩阵机器层（测完自动改表提交，`[skip ci]`）、zcode ubuntu job（等 Linux 公测）
 
 ### 本地复现
 
@@ -126,4 +130,5 @@ mock LLM 后端驱动 agent 完成一轮固定 tool_use（`echo mock-hook-test`�
 - claude-code 非默认 permission_mode（plan/bypassPermissions 交互）× hook 交叉
 - crush 原生确认/计划模式 × hook 交叉（yolo 语义已有源码级核对，模式交叉未实测）
 - zcode headless 全轴：三档语义（现 mock 只发固定 `echo`，deny/confirm 需扩展 mock 或换规则）、`updated_input`、模式交叉在 headless 形态下的表现
-- zcode 入 CI 前提：Linux 发行渠道（现仅证 win32-x64 内嵌 bundle，npm 无官方包）；插件无人值守 provisioning（`~/.zcode/cli/plugins` 目录 + `enabledPlugins` 文件级装配，未验证）
+- zcode ubuntu job：Linux 版内测中，公测后补（发行渠道落地即可平移 windows job 配方）
+- zcode cron latest 哨兵的首个自动触发尚待观察（每周一 UTC）

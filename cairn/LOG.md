@@ -2,6 +2,14 @@
 
 This file records substantive progress in reverse-chronological order — newest entry at the top, right below this line. Keep each entry short — summary and pointer only; conclusions settle into `cairn/<topic>.md`.
 
+## 2026-09-10 深夜Ⅱ · windows 矩阵落地：zcode 首次入 CI（插件无人值守装配 spike + CI 二跑全绿）
+
+- **spike 先行**：本机清空插件存储 → 机械重建四件套（`known_marketplaces.json` directory 源 + `marketplaces/` 镜像 + `installed_plugins.json` + `cache/<mkt>/<plugin>/<ver>/` 拷贝）+ `enabledPlugins` 置真 → `plugins list` 识别（hooks: 1）→ headless `-p` hook 拉起、`decisions.jsonl` 落 allow——**无 transaction/digest 校验障碍**，无人值守装配路径坐实；测后备份完整复原。
+- **workflow**：agent-matrix.yml 增 claude-win / crush-win / zcode-win 三 job（`shell: bash` + `python` 命令名 + curl 探活替换 `/dev/tcp` + `cygpath -m` 原生路径）。zcode 配方 = extras bucket manifest 解析版本（cron latest 哨兵的白送版本发现+hash）→ CDN 直链 NSIS → 7z 两步解包取 `zcode.cjs`（node 22 驱动，不装 App）→ `cargo install --path .` → 无人值守装配 → mock 驱动 `-p` → 断言 decisions.jsonl。
+- **首跑 4/5 绿**：zcode/claude-win 一次过；crush-win 挂 `crush.exe` exit 127——zip 资产带版本嵌套目录，find 归位 PATH 根修复（68d1055）；**二跑五 job 全绿**。
+- Linux zcode 内测中，公测后补 ubuntu job（windows 配方可平移）；cron latest 哨兵首触待观察（每周一 UTC）。
+- Details: `.github/workflows/agent-matrix.yml`（头注释即配方）、`doc/agent-compat-matrix.md`（注6/§2/§3/§5）、`cairn/ROADMAP.md` M7.3。
+
 ## 2026-09-10 深夜 · zcode headless 形态证实（更正「无 headless」）+ 插件轨 headless 实证 + 入 CI 卡点查明
 
 - **更正**：矩阵旧结论「zcode 无 headless 形态」不成立——App 内嵌 CLI（`resources/glm/zcode.cjs`，版本轨道 0.16.5）有 `-p/--prompt` 非交互一次性形态；此前结论成因 = 入口不在 PATH、只探了 `zcode` 命令不存在。
