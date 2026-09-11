@@ -2,7 +2,14 @@
 
 This file records substantive progress in reverse-chronological order — newest entry at the top, right below this line. Keep each entry short — summary and pointer only; conclusions settle into `cairn/<topic>.md`.
 
-## 2026-09-10 深夜Ⅱ · windows 矩阵落地：zcode 首次入 CI（插件无人值守装配 spike + CI 二跑全绿）
+## 2026-09-11 · 测试设计独立成档 + 五 job 串联化 + 无头场景组首测(fail-open 形态分化定性)
+
+- **文档重组**:矩阵瘦身只留结果(§3/§4/§5/§6.3 迁出),新建 `doc/test-and-ci.md` 承载测试方法/CI 设计/差异规避/覆盖边界/分类法/挂账/探针设计(design.md 探针节同迁);doc/ 重组按约定快照 archive_doc_v2。
+- **CI 升级**:五 job 冒烟**串联化**(claude/crush 探针换 bash 角色转发真引擎,断言升级 decisions.jsonl 落 allow,补契约漂移守护);新增场景组 deny/fail-open/rewrite(探针 perm 直回信封,引擎不在场,物理副作用断言 `ci-exec.txt`;双 mock 实例——冒烟命令须引擎放行[带写实测裁 confirm]、场景命令只求留痕);mock 加 `--cmd`。
+- **fail-open 形态分化(核心定性)**:claude 交互放行/无头**拒绝**(`permission_denials` 回执,两次复现);crush/zcode 无头与交互一致放行——「能力×形态」二维教训的又一实例。deny/rewrite 三家无头与交互一致。
+- **附带定性**:zcode 无头对 confirm=拒绝(无人批准保守拒);**zcode spawn hook 精简 env**——`uv run` 静默失效(uv 找不到管理 python,spawn 可达性用空参快跑二分定位),hook 须绝对路径解释器;排障中插件装配增量切换+备份复原(user 环境含 9 官方插件,不可整写)。
+- Details: `doc/test-and-ci.md`(§1 场景组/人工流程、§2 差异 12-13、§3 覆盖边界+归因树、§4 分类法定稿)、`doc/agent-compat-matrix.md`(§1.2 fail-open 行/§2)、`script/ci_scenario.sh`、`script/mock_llm.py`。
+
 
 - **spike 先行**：本机清空插件存储 → 机械重建四件套（`known_marketplaces.json` directory 源 + `marketplaces/` 镜像 + `installed_plugins.json` + `cache/<mkt>/<plugin>/<ver>/` 拷贝）+ `enabledPlugins` 置真 → `plugins list` 识别（hooks: 1）→ headless `-p` hook 拉起、`decisions.jsonl` 落 allow——**无 transaction/digest 校验障碍**，无人值守装配路径坐实；测后备份完整复原。
 - **workflow**：agent-matrix.yml 增 claude-win / crush-win / zcode-win 三 job（`shell: bash` + `python` 命令名 + curl 探活替换 `/dev/tcp` + `cygpath -m` 原生路径）。zcode 配方 = extras bucket manifest 解析版本（cron latest 哨兵的白送版本发现+hash）→ CDN 直链 NSIS → 7z 两步解包取 `zcode.cjs`（node 22 驱动，不装 App）→ `cargo install --path .` → 无人值守装配 → mock 驱动 `-p` → 断言 decisions.jsonl。

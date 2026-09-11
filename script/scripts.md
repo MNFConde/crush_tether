@@ -7,7 +7,8 @@
 | [check-links.py](check-links.py) | 校验 doc/ 与 cairn/ 各 Markdown 的跨文件与站内锚点引用一致性（平移自 mdor） | `uv run --directory script check-links.py` |
 | [check-commit-msg.py](check-commit-msg.py) | 校验 git 提交信息格式（Conventional Commits），由 `.githooks/commit-msg` 调用（平移自 mdor） | `uv run --directory script check-commit-msg.py <提交信息文件>` |
 | [hook_probe.py](hook_probe.py) | hook 探针（design.md「hook 探针方法（定稿）」的 python 参考实现，M7.2）：dump 载荷 / 转发真实引擎 / 控制文件切模式，注册进任意项目实测 hook 触发 | `uv run python hook_probe.py <bash\|perm\|post\|fail>`（可带 `--probe-dir`/`--engine` 等，见下） |
-| [mock_llm.py](mock_llm.py) | 双协议 LLM mock（agent-matrix CI 后端，M7.3）：驱动 agent 零凭证走完对话与 hook 全链 | `uv run --directory script mock_llm.py [--port 8787] [--log 请求日志.jsonl]` |
+| [mock_llm.py](mock_llm.py) | 双协议 LLM mock（agent-matrix CI 后端，M7.3）：驱动 agent 零凭证走完对话与 hook 全链 | `uv run --directory script mock_llm.py [--port 8787] [--cmd 命令] [--log 请求日志.jsonl]` |
+| [ci_scenario.sh](ci_scenario.sh) | agent-matrix CI 场景组（deny / fail-open / updated_input）setup/assert 两段式（M7.3） | `bash ci_scenario.sh {setup\|assert} <deny\|failopen\|rewrite> <probe-dir> <agent-slug> [workspace]` |
 
 ## check-links.py
 
@@ -50,3 +51,9 @@
 |---|---|---|---|---|
 | 2026-09-05 | 会话内 `uv run python` + tomllib 校验 design.md 中 TOML 片段合法性 | 草案 v1 文档 TOML 片段验证 | 1 | 待固化 |
 | 2026-09-06 | 同上（rules.toml 默认包 + knowledge.toml 案例片段校验） | 知识库/合并模型修订验证 | 2 | 待固化——再出现 1 次即固化为 check-toml.py |
+
+## ci_scenario.sh
+
+- **作用**：agent-matrix CI 场景组的两段式脚本（bash；设计见 doc/test-and-ci.md「场景组」节）——探针 perm 角色直回控制文件信封（引擎不在场），断言物理副作用 `<workspace>/ci-exec.txt`（场景 mock `--cmd` 发带写命令）。`setup` 清探针目录与工作区痕迹后按场景写控制文件（信封形态按 agent 分支：claudecode/zcode = Claude 式 `hookSpecificOutput`，crush = 顶层 `decision`）；`assert` 校验 dump 有 perm 裁决 + 场景预期——failopen 按 agent 分化（claude 无头 = hook 失联兜底拒绝，crush/zcode = 放行，2026-09-11 定性）
+- **用法**：`bash ci_scenario.sh {setup|assert} <deny|failopen|rewrite> <probe-dir> <agent-slug> [workspace]`（headless 调用与探针注册留在 workflow/调用方，见 agent-matrix.yml 各 job 的「Scenario suite」step）
+- **退出码**：0 = 断言通过；1 = 失败（逐条 `ASSERT FAIL [场景]: 原因`）；2 = 参数错误

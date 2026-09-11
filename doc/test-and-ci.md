@@ -6,7 +6,23 @@
 
 ### 原理
 
-mock LLM 后端驱动 agent 完成一轮固定 tool_use(`echo mock-hook-test`),注册的探针 hook 对该调用落盘 dump——**dump 出现 = hook 被拉起且裁决流转**(正向硬断言)。hook 链路是 agent 本地行为、与 LLM 无关,故 mock 驱动零凭证零费用。探针四角色与控制文件切实验见本文档 §6。
+mock LLM 后端驱动 agent 完成一轮固定 tool_use(命令可配,`--cmd`),注册的探针 hook 对该调用落盘 dump——**dump 出现 = hook 被拉起且裁决流转**(正向硬断言)。hook 链路是 agent 本地行为、与 LLM 无关,故 mock 驱动零凭证零费用。探针四角色与控制文件切实验见本文档 §6。
+
+### 串联冒烟(五 job 同构)
+
+每 job 的正向断言走**真引擎全链**:探针 bash 角色转发 `crush-tether hook`(claude/crush)或正式插件直挂引擎(zcode),断言 `.crush-tether/decisions.jsonl` 落 `echo mock-hook-test → allow` = 「hook 拉起 + 引擎裁决 + agent 采纳」。守护对象是**契约两侧的漂移**(手写 mock 信封 vs 引擎真实产物),每 agent 一条即足,不铺场景。
+
+### 场景组(deny / fail-open / updated_input)
+
+探针 perm 角色直回控制文件信封(**引擎不在场**),断言物理副作用 `ci-exec.txt`(场景 mock `--cmd` 发带写命令 `echo mock-hook-test > ci-exec.txt`;冒烟与场景各一个 mock 实例,8787/8788——冒烟命令须引擎默认规则放行[带写命令实测裁 confirm],场景命令只求留痕,互不牵制):
+
+| 场景 | 控制文件 | 断言(按 agent 分化,2026-09-11 定性) |
+|---|---|---|
+| deny | `perm-out.txt` 回 deny 信封 | 三家一致:文件**不存在**(工具被阻断) |
+| fail-open | `perm-exit.txt`=3(无信封) | **claude:文件不存在**(无头把 hook 失联兜底为拒绝,`permission_denials` 回执);**crush/zcode:文件存在**(放行,与交互一致) |
+| rewrite | `perm-out.txt` 回 allow+改写信封 | 三家一致:文件内容含 `rewritten-marker`(改写命令执行) |
+
+脚本 `script/ci_scenario.sh`(setup/assert 两段式);信封按 agent 分支(claude/zcode = `hookSpecificOutput`,`updatedInput` 全替换须含 schema 全字段;crush = 顶层 `decision`/`updated_input` 浅合并)。首跑红灯语义 = 上游采纳语义漂移或我方信封笔误,人工判读后回填[矩阵 §2](agent-compat-matrix.md#2-版本测试结果记录)。
 
 ### 三层触发([.github/workflows/agent-matrix.yml](../.github/workflows/agent-matrix.yml))
 
@@ -19,23 +35,21 @@ mock LLM 后端驱动 agent 完成一轮固定 tool_use(`echo mock-hook-test`),�
 
 ### 本地复现
 
-`uv run --directory script mock_llm.py [--port 8787] [--log 请求日志.jsonl]` 起后端;hook 注册 = `script/hook_probe.py` 四角色(crush 走项目 `crush.json` 的 providers+hooks;claude 走 `--settings` 文件 env+hooks);判定 = dump 行数与内容。三坑与判定准则见 §2。
+`uv run --directory script mock_llm.py [--port 8787] [--cmd 命令] [--log 请求日志.jsonl]` 起后端;hook 注册 = `script/hook_probe.py` 四角色(crush 走项目 `crush.json` 的 providers+hooks;claude 走 `--settings` 文件 env+hooks);判定 = dump 行数与内容 + decisions.jsonl 增量。三坑与判定准则见 §2。
 
-### 人工批 1 清单(~5 分钟,发版触发)
+本机(Windows)与 CI 的形态差异:本机无 `python` 命令,claude/crush 的 hook command 写 `uv run --directory <script> python …` 可跑(两者经 **shell** 执行,有完整 PATH);**zcode 插件轨 hook 由 zcode 直接 spawn(精简 env),`uv` 类 wrapper 静默失效,须绝对路径解释器**(§2 差异 12)。CI 里 claude/crush 用 `python3`/`python`,zcode 探针插件用运行时探测的 `sys.executable`。
 
-预设注册与控制文件 → 交互会话照单跑:`echo hi`(allow 直通)→ `curl --version`(confirm 弹窗批准后执行)→ `sudo --version`(deny 阻断)→ 控制文件切 exit 3 后任一命令(fail-open 放行)→ 读 dump 断言回填[矩阵 §2](agent-compat-matrix.md#2-版本测试结果记录)。
+### 新版本人工交互测试流程(发版触发,三 agent 共通前置)
 
-### zcode 人工测试流程(无 CI 自动化,每版本照此走)
+前置:`cargo install --path .` 更新引擎;探针注册指向 `script/hook_probe.py`,probe-dir 用仓库内 `.hook-probe/`;判定三件套 = 探针 dump(物理副作用唯一判据,§2 差异 7)+ `.crush-tether/decisions.jsonl` 增量 + 工作区文件变化;测完回填[矩阵 §2](agent-compat-matrix.md#2-版本测试结果记录)一行流水。
 
-1. **前置**:`crush-tether` 在 PATH(`cargo install --path .`,更新引擎后重装);插件安装 = Plugin Management → Discover → `+` → 本地目录选仓库 `plugin/` → 安装 crush-tether → **重启会话**(hook 自动武装,无需信任门)
-2. **headless 冒烟**(可自动化,每版本建议加做):`node <App安装目录>/resources/glm/zcode.cjs -p "<一句驱动 Bash 的指令>"`;模型后端写 `~/.zcode/cli/config.json` 的 `provider` + `model` 键(`model.main` 只接受 `"provider/model"` 字符串,端点与密钥在 `provider.<id>.options` 下);hook 验证走**插件轨**(读 `.crush-tether/decisions.jsonl` 增量断言);config 轨信任门 headless 不可首授,仅交互会话可用(见 §2)
-3. **武装判定**:跑任意命令后查 `.crush-tether/decisions.jsonl` 增量——每 hook 触发记一条裁决;`type:"load"` 行为配置加载留痕
-4. **三档**:`echo hi`(allow)→ `curl --version`(ask)→ `sudo --version`(deny),读日志断言
-5. **`updated_input`**:插件停用 + 探针 config 轨(`.zcode/config.json` 写 `hooks.enabled: true` + `events.PreToolUse` perm 角色,指向 `script/hook_probe.py`)→ 交互会话批准信任门武装 → 控制文件 `perm-out.txt` 切信封(Claude 式 `updatedInput` / crush 式对照)→ 看执行输出是否被改写 → **测后退役 config 轨**(防与插件双轨叠跑)
-6. **模式交叉**(确认模式/计划模式,人在场看弹窗):
-   - 确认模式:跑 allow/ask/deny 三类,观察弹窗——allow 应跳过弹窗、ask 应弹、deny 不弹直接挡;**区分「人工批准 vs 自动放行」用反证实验**:弹窗上点拒绝,agent 侧收到 Denied 即弹窗为真
-   - 计划模式:hook 照常评估(日志增量可证);计划模式只读分类器会**短路 ask**(不弹窗直接拦);agent 层被系统硬约束禁写,「hook allow 写操作」不可达
-7. **版本记录**:ZCode Desktop App 版本随测随记入[矩阵 §1.1/§2](agent-compat-matrix.md)(当前 3.11.2,内嵌 CLI 版本轨道独立以 `zcode.cjs version` 为准,当前 0.16.5)
+**claude-code(交互,~5 分钟)**:注册四角色(bash/perm/post/fail,matcher `Bash|PowerShell`)→ 交互会话五连:`echo hi`(allow 直通)→ `curl --version`(ask 弹窗,批准后执行)→ `sudo --version`(deny 阻断)→ 控制文件切改写信封跑 echo(`updatedInput` 全替换)→ 控制文件切 exit 3 跑任一命令(fail-open:应放行 + UI 明示 non-blocking)。
+
+**crush(交互,~5 分钟)**:同五连,差异点:ask = 无意见走原生权限提示;deny = exit 2 + stderr 或 JSON;改写 = 浅合并(TUI 标记 `Rewrote Output`);**先确认命令不在 banned commands 黑名单**(curl/sudo 被模型层劝退不触达 hook 层,§2 差异 6——deny 实验换黑名单外命令)。
+
+**zcode(七步)**:① 前置:引擎在 PATH;插件安装 = Plugin Management → Discover → `+` → 本地目录选仓库 `plugin/` → 安装 → **重启会话**(无需信任门);② headless 冒烟(每版本建议):`node <App安装目录>/resources/glm/zcode.cjs -p "<驱动 Bash 的指令>"`,模型后端写 `~/.zcode/cli/config.json` 的 `provider.<id>.options` + `model.main`(只接受 `"provider/model"` 字符串),hook 走插件轨读 decisions.jsonl 增量;③ 武装判定:跑命令后查 decisions.jsonl 增量(`type:"load"` 为加载留痕);④ 三档:`echo hi` / `curl --version` / `sudo --version`;⑤ `updated_input`:停用插件 + 探针 config 轨(`hooks.enabled` + `events.PreToolUse`)→ 批准信任门 → 控制文件切信封(Claude 式/crush 式对照)→ 测后**退役 config 轨**;⑥ 模式交叉(确认/计划,人在场):确认模式 allow 跳过弹窗/ask 弹窗/deny 不弹,反证实验(点拒绝 → agent 收 Denied)钉死人工性;计划模式 hook 照常评估、只读分类器短路 ask、agent 层硬约束先于 hook;⑦ 版本记录:App 版与内嵌 CLI 版双轨分记。**注意**:本机注册探针若用 `uv run` 会被 zcode 插件轨精简 env 静默失效,须绝对路径 python.exe(§2 差异 12)。
+
+**无头格分工**:fail-open 无头格只有 claude 与交互不同(拒)——已由 CI 场景组自动兜底,人工只测交互格;ask 无头收场与超时无头尚未定性(§5 挂账),人工测到可顺手补记。
 
 ## 2. agent 差异与规避
 
@@ -52,16 +66,47 @@ mock LLM 后端驱动 agent 完成一轮固定 tool_use(`echo mock-hook-test`),�
 | 9 | zcode:非交互入口不在 PATH——CLI 是 App 内嵌 bundle(`resources/glm/zcode.cjs`),版本轨道与 App 版本号独立(App 3.11.2 / CLI 0.16.5) | `node <app>/resources/glm/zcode.cjs -p "<指令>"`;双版本号分别记录 |
 | 10 | zcode config 轨:事件声明在 `hooks.events.<Event>` 下(非插件 envelope 的 `hooks.<Event>`,写错仅日志 `config.file.invalid` 提示);项目 hooks 需工作区信任,信任由 **capable host**(Desktop App UI)授予、按 工作区+声明 digest 持久化于 `~/.zcode/security/workspace-hook-trust-v1.json`——headless **不可首授** | headless/CI 一律走**插件轨**(免信任,实测 hook 可拉起);config 轨仅交互会话用 |
 | 11 | zcode:Anthropic SSE `content_block_start` 的 `input` 字段严格校验(须为对象),mock 回空串即整回合失败(`AI_TypeValidationError`) | mock 固化版已修正为 `"input": {}`(claude/crush 对空串宽容) |
+| 12 | zcode 插件轨 spawn hook 给**精简 env**:`uv run` 等 wrapper/PATH 依赖的 command 静默失效(uv 找不到其管理的 python,连首行诊断都写不出,2026-09-11 实测);hook 失效后 zcode 无头权限兜底拒绝工具(行为与 claude 无头 fail-open 同构,极易误判为「语义拒绝」) | 插件 hook command 用**绝对路径解释器**(CI 探针插件用运行时 `sys.executable`);排障先验「spawn 可达性」(command 换 `--version` 类空参快跑)再疑语义 |
+| 13 | claude:fail-open 兜底按**会话形态分化**——交互放行(UI 明示 non-blocking)/ 无头拒绝(`permission_denials` 回执,2026-09-11 实测);crush/zcode 无头与交互一致放行 | CI 场景断言按 agent 分化(failopen:claude=拒,crush/zcode=放行,`ci_scenario.sh` 已内置);矩阵 §1.2 该格分形态记录 |
 
 ## 3. CI 覆盖边界(谁测什么)
 
-- **CI 机测面(push/PR/cron 全部 job)**:headless 下 hook 被拉起 + allow 裁决流转——mock 单发固定 `echo`、引擎默认规则 allow,断言探针 dump(claude/crush)或 `decisions.jsonl`(zcode)
-- **不在 CI 内**:confirm 弹窗(人工性本质不可机测)、fail-open、`updated_input`、超时、模式交叉、zcode config 轨(信任门 headless 不可首授)——由人工批 1 / 专项实验维护
-- deny 路径**可以**机测(规则侧把 `echo` 设 deny 即可无 UI 断言),未立项,待拍板
+- **CI 机测面(push/PR/cron 全部 job)**:①串联冒烟——headless 下真引擎全链走通,断言 `decisions.jsonl` 落 `echo mock-hook-test → allow`(五 job 同构,守护契约漂移);②场景组——deny/fail-open/updated_input 三场景探针信封 + 物理副作用断言(`ci-exec.txt`,failopen 按 agent 分化),判定准则见 §2 差异 7
+- **不在 CI 内**:confirm 弹窗(人工性本质不可机测)、ask 无头收场与超时(未定性,§5)、模式交叉、zcode config 轨(信任门 headless 不可首授)——由人工流程/专项实验维护
+- 真实引擎 deny 全链(预写 rules.toml 触发引擎 deny → agent 阻断)可以机测,未立项,待拍板
+
+### 红灯归因决策树
+
+1. **先看触发器**:pinned(push/PR)红 = 我方破坏;cron(latest)红 = 上游信号——用 `workflow_dispatch` 指定旧 pinned 对照跑一轮,复现 = 我方(或环境),消失 = 上游版本引入
+2. **再看挂的 step**:`Install engine` 挂 = cargo/工具链问题;冒烟断言挂 = 链路破(hook 没拉起/引擎裁决异常/信封漂移);场景组挂 = 信封笔误或上游采纳语义漂移
+3. **最后看 artifact**:hook 没触发 → `dump.jsonl`(角色标记齐全否);裁决语义疑问 → `decisions.jsonl`(`reason` 字段);工具名/模型回合问题 → `mock-requests.jsonl` / `scenario-requests.jsonl`(请求轮次与 tools 列表)
+
+### 维护口径
+
+- **零 secrets**:全 mock 驱动,任何 runner/fork 原生可跑,排查时排除凭证因素
+- **时长预算**:串联化+场景组后 claude/crush job 约 +3 分钟;zcode job(7z 解包 + cargo install + 五次 headless)逼近 25 分钟 timeout,超限先拆分或上调
+- **扩展指引**:新增场景 = `ci_scenario.sh` 加分支(信封+断言)+ workflow 循环串加一个词,零注册改动;新增 agent = 复制最接近的 job 模板改注册面与 headless 命令;zcode 场景/冒烟的双装配切换在 zcode-windows job 的场景 step 内完成(CI 环境一次性,无需复原)
 
 ## 4. 测试事项分类法
 
-(定稿随首批 CI 场景固化落笔;骨架:维度三标签[协议/agent 行为/模式×hook] × 手段[引擎单测/探针实验/串联冒烟/人工交互] × 知识状态[未定性/已定性] × 固化产物[矩阵行/CI 断言/前提条件/哨兵],生命周期 待探→已定性→已固化→守护中。)
+每个测试事项(能力/行为/探测)按四个正交标签编目,沿生命周期单向推进:
+
+**维度三标签**(划分标准 = 与权限控制的直接相关性):
+- **协议**:权限控制直接相关的 hook 契约面——信封/退出码/事件/注册发现
+- **agent 行为**:agent 内部复杂行为、契约之外的观测面;**兼任兜底**——不好归类的事项(非单纯权限相关、选项混杂其它、也非模式×hook 交叉)一律入此,同质事项聚集时再考虑增设新标签
+- **模式×hook**:agent 内置权限模式 × hook 规则的交互面(标签用短名,全称在此)
+
+**手段四标签**:引擎单测(cargo test,裁决逻辑)/ 探针实验(mock 信封,**首跑即能力探寻**)/ 串联冒烟(真引擎×真 agent,守护契约漂移)/ 人工交互(弹窗、信任门、交互语义)。
+
+**知识状态**:未定性 / 已定性。**固化产物**:矩阵行([agent-compat-matrix.md](agent-compat-matrix.md) §1/本文档 §2)/ CI 断言(workflow + 本文档 §3)/ 前提条件(决定他项可否入 CI)/ cron 哨兵。
+
+**生命周期四态(单向推进)**:待探(B:探针/人工首跑,产定性)→ 已定性(矩阵行落地)→ 已固化(CI 断言落地)→ 守护中(矩阵 §3.2 复核分层 + 哨兵)。弹窗维度、信任门首授止步于「已定性 + 人工守护」。
+
+**混合行规则**:协议+agent 行为各半的事项(headless 加载、confirm、超时、项目级门槛),定性按主维度记矩阵;固化时协议半边走探针断言、agent 行为半边止步人工守护。
+
+**§1.2 十四行维度归组**(定稿):协议 9 行(交互加载/allow/deny/updated_input/fail-open/halt/PermissionRequest/用户选择回传/PostToolUse);协议+agent 行为混合 4 行(headless 加载/confirm/超时/项目级门槛);agent 行为 1 行(模型预拦截);模式×hook 1 行(引用行,主体矩阵 §1.3)。
+
+**落点映射**(新事项按此入账):定性 → 矩阵 §1 与本文档 §2;回归断言 → workflow + 本文档 §3;挂账 → 本文档 §5;方法论 → 本节。
 
 ## 5. 测试规划与挂账
 
@@ -73,7 +118,8 @@ mock LLM 后端驱动 agent 完成一轮固定 tool_use(`echo mock-hook-test`),�
 | exit 2 与 JSON 回包并发时的覆盖规则 | 协议 | 探针实验 | design.md 契约节核对 | **上游聚合语义引用(halt > deny > allow),非我方行为面**,仅可选抽查以验证 design.md 契约节引用的准确性 |
 | claude-code 非默认 permission_mode(plan/bypassPermissions 交互)× hook 交叉 | 模式×hook | 人工交互 | [矩阵 §1.3](agent-compat-matrix.md#13-原生模式-hook-交叉按-agent) | 未测 |
 | crush 原生确认/计划模式 × hook 交叉 | 模式×hook | 人工交互 | [矩阵 §1.3](agent-compat-matrix.md#13-原生模式-hook-交叉按-agent) | yolo 语义已有源码级核对,模式交叉未实测 |
-| zcode headless 全轴:三档语义、`updated_input`、模式交叉在 headless 形态下的表现 | 协议 | 探针实验 | CI 场景组 + [矩阵 §1.2](agent-compat-matrix.md) | 现 mock 只发固定 `echo`,deny/confirm 需扩展 mock 或换规则 |
+| zcode headless 全轴:ask 无头收场、超时、模式交叉在 headless 形态下的表现 | 协议+agent 行为 | 探针实验 | CI 场景组(第二批)+ [矩阵 §1.2](agent-compat-matrix.md) | 三档 deny/fail-open/rewrite 已由场景组覆盖(2026-09-11);ask 无头收场三 agent 均未定性,超时含 windows 进程清理观察 |
+| 无头模式旗标预研(claude `--permission-mode` / zcode `-p` 模式参数是否存在及形态) | 模式×hook | 人工交互 | [矩阵 §1.3](agent-compat-matrix.md#13-原生模式-hook-交叉按-agent) | 纯探测,第三批场景化的前提 |
 | zcode ubuntu job | agent 行为 | 串联冒烟 | workflow | Linux 版内测中,公测后补(发行渠道落地即可平移 windows job 配方) |
 | zcode cron latest 哨兵的首个自动触发尚待观察 | 协议 | 串联冒烟 | [矩阵 §1.1/§2](agent-compat-matrix.md) | 每周一 UTC |
 

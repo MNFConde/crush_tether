@@ -143,6 +143,40 @@ jobs:
           grep -q '"command":"echo mock-hook-test"' .crush-tether/decisions.jsonl
           grep -q '"decision":"allow"' .crush-tether/decisions.jsonl
 
+      - name: Scenario suite (deny / fail-open / updated_input)
+        run: |
+          python3 script/mock_llm.py --port 8788 --cmd "echo mock-hook-test > ci-exec.txt" \
+            --log scenario-requests.jsonl &
+          for i in $(seq 1 20); do
+            if (exec 3<>/dev/tcp/127.0.0.1/8788) 2>/dev/null; then break; fi
+            sleep 0.5
+          done
+          ws="$PWD"
+          cat > ci-scenario-settings.json <<EOF
+          {
+            "env": {
+              "ANTHROPIC_BASE_URL": "http://127.0.0.1:8788",
+              "ANTHROPIC_AUTH_TOKEN": "dummy-matrix",
+              "ANTHROPIC_API_KEY": "dummy-matrix",
+              "ANTHROPIC_MODEL": "claude-sonnet-4-5"
+            },
+            "hooks": {
+              "PreToolUse": [
+                { "matcher": "Bash|PowerShell",
+                  "hooks": [{ "type": "command",
+                    "command": "python3 $ws/script/hook_probe.py perm --agent claudecode --source ci --probe-dir $ws/.hook-probe",
+                    "timeout": 30 }] }
+              ]
+            }
+          }
+          EOF
+          for s in deny failopen rewrite; do
+            bash script/ci_scenario.sh setup "$s" "$ws/.hook-probe" claudecode "$ws"
+            DISABLE_GROWTHBOOK=1 claude -p "请运行命令: echo agent-matrix-smoke" \
+              --settings ci-scenario-settings.json
+            bash script/ci_scenario.sh assert "$s" "$ws/.hook-probe" claudecode "$ws"
+          done
+
       - name: Upload artifacts
         if: always()
         uses: actions/upload-artifact@v7
@@ -152,6 +186,7 @@ jobs:
             .hook-probe/dump.jsonl
             .crush-tether/decisions.jsonl
             mock-requests.jsonl
+            scenario-requests.jsonl
           if-no-files-found: warn
 
   crush:
@@ -232,6 +267,41 @@ jobs:
           grep -q '"command":"echo mock-hook-test"' .crush-tether/decisions.jsonl
           grep -q '"decision":"allow"' .crush-tether/decisions.jsonl
 
+      - name: Scenario suite (deny / fail-open / updated_input)
+        run: |
+          python3 script/mock_llm.py --port 8788 --cmd "echo mock-hook-test > ci-exec.txt" \
+            --log scenario-requests.jsonl &
+          for i in $(seq 1 20); do
+            if (exec 3<>/dev/tcp/127.0.0.1/8788) 2>/dev/null; then break; fi
+            sleep 0.5
+          done
+          ws="$PWD"
+          cat > crush.json <<EOF
+          {
+            "providers": {
+              "mockspike": {
+                "type": "openai-compat",
+                "base_url": "http://127.0.0.1:8788/v1",
+                "api_key": "dummy-matrix",
+                "models": [{"id": "mock-model", "name": "Mock Matrix Model",
+                            "context_window": 128000}]
+              }
+            },
+            "hooks": {
+              "PreToolUse": [
+                { "name": "hook-probe",
+                  "command": "python3 $ws/script/hook_probe.py perm --agent crush --source ci --probe-dir $ws/.hook-probe",
+                  "timeout": 30 }
+              ]
+            }
+          }
+          EOF
+          for s in deny failopen rewrite; do
+            bash script/ci_scenario.sh setup "$s" "$ws/.hook-probe" crush "$ws"
+            crush run -m mockspike/mock-model "agent-matrix scenario"
+            bash script/ci_scenario.sh assert "$s" "$ws/.hook-probe" crush "$ws"
+          done
+
       - name: Upload artifacts
         if: always()
         uses: actions/upload-artifact@v7
@@ -241,6 +311,7 @@ jobs:
             .hook-probe/dump.jsonl
             .crush-tether/decisions.jsonl
             mock-requests.jsonl
+            scenario-requests.jsonl
           if-no-files-found: warn
 
   claude-code-windows:
@@ -324,6 +395,40 @@ jobs:
           grep -q '"command":"echo mock-hook-test"' .crush-tether/decisions.jsonl
           grep -q '"decision":"allow"' .crush-tether/decisions.jsonl
 
+      - name: Scenario suite (deny / fail-open / updated_input)
+        run: |
+          python script/mock_llm.py --port 8788 --cmd "echo mock-hook-test > ci-exec.txt" \
+            --log scenario-requests.jsonl &
+          for i in $(seq 1 40); do
+            if curl -s -o /dev/null "http://127.0.0.1:8788/"; then break; fi
+            sleep 0.5
+          done
+          ws="$(cygpath -m "$PWD")"
+          cat > ci-scenario-settings.json <<EOF
+          {
+            "env": {
+              "ANTHROPIC_BASE_URL": "http://127.0.0.1:8788",
+              "ANTHROPIC_AUTH_TOKEN": "dummy-matrix",
+              "ANTHROPIC_API_KEY": "dummy-matrix",
+              "ANTHROPIC_MODEL": "claude-sonnet-4-5"
+            },
+            "hooks": {
+              "PreToolUse": [
+                { "matcher": "Bash|PowerShell",
+                  "hooks": [{ "type": "command",
+                    "command": "python $ws/script/hook_probe.py perm --agent claudecode --source ci --probe-dir $ws/.hook-probe",
+                    "timeout": 30 }] }
+              ]
+            }
+          }
+          EOF
+          for s in deny failopen rewrite; do
+            bash script/ci_scenario.sh setup "$s" "$ws/.hook-probe" claudecode "$ws"
+            DISABLE_GROWTHBOOK=1 claude -p "Run exactly: echo agent-matrix-smoke" \
+              --settings ci-scenario-settings.json
+            bash script/ci_scenario.sh assert "$s" "$ws/.hook-probe" claudecode "$ws"
+          done
+
       - name: Upload artifacts
         if: always()
         uses: actions/upload-artifact@v7
@@ -333,6 +438,7 @@ jobs:
             .hook-probe/dump.jsonl
             .crush-tether/decisions.jsonl
             mock-requests.jsonl
+            scenario-requests.jsonl
           if-no-files-found: warn
 
   crush-windows:
@@ -422,6 +528,41 @@ jobs:
           grep -q '"command":"echo mock-hook-test"' .crush-tether/decisions.jsonl
           grep -q '"decision":"allow"' .crush-tether/decisions.jsonl
 
+      - name: Scenario suite (deny / fail-open / updated_input)
+        run: |
+          python script/mock_llm.py --port 8788 --cmd "echo mock-hook-test > ci-exec.txt" \
+            --log scenario-requests.jsonl &
+          for i in $(seq 1 40); do
+            if curl -s -o /dev/null "http://127.0.0.1:8788/"; then break; fi
+            sleep 0.5
+          done
+          ws="$(cygpath -m "$PWD")"
+          cat > crush.json <<EOF
+          {
+            "providers": {
+              "mockspike": {
+                "type": "openai-compat",
+                "base_url": "http://127.0.0.1:8788/v1",
+                "api_key": "dummy-matrix",
+                "models": [{"id": "mock-model", "name": "Mock Matrix Model",
+                            "context_window": 128000}]
+              }
+            },
+            "hooks": {
+              "PreToolUse": [
+                { "name": "hook-probe",
+                  "command": "python $ws/script/hook_probe.py perm --agent crush --source ci --probe-dir $ws/.hook-probe",
+                  "timeout": 30 }
+              ]
+            }
+          }
+          EOF
+          for s in deny failopen rewrite; do
+            bash script/ci_scenario.sh setup "$s" "$ws/.hook-probe" crush "$ws"
+            crush run -m mockspike/mock-model "agent-matrix scenario"
+            bash script/ci_scenario.sh assert "$s" "$ws/.hook-probe" crush "$ws"
+          done
+
       - name: Upload artifacts
         if: always()
         uses: actions/upload-artifact@v7
@@ -431,6 +572,7 @@ jobs:
             .hook-probe/dump.jsonl
             .crush-tether/decisions.jsonl
             mock-requests.jsonl
+            scenario-requests.jsonl
           if-no-files-found: warn
 
   zcode-windows:
@@ -543,6 +685,74 @@ jobs:
           grep -q '"command":"echo mock-hook-test"' .crush-tether/decisions.jsonl
           grep -q '"decision":"allow"' .crush-tether/decisions.jsonl
 
+      - name: Scenario suite (deny / fail-open / updated_input)
+        run: |
+          python script/mock_llm.py --port 8788 --cmd "echo mock-hook-test > ci-exec.txt" \
+            --log scenario-requests.jsonl &
+          for i in $(seq 1 40); do
+            if curl -s -o /dev/null "http://127.0.0.1:8788/"; then break; fi
+            sleep 0.5
+          done
+          python - <<'PYEOF'
+          import json, os, shutil, uuid, time, sys
+          root = os.path.join(os.path.expanduser("~"), ".zcode", "cli")
+          plugins_root = os.path.join(root, "plugins")
+          ws = os.getcwd()
+          mkt = "crush-tether-probe-marketplace"
+          plug_id = "crush-tether-probe@crush-tether-probe-marketplace"
+          # 探针插件 = 正式插件拷贝改写(hooks.json 换 perm 角色 + 工作区探针路径)。
+          # command 必须用绝对路径解释器:zcode spawn hook 给精简 env,PATH 解析与
+          # uv 类 wrapper 均不可靠(2026-09-11 本机实测,见 test-and-ci.md §2)。
+          hooks = {"hooks": {"PreToolUse": [{"matcher": "Bash", "hooks": [{
+              "type": "process", "command": sys.executable,
+              "args": [os.path.join(ws, "script", "hook_probe.py"), "perm",
+                       "--agent", "zcode", "--source", "ci",
+                       "--probe-dir", os.path.join(ws, ".hook-probe")],
+              "timeoutMs": 30000}]}]}}
+          dst = os.path.join(os.environ["RUNNER_TEMP"], "probe-plugin", "crush-tether-probe")
+          shutil.rmtree(os.path.dirname(dst), ignore_errors=True)
+          shutil.copytree(os.path.abspath(os.path.join("plugin", "crush-tether")), dst)
+          json.dump(hooks, open(os.path.join(dst, "hooks", "hooks.json"), "w", encoding="utf-8"), indent=2)
+          pj = os.path.join(dst, ".zcode-plugin", "plugin.json")
+          pjd = json.load(open(pj, encoding="utf-8"))
+          pjd["name"] = "crush-tether-probe"
+          json.dump(pjd, open(pj, "w", encoding="utf-8"), indent=2)
+          json.dump({"name": mkt, "owner": "crush_tether",
+                     "plugins": [{"name": "crush-tether-probe",
+                                  "source": "./crush-tether-probe"}]},
+                    open(os.path.join(os.path.dirname(dst), "marketplace.json"),
+                         "w", encoding="utf-8"), indent=2)
+          # 装配四件套切换到探针插件(机械重建,spike 验证无校验障碍)
+          ver = pjd.get("version", "0.0.0")
+          install_path = os.path.join(plugins_root, "cache", mkt, "crush-tether-probe", ver)
+          shutil.rmtree(install_path, ignore_errors=True)
+          shutil.copytree(dst, install_path)
+          now = time.strftime("%Y-%m-%dT%H:%M:%S.000Z", time.gmtime())
+          json.dump({"version": 1, "marketplaces": [{
+              "id": mkt, "source": {"source": "directory", "path": os.path.dirname(dst)},
+              "name": mkt, "addedAt": now, "lastUpdated": now,
+              "pluginCount": 1, "cacheTransactionId": str(uuid.uuid4()),
+          }]}, open(os.path.join(plugins_root, "known_marketplaces.json"), "w", encoding="utf-8"), indent=2)
+          json.dump({"version": 1, "plugins": [{
+              "id": plug_id, "name": "crush-tether-probe", "marketplace": mkt,
+              "version": ver, "installPath": install_path, "installedAt": now,
+              "updatedAt": now, "scope": "user", "source": "./crush-tether-probe",
+              "cacheTransactionId": str(uuid.uuid4()),
+          }]}, open(os.path.join(plugins_root, "installed_plugins.json"), "w", encoding="utf-8"), indent=2)
+          cfg_path = os.path.join(root, "config.json")
+          cfg = json.load(open(cfg_path, encoding="utf-8"))
+          cfg["plugins"]["enabledPlugins"] = {plug_id: True}
+          cfg["provider"]["mockspike"]["options"]["baseURL"] = "http://127.0.0.1:8788"
+          json.dump(cfg, open(cfg_path, "w", encoding="utf-8"), indent=2)
+          print("provisioned probe plugin:", plug_id)
+          PYEOF
+          ws="$(cygpath -m "$PWD")"
+          for s in deny failopen rewrite; do
+            bash script/ci_scenario.sh setup "$s" "$ws/.hook-probe" zcode "$ws"
+            node "$ZCODE_CJS" -p "Run exactly: echo agent-matrix-smoke"
+            bash script/ci_scenario.sh assert "$s" "$ws/.hook-probe" zcode "$ws"
+          done
+
       - name: Upload artifacts
         if: always()
         uses: actions/upload-artifact@v7
@@ -550,5 +760,7 @@ jobs:
           name: zcode-decisions-windows
           path: |
             .crush-tether/decisions.jsonl
+            .hook-probe/dump.jsonl
             mock-requests.jsonl
+            scenario-requests.jsonl
           if-no-files-found: warn

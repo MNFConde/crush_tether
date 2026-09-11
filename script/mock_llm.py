@@ -20,7 +20,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 CMD = "echo mock-hook-test"
 
 
-def make_mock(log_body):
+def make_mock(log_body, cmd):
     def pick_tool_name(body, default):
         names = [t.get("name") for t in (body.get("tools") or [])]
         if default in names:
@@ -47,7 +47,7 @@ def make_mock(log_body):
             stop = "end_turn"
         else:
             content = [{"type": "tool_use", "id": "toolu_1", "name": plan["tool"],
-                        "input": {"command": CMD, "description": "mock spike echo"}}]
+                        "input": {"command": cmd, "description": "mock spike echo"}}]
             stop = "tool_use"
         return {"id": "msg_spike", "type": "message", "role": "assistant",
                 "model": body.get("model", "m"), "content": content,
@@ -86,7 +86,7 @@ def make_mock(log_body):
             return "bash", "spike done", "stop"
         log_body(body)
         name = pick_tool_name(body, "bash")
-        args = json.dumps({"command": CMD, "description": "mock spike echo"})
+        args = json.dumps({"command": cmd, "description": "mock spike echo"})
         return name, args, "tool_calls"
 
     def openai(body):
@@ -126,6 +126,8 @@ def make_mock(log_body):
 def main():
     ap = argparse.ArgumentParser(description="dual-protocol LLM mock for agent-matrix CI")
     ap.add_argument("--port", type=int, default=8787)
+    ap.add_argument("--cmd", default=CMD,
+                    help="tool_use command served to the agent (default: echo mock-hook-test)")
     ap.add_argument("--log", default="", help="optional request log JSONL (tool names recorded)")
     args = ap.parse_args()
 
@@ -140,7 +142,7 @@ def main():
         except OSError as e:
             print(f"mock: log write failed ({e}); continuing", flush=True)
 
-    anthropic, anthropic_sse, openai, openai_sse = make_mock(log_body)
+    anthropic, anthropic_sse, openai, openai_sse = make_mock(log_body, args.cmd)
 
     class Handler(BaseHTTPRequestHandler):
         def do_POST(self):

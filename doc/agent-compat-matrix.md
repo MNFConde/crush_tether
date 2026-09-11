@@ -31,7 +31,7 @@
 | confirm 弹确认 | 需要 | ✅ `permissionDecision:"ask"` → 原生确认 → 批准后执行 | ✅ 无意见（exit 0 无输出）→ 原生权限提示 | ✅ ask 转确认流程 |
 | deny 阻断 | 需要 | ✅ exit 2 + stderr（工具调用不执行） | ✅ exit 2 + stderr，或 JSON deny | ✅ |
 | `updated_input` 改写采纳 | 备用 | ✅ 全替换语义（echo 被改写执行） | ✅ 浅合并（配置序最后者赢；TUI 标记 `Rewrote Output`） | ✅ 采纳——Claude 式 `updatedInput` 全替换（整条命令被替换执行）；crush 式顶层 `updated_input` 信封不采纳 |
-| fail-open（hook 非 2 退出） | 需要 | ✅ UI 明示 `non-blocking status code`，放行 | ✅ 其他退出码 = 非阻断放行 | ✅ exit 3 放行（M5.3） |
+| fail-open（hook 非 2 退出） | 需要 | ✅ 交互放行（UI 明示 non-blocking）；**无头拒绝**（`permission_denials`，2026-09-11，[test-and-ci.md §2](test-and-ci.md#2-agent-差异与规避) 差异 13） | ✅ 无头一致：其他退出码 = 非阻断放行 | ✅ 无头一致：exit 3 放行（M5.3） |
 | hook 超时语义 | 需要 | ✅ 挂 45s > timeout 30s → ~32s 放行 | ✅ headless 实测 33s 非阻断放行 | 未测 |
 | halt 整个回合 | 认知 | ❌ 无此概念 | ✅ exit 49（**引擎不使用**，保持单命令阻断统一） | ❌ |
 | `PermissionRequest` 事件 | 认知 | ❌ 无同语义事件 | ❌ | ✅ 存在但 JSON 回包不被采纳（M5.3，挂点定 PreToolUse 的依据） |
@@ -70,7 +70,8 @@
 | 2026-09-10 | zcode | 0.16.5 CLI（App 3.11.2 内嵌） | headless `-p`（mock 驱动） | ✅ | headless 形态证实（**更正**「无 headless 形态」旧结论）；插件轨 hook 拉起 + 引擎裁决落盘实证；config 轨事件声明在 `hooks.events.*`，工作区信任门 headless 不可首授（见 [test-and-ci.md §2](test-and-ci.md#2-agent-差异与规避)） |
 | 2026-09-10 | claude-code | 2.1.263 | CI 首跑（windows，pinned） | ✅ | windows runner 首证：matcher `Bash\|PowerShell` + mock 自适应覆盖 Windows 工具面 |
 | 2026-09-10 | crush | 0.92.0 | CI 首跑（windows，pinned） | ✅ | zip 资产带版本嵌套目录（crush.exe 需归位 PATH 根，首跑 127 修 68d1055） |
-| 2026-09-10 | zcode | 3.11.2（内嵌 CLI 0.16.5） | CI 首跑（windows，pinned） | ✅ | **zcode 首次入 CI**：CDN 直链 + 7z 解包取内嵌 CLI + 插件无人值守装配 + mock 驱动 headless，decisions.jsonl allow 断言通过 |
+| 2026-09-10 | zcode | 3.11.2(内嵌 CLI 0.16.5) | CI 首跑(windows,pinned) | ✅ | **zcode 首次入 CI**:CDN 直链 + 7z 解包取内嵌 CLI + 插件无人值守装配 + mock 驱动 headless,decisions.jsonl allow 断言通过 |
+| 2026-09-11 | claude + crush + zcode | pinned(本机) | 无头场景组首测(deny/fail-open/rewrite) | ✅ | deny/rewrite 三家与交互定性一致;fail-open 分化:claude 无头拒绝(`permission_denials`)/crush、zcode 放行(见 [test-and-ci.md §1](test-and-ci.md#1-测试方法) 场景组);附带定性:zcode 无头对 confirm=拒绝、zcode spawn hook 精简 env(`uv` 不可用,差异 12) |
 
 ## 3. 维护规则
 
