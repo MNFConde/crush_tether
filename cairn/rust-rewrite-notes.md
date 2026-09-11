@@ -5,7 +5,7 @@ summary: guard.py → Rust 重写的实现要点与踩坑：tree-sitter-bash AST
 tags: [crush_tether, rust, tree-sitter, migration, rhai, mlua]
 contains: [lesson, decision]
 created: 2026-09-04
-updated: 2026-09-06
+updated: 2026-09-11
 related: [doc/design.md, tests/guard_regression.rs]
 authoring_mode: ai_generated
 ---
@@ -36,6 +36,11 @@ authoring_mode: ai_generated
 - **教训：rhai 1.x 的 getter API 是 `register_get`**（不是旧名 `register_getter`），闭包首参收 `&mut T`（`Mut<T>`）。rhai 属性访问本质是方法调用糖——自定义类型 + getter 可让脚本侧 `ctx.bin` 语法零改动地完成「暴露裸 map → 封装类型」迁移。
 - **教训：Rust `concat!` 无分隔拼接**，多行脚本文本用例里 `"return nil"+\"end\"` 拼成 `nilend` 语法错误——多行脚本文本的每行要么带前导空格要么以 `\n` 结尾（与 commit.md 6.5 的追加型编辑静默丢失同族：拼接点出错不报错）。
 - **教训：mlua 指令限流 hook 分线程/全局两档**——`set_hook` 只挂当前线程，脚本自建协程（C 层 `coroutine.create`）不继承，协程内死循环完全逃逸预算（实测 200 万次循环毫秒级完成）；须 `set_global_hook` 才覆盖（实测协程内 budget 正常计数并在阈值处终止循环）。语义边界：`coroutine.resume` 类 pcall 吞协程内错误——超预算协程被终止（DoS 已阻）但脚本不报错、不转化为 fail-safe confirm。验证写法用**副作用标记**（协程内置完成标志，resume 后查标志）而非墙钟断言。方法论：沙箱限流的验证必须覆盖该运行时的并发执行原语（协程/回调向量），只测主线程死循环会留洞。
+
+## CLI 自用工具坑（2026-09-11）
+
+- **教训：`crush-tether check "cmd"` 的裸参数被静默忽略**——check 模式从 stdin 读 agent 载荷（hook 同构），命令行参数不是裁决输入，任何裸命令都 exit 0 无输出（=保守 confirm），极易误读为「引擎裁决通过」。命令行侧的裁决查询口是 `check --batch`（stdin 一行一命令出裁决表）。
+- **坑：`uv run --directory <dir> python` 会把进程 cwd 切到 `<dir>`**——脚本内相对路径（如 `plugin/…`）以仓库根为预期时全部指错，且不报错（FileNotFoundError 才暴露）。跨目录驱动脚本时路径一律绝对化，勿信调用方 cwd。
 
 ## 决策记录
 

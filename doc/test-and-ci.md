@@ -30,7 +30,7 @@ mock LLM 后端驱动 agent 完成一轮固定 tool_use(命令可配,`--cmd`),�
 - **weekly cron**:latest smoke——上游破坏性变更哨兵(红灯 = 上游信号)
 - **workflow_dispatch**:手动指定版本回溯/排查
 - **zcode windows job 配方**:extras bucket manifest 解析版本(pinned = `ZCODE_VERSION_PINNED`,latest = cron/dispatch)→ CDN 直链下载 NSIS 安装器 → 7z 两步解包取 `resources/glm/zcode.cjs`(只需 node,不装 App)→ `cargo install --path .` 供插件轨 hook 命令 → 插件无人值守装配四件套 + `enabledPlugins` 置真 → mock 驱动 `-p` → 断言 `decisions.jsonl` 落 allow 裁决
-- **明确不做**:交互 TUI 自动化(脆弱,维护成本远超每版本 5 分钟人工);agent SDK headless API(不走同一 hooks 路径);zcode config 轨 CI 化(信任门 headless 不可首授)
+- **明确不做**:交互 TUI 自动化(2026-09-11 深化论证:技术路径 = tmux/pexpect 驱动 TUI 字符画面匹配弹窗文案,脆弱性高——上游改提示语/终端宽度/主题即红灯,时序轮询天然 flaky,且会稀释哨兵红灯归因(pinned 红=我方破坏/cron 红=上游信号);三 agent 三套栈(crush/claude TUI + zcode Electron GUI 互不通用);价值密度低——交互语义大版本才动、人工批测 5 分钟/版本,CI 化省的时间抵不过修断言的时间。折中:若未来真实痛点出现,可只取「弹窗出现+批准/拒绝两路+物理副作用」子集挂 workflow_dispatch 手动触发,不进 push/cron;agent SDK headless API(不走同一 hooks 路径);zcode config 轨 CI 化(信任门 headless 不可首授)
 - **后置**:协议回放(dump 样本驱动引擎)、bot commit 矩阵机器层(测完自动改表提交,`[skip ci]`)、zcode ubuntu job(等 Linux 公测)
 
 ### 本地复现

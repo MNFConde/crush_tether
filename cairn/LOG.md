@@ -2,6 +2,13 @@
 
 This file records substantive progress in reverse-chronological order — newest entry at the top, right below this line. Keep each entry short — summary and pointer only; conclusions settle into `cairn/<topic>.md`.
 
+## 2026-09-11 Ⅱ · Cairn audit + 沉淀补账（知识层安全网例行检查）
+
+- **audit 发现并当场沉淀**:① agent-hook-testing.md 补 2026-09-11 定性(fail-open 形态分化 + 机制理解[兜底类语义才会分化]/zcode spawn 精简 env + spawn 可达性二分排障法/无头 confirm 保守拒/增量装配教训),新增教训母题二「交互如此≠无头如此」(能力×形态双维,与四更同构);② plugin-distribution-analysis.md 补无人值守装配两种形态(CI 清空重建 vs user 增量)+ spawn env 对正式插件裸命令名前提的警示;③ rust-rewrite-notes.md 记 `check` 裸参数静默忽略坑与 `uv --directory` cwd 切换坑;④ test-and-ci.md「明确不做」深化(交互 CI 化否决论证固化);⑤ `.cairn/config.yaml` project summary 自规划期更新至现态。
+- **实例漂移检测销账**:skill_spec_date 2026-08-07 = skill 侧 Current spec date,changelog 无更新条目,零漂移。
+- **遗留**:六 topic note 均无 graduation_status 标记,graduation review(config=obsidian)未做过——agent-hook-testing.md 方法论密度最高,建议优先安排,独立流程另起。
+- Details: 本条即 audit 记录;各项沉淀见上列对应文件。
+
 ## 2026-09-11 · 测试设计独立成档 + 五 job 串联化 + 无头场景组首测(fail-open 形态分化定性)
 
 - **文档重组**:矩阵瘦身只留结果(§3/§4/§5/§6.3 迁出),新建 `doc/test-and-ci.md` 承载测试方法/CI 设计/差异规避/覆盖边界/分类法/挂账/探针设计(design.md 探针节同迁);doc/ 重组按约定快照 archive_doc_v2。
@@ -10,6 +17,7 @@ This file records substantive progress in reverse-chronological order — newest
 - **附带定性**:zcode 无头对 confirm=拒绝(无人批准保守拒);**zcode spawn hook 精简 env**——`uv run` 静默失效(uv 找不到管理 python,spawn 可达性用空参快跑二分定位),hook 须绝对路径解释器;排障中插件装配增量切换+备份复原(user 环境含 9 官方插件,不可整写)。
 - Details: `doc/test-and-ci.md`(§1 场景组/人工流程、§2 差异 12-13、§3 覆盖边界+归因树、§4 分类法定稿)、`doc/agent-compat-matrix.md`(§1.2 fail-open 行/§2)、`script/ci_scenario.sh`、`script/mock_llm.py`。
 
+## 2026-09-10 深夜Ⅱ · windows 矩阵落地：zcode 首次入 CI（插件无人值守装配 spike + CI 二跑全绿）
 
 - **spike 先行**：本机清空插件存储 → 机械重建四件套（`known_marketplaces.json` directory 源 + `marketplaces/` 镜像 + `installed_plugins.json` + `cache/<mkt>/<plugin>/<ver>/` 拷贝）+ `enabledPlugins` 置真 → `plugins list` 识别（hooks: 1）→ headless `-p` hook 拉起、`decisions.jsonl` 落 allow——**无 transaction/digest 校验障碍**，无人值守装配路径坐实；测后备份完整复原。
 - **workflow**：agent-matrix.yml 增 claude-win / crush-win / zcode-win 三 job（`shell: bash` + `python` 命令名 + curl 探活替换 `/dev/tcp` + `cygpath -m` 原生路径）。zcode 配方 = extras bucket manifest 解析版本（cron latest 哨兵的白送版本发现+hash）→ CDN 直链 NSIS → 7z 两步解包取 `zcode.cjs`（node 22 驱动，不装 App）→ `cargo install --path .` → 无人值守装配 → mock 驱动 `-p` → 断言 decisions.jsonl。

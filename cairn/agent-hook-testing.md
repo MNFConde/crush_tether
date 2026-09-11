@@ -1,7 +1,7 @@
 ---
 type: project_topic
 status: active
-summary: M7.3 agent hook 兼容性测试的方法论与过程沉淀：判定准则（hook 执行以探针 dump 物理副作用为准，日志计数与 tool result 回执不可尽信）、mock 四坑（schema 必填字段/工具名环境差异/OpenAI SSE/SSE input 对象校验）、灰度可官方 env 钉死（DISABLE_GROWTHBOOK）、crush run 悬案插桩排查全记录（三假设判据/五处插桩/证据代码位置）与四次更正史链条（含 zcode headless 形态与插件轨/config 轨信任门分化定性）。确定性结论的现役事实在 doc/agent-compat-matrix.md，测试方法与挂账在 doc/test-and-ci.md。
+summary: M7.3 agent hook 兼容性测试的方法论与过程沉淀：判定准则（hook 执行以探针 dump 物理副作用为准，日志计数与 tool result 回执不可尽信）、mock 四坑（schema 必填字段/工具名环境差异/OpenAI SSE/SSE input 对象校验）、灰度可官方 env 钉死（DISABLE_GROWTHBOOK）、crush run 悬案插桩排查全记录（三假设判据/五处插桩/证据代码位置）、四次更正史链条（含 zcode headless 形态与插件轨/config 轨信任门分化定性）、无头场景组定性（fail-open 按 agent 形态分化 + zcode spawn 精简 env）。确定性结论的现役事实在 doc/agent-compat-matrix.md，测试方法与挂账在 doc/test-and-ci.md。
 tags: [crush_tether, hook, testing, mock, claude-code, crush, zcode, headless, methodology]
 contains: [lesson, decision, pattern]
 created: 2026-09-09
@@ -23,6 +23,15 @@ authoring_mode: ai_generated
 5. **四更（09-10 深夜）**：zcode 侧推翻——「无 headless 形态」不成立，App 内嵌 CLI（`resources/glm/zcode.cjs`，0.16.5）有 `-p/--prompt` 非交互形态；成因 = 入口不在 PATH（`which zcode` 落空后即下结论，未探 App 安装树）。教训同母题：**「命令不存在」≠「能力不存在」**，发行形态未查全前不下能力结论。
 
 教训母题：**误判从不来自测不到，而来自信错了信号**（日志计数、tool result 回执）；唯一可信判据是物理副作用。
+
+母题二（2026-09-11 补，与四更同构）：**「交互如此 ≠ 无头如此」——能力 × 会话形态是两个独立维度**。fail-open 在交互与无头下同 agent 两种兜底（见下节），此前矩阵只测交互格就默认两形态一致，一测就碎。与「命令不存在≠能力不存在」同根：坐标轴没铺全之前，单点结论不外推。
+
+## 2026-09-11 无头场景组定性（deny / fail-open / rewrite 三家实证）
+
+- **fail-open 按 agent × 形态分化**：claude 交互放行（UI 明示 non-blocking）/ 无头**拒绝**——`claude -p --output-format json` 回执的 `permission_denials` 数组是官方铁证（hook 失联被归入权限拒绝，工具不执行，回合正常收敛）；crush / zcode 无头与交互一致放行。**机制理解**：deny/allow 是 hook「明确表态」，语义跨形态稳定；fail-open 是「hook 失联」后 agent **自己的兜底策略**——交互下兜底=回正常权限流（放行），无头下没有正常权限流可回=保守拒绝。分化只可能出现在兜底类语义上。
+- **zcode 无头对 confirm 同样保守拒绝**（正式插件引擎裁 confirm 后工具不执行、回合正常收敛）——无人批准时与 claude 无头 fail-open 行为同构。
+- **zcode spawn hook 给精简 env**：插件 hooks.json 的 command 若为 `uv`（shim/wrapper）或依赖 PATH 解析的形式**静默失效**——uv 找不到它管理的 python，连首行诊断文件都写不出；表现极易误判为「语义拒绝」（工具被兜底拒了）。**spawn 可达性二分排障法**：command 换 `--version` 类空参快跑（uv 自身 flag，不依赖环境）——能放行即 spawn 可达、问题在程序；仍拒即 spawn 层失败。修复 = command 用绝对路径解释器（CI 探针插件用运行时 `sys.executable`）。
+- **本机实弹的装配教训**：user 级插件注册表（`known_marketplaces.json`/`installed_plugins.json`）在有存量官方插件的环境里**不可整文件重写，只能增量追加/删改自己的条目**（CI 全新环境才可清空重建）；enabledPlugins 增量切换 + 测后备份复原。
 
 ## zcode headless 定性记录（2026-09-10 深夜）
 

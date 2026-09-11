@@ -5,7 +5,7 @@ summary: 插件分发形态分析（2026-09-08 登记未定稿）：失效模式
 tags: [crush_tether, distribution, plugin, hook, marketplace]
 contains: [decision, lesson, pattern]
 created: 2026-09-08
-updated: 2026-09-08
+updated: 2026-09-11
 related: [doc/design.md, cairn/ROADMAP.md, cairn/serve-lifecycle-named-endpoint.md]
 authoring_mode: ai_generated
 ---
@@ -36,3 +36,4 @@ authoring_mode: ai_generated
 - **判分发形态的统一标尺**：看「二进制缺失这一失败落在谁身上、响不响」——失败面落自己可测代码（wrapper）优于落用户操作（选平台）或网络环境（bootstrap）。
 - **响亮失败需要必然在场的可执行者**：agent hook 侧「进程没起来 = fail-open」，而二进制自己恰是可能缺席（被杀软隔离等）的东西，指望不上；结构性结论 = 插件内捆绑一个哑 wrapper（找到转发/缺席 exit 2+指引），它与捆绑与否正交，wrapper-only 插件 + PATH 二进制即可先行杀掉失效模式 #2。
 - **wrapper 保持哑**：永不解析信封、永不参与裁决——业务逻辑进 wrapper = 在 Rust 引擎之外造第二套不可测引擎。它与 adapter 的分工：wrapper 管装载轴，adapter 管协议轴，hooks.json 管接线轴，三者拼图构成对外兼容面；唯一 agent 耦合点是 wrapper 的解释器契约（各 agent 如何 spawn `command`），属 M7.3 探针项。
+- **无人值守装配两种形态（2026-09-11 补）**：CI/全新环境可清空重建四件套；**user 环境有存量插件（本机 9 个官方插件）时注册表不可整写**，只能增量追加/删改自己的条目 + `enabledPlugins` 增量切换，测后备份复原。另实证：**zcode 直接 spawn hook 进程（精简 env）**——插件 hooks.json 的 command 用 shim/wrapper（`uv`）或 PATH 依赖形态会静默失效，须绝对路径解释器；正式插件用裸命令名 `crush-tether` 能跑是因为它落 cargo bin 且系统 PATH 里有它，跨机部署时该前提即失效模式 #2 的又一入口（排障法见 agent-hook-testing.md 2026-09-11 节）。
