@@ -16,6 +16,7 @@ pub mod repl;
 pub mod report;
 pub mod script;
 pub mod service;
+pub mod suggest;
 
 /// 测试基建（仅测试构建编译，不入公共 API）。
 #[cfg(test)]

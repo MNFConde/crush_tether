@@ -235,3 +235,37 @@ fn whole_cause_granularity_for_default_confirms() {
     );
     assert!(r.stdout.trim().is_empty(), "不同命令不得被 whole 便签波及");
 }
+
+/// default 兜底的命令级隔离：批 `frobnicate --deep x` 不得放行同 bin 的
+/// 其他形态（兜底 cause 必须整命令粒度，M8.6 补强用例）。
+#[test]
+fn whole_cause_is_command_scoped_not_bin_scoped() {
+    let proj = TempDir::new("m86-sa-whole2");
+    run_init(proj.path(), &[], &[]);
+    write_rules(&proj, "version = 1\ndefault = \"confirm\"\n");
+    let _serve = spawn_serve(proj.path(), "20", None, &[]);
+
+    let r = hook(
+        proj.path(),
+        &pre_payload("frobnicate --deep x", "s1", "t1"),
+        &[],
+    );
+    assert_eq!(r.code, 0);
+    let _ = hook(
+        proj.path(),
+        &post_payload("frobnicate --deep x", "s1", "t1"),
+        &[],
+    );
+
+    // 同 bin 不同参数 → 仍 confirm（不得被 bin 级误放行）。
+    let r = hook(
+        proj.path(),
+        &pre_payload("frobnicate evil", "s1", "t2"),
+        &[],
+    );
+    assert!(
+        r.stdout.trim().is_empty(),
+        "同 bin 不同参数必须仍弹窗；got {}",
+        r.stdout
+    );
+}

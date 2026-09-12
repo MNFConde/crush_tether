@@ -710,7 +710,14 @@ pub fn causes_of_components(components: &[(Decision, DecisionTrace)], command: &
                 key: r.clone(),
             });
         } else if let Some(src) = &t.source {
-            if src.layer == "script" {
+            if src.layer == "script"
+                || src.layer == "default"
+                || src.entry == "default"
+                || src.entry.ends_with(".default")
+            {
+                // 无稳定溯源键（无名脚本/激活降级/default 兜底）→ 整命令
+                // 粒度：兜底询问的语义是「我不认识它」，批的是这一条具体
+                // 命令，不是「该 bin 的所有形态」（D-10 拍板）。
                 out.push(Cause {
                     kind: "whole",
                     key: command.to_string(),
@@ -1068,6 +1075,10 @@ pub struct LogContext<'a> {
     pub explicit: Option<&'a Path>,
     /// 当前引擎的脚本文件名（source.layer=script 与 script.file 溯源）。
     pub script_file: Option<&'static str>,
+    /// 会话 ID（M8.6：decisions.jsonl 关联主键，suggest 交叉推断用）。
+    pub session_id: Option<&'a str>,
+    /// 工具调用 ID（关联主键）。
+    pub tool_use_id: Option<&'a str>,
 }
 
 /// 裁决日志记录（design.md「日志」示例字段全集）。
@@ -1103,6 +1114,8 @@ pub fn log_verdict(
         "source": source,
         "kb": if ctx.kb_present { serde_json::json!(["main"]) } else { serde_json::json!([]) },
         "normalized": trace.normalized,
+        "session_id": ctx.session_id,
+        "tool_use_id": ctx.tool_use_id,
         "script": {
             "file": match trace.script_layer {
                 Some("user") => serde_json::json!(format!(
@@ -1454,6 +1467,8 @@ fn handle_connection(
                         kb_present: rs.kb_present,
                         explicit: rs.config_path.as_deref(),
                         script_file: crate::script::script_file_name(&rs.engine),
+                        session_id: req.session_id.as_deref(),
+                        tool_use_id: req.tool_use_id.as_deref(),
                     },
                 );
                 Some(VerdictDto {

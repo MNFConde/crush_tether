@@ -10,6 +10,8 @@
 //! - `repl`：用户面规则调试器（M7.1，每条输入重载配置，改规则即测）。
 //! - `init`：显式生成默认配置包（P8/M8.1，D-09——配置创建唯一路径，自动
 //!   生成已移除；缺省项目层，`--user`/`--global` 切目标层）。
+//! - `suggest`：权限建议（M8.6，D-10 定位 = 配置打磨手段）——裁决日志 ×
+//!   执行记录交叉推断反复批准的命令，stdout 输出建议块（零写入）。
 //!
 //! 裁决管线：配置加载（显式覆盖或三层发现）→ 字段级继承合并 →
 //! rules.toml 查表（多命中合成）→ rules.rhai 脚本 → 定稿点 → 组合裁决，
@@ -35,12 +37,17 @@ fn main() -> ExitCode {
     let mut cases: Option<String> = None;
     let mut init_user = false;
     let mut init_global = false;
+    let mut threshold: Option<usize> = None;
+    let mut window_days: Option<u64> = None;
+    let mut format = String::from("toml");
     let mut positional: Vec<String> = Vec::new();
 
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
         match arg.as_str() {
-            "check" | "hook" | "serve" | "benchmark" | "explain" | "repl" | "init" => mode = arg,
+            "check" | "hook" | "serve" | "benchmark" | "explain" | "repl" | "init" | "suggest" => {
+                mode = arg
+            }
             "--agent" => match args.next().as_deref().and_then(Agent::parse) {
                 Some(a) => agent = a,
                 None => {
@@ -79,6 +86,28 @@ fn main() -> ExitCode {
                 }
             },
             "--batch" => batch = true,
+            // suggest 选项（M8.6）：候选门槛 / 统计窗口 / 输出形态。
+            "--threshold" => match args.next().and_then(|v| v.parse::<usize>().ok()) {
+                Some(n) => threshold = Some(n),
+                None => {
+                    eprintln!("crush-tether: --threshold requires a number");
+                    return fail_safe_confirm(agent);
+                }
+            },
+            "--window" => match args.next().and_then(|v| v.parse::<u64>().ok()) {
+                Some(d) => window_days = Some(d),
+                None => {
+                    eprintln!("crush-tether: --window requires days");
+                    return fail_safe_confirm(agent);
+                }
+            },
+            "--format" => match args.next() {
+                Some(f) => format = f,
+                None => {
+                    eprintln!("crush-tether: --format requires toml|table");
+                    return fail_safe_confirm(agent);
+                }
+            },
             // init 目标层（P8/M8.1）：缺省项目层，两旗标互斥。
             "--user" => init_user = true,
             "--global" => init_global = true,
@@ -134,6 +163,18 @@ fn main() -> ExitCode {
             crush_tether::repl::run(&project, config_arg.as_deref(), &engine)
         }
         "init" => run_init(project_arg.as_ref(), &engine, init_user, init_global),
+        "suggest" => {
+            let project = project_arg.unwrap_or_else(crush_tether::config::find_project_root);
+
+            ExitCode::from(crush_tether::suggest::run(
+                &project,
+                &crush_tether::suggest::SuggestOptions {
+                    threshold: threshold.unwrap_or(3),
+                    window_days: window_days.unwrap_or(30),
+                    format,
+                },
+            ) as u8)
+        }
         _ => {
             if batch {
                 return run_batch(config_arg.as_deref(), &engine, project_arg.as_ref());
@@ -290,7 +331,13 @@ fn run_hook(agent: Agent, config_arg: Option<&str>, engine: &str) -> ExitCode {
     // 会话放行（serve 不可达时的便签查询/记录）。日志 mode 记 "hook"：
     // 审计可区分「serve 降级」与「独立 check」。
     match check_verdict(
-        &project, config_arg, engine, &command, agent, "hook", (session, tool_use),
+        &project,
+        config_arg,
+        engine,
+        &command,
+        agent,
+        "hook",
+        (session, tool_use),
     ) {
         Ok(verdict) => ExitCode::from(channel::emit(&verdict, agent)),
         Err(code) => code,
@@ -382,6 +429,8 @@ fn check_verdict(
                     kb_present: rs.kb_present,
                     explicit: rs.config_path.as_deref(),
                     script_file: crush_tether::script::script_file_name(&rs.engine),
+                    session_id: session,
+                    tool_use_id: tool_use,
                 },
             );
             Ok(verdict)
