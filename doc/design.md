@@ -682,11 +682,23 @@ JSONL 一行一条裁决，字段覆盖：命令原文、结果、触发层级�
  "script":{"file":null,"rule":null}}
 ```
 
-- `source.layer` ∈ global/user/project/explicit/script/default；脚本激活/改判时 layer=script 并填 `script.file`（区分项目层与用户层脚本文件，文件名随 `--engine` 取 `rules.rhai`/`rules.lua`；`script.rule` v1 恒 null——脚本无命名规则概念，字段为后续扩展保留）。v1 可达值：user/project/explicit/script/default；`global` 待全局层发现落地（v1 不做）。
+- `source.layer` ∈ global/user/project/explicit/script/default；脚本激活/改判时 layer=script 并填 `script.file`（区分项目层与用户层脚本文件，文件名随 `--engine` 取 `rules.rhai`/`rules.lua`；`script.rule` v1 恒 null——脚本无命名规则概念，字段为后续扩展保留）。可达值：user/project/explicit/script/default/global——【2026-09-12 更新：P8/M8.1 全局层发现落地，`global` 正式可达（explain 实证 `global.default` 命中）】。
 - `kb`：本次裁决加载的知识库 bucket 列表；`[]` = 知识库已删光——**当前配置未经任何内置规则校验、别名/flag 归一未生效**，日志自证可见。`normalized` 记录归一链（如 `"npm exec → npx"`），未归一为 `null`。
 - serve 加载/**热重载成功**时另记一条非裁决事件行（`type:"load"`，含 kb 状态与 lint 告警），冷热路径都留痕；热重载失败不留痕（快照未换，stderr 告警）。
 - serve 模式由 serve 单点写（复用行协议已有字段），hook 降级路径与 check/benchmark 自写一行（mode 字段区分 hook 降级与独立 check）；人读视图由后续 `crush-tether log` 子命令渲染 JSONL（人看视图、程序读原文）。默认开/关在 P4 落地 serve 时定。
 - **实现注记（2026-09-06，M4.3 落地，[D-07](decisions.md#d-07-裁决日志默认开与落盘形态)）**：默认开（`CRUSH_TETHER_LOG=0|off|false` 关）；落盘 `<project>/.crush-tether/decisions.jsonl` 追加写、写入失败静默；`ts` 为 UTC RFC3339（零依赖，本地时区由人读视图渲染）；热重载信号在 serve 主线程请求间隙消费（改规则后的第一个请求触发重载并留 load 事件）。
+
+### 权限学习（suggest）设计定稿（P8/M8.5，实现待用户明确授权）
+
+> 动机（2026-09-06/07 登记 + 实测补强）：hook ask 无状态 + hook 评估覆盖原生权限档位——zcode 实测原生「以后都放行」对本门 confirm 类命令结构性失效，用户每条 confirm 命令都被重新询问。正解 = 从裁决日志与执行记录交叉推断「用户反复人工批准且执行成功的命令」，离线生成规则建议（`suggest`），人工确认后写入项目规则，把重复确认收敛为一次性白名单扩充。本节为**设计定稿**；实现不在 P8 授权范围（硬门禁：需用户另行明确授权）。
+
+- **采集（运行时，唯一新增的运行时面）**：`hook` 入口按事件分派——`PreToolUse` 走既有管线；`PostToolUse` 走执行记录（只落盘、零裁决输出、恒 exit 0——PostToolUse 无阻断语义，采集失败不影响 agent）。落盘**独立文件** `.crush-tether/executions.jsonl`（D-09 同目录；一行一执行：`ts`/`agent`/`session_id`/`tool_use_id`/归一化命令/成败）。独立于 decisions.jsonl 的理由：裁决日志是安全审计面（D-07），学习信号是派生数据——分离后「关日志」与「关学习」开关解耦（`CRUSH_TETHER_LEARN=off` 关采集，默认开，与 D-07 同向），executions 可独立清理滚动不触碰审计连续性。
+- **关联（suggest 时离线）**：主键 `session_id + tool_use_id`（PreToolUse/PostToolUse 载荷均携带）；兜底 = 归一化命令串 + 时间窗。**实现期探针核对**：claude/zcode PostToolUse 载荷是否含 `tool_use_id` 与 `tool_input.command`（M5.3 仅核过「含执行结果」，字段全集未记）；decisions.jsonl 现行是否携带 `tool_use_id`（M4.3 字段全集核对），缺则裁决侧补记。
+- **候选生成（交叉推断，保守三条件）**：裁决=confirm（**deny 永不学习**）∩ 执行成功 ∩ 窗口内重复 ≥ N（默认 3，`--threshold` 可调）。执行即批准的代理信号成立性论证：confirm 档在交互形态强制人工弹窗（hook 评估先于原生权限并可覆盖 yolo——三 agent 实测），原生「以后都允许」记忆被 hook ask 覆盖失效（zcode 实测）→ 每次执行前都经真人工批准；无头形态 confirm=拒绝（2026-09-12 场景批三 agent 定性）→ 无头流量天然不构成候选，误学面收敛。
+- **收窄与跳过（防过宽放行）**：候选收窄到 `bin + sub` 最小作用域（`npm install` → `[local] allow.sub`）；**kb `may_write`/`irreversible`/网络类 bin 永久跳过**（`curl`/`wget`/`rm`/`pip` 等——即便反复批准也不建议入 allow，输出「跳过清单」附原因）；含自由参数（URL/路径/包名）且无安全 sub 可收窄的形态同跳过。
+- **suggest 命令形态（零写入）**：`crush-tether suggest [--threshold N] [--window days] [--format toml|table]`——读两份 JSONL 交叉，stdout 输出建议块（合法 rules.toml 片段）+ 摘要表 + 跳过清单；**v1 零自动写入**，人工审阅后自行粘贴进项目 `rules.toml`（git diff 即回滚面与审计面）；`--apply` 自动写入登记为后续增强（须再过一轮设计）。查表无「学习条目」特例——写入即普通规则，可审计性由 suggest 输出留痕（LOG）+ git 承载。
+- **降级矩阵（能力探测 + 静默关闭，绝不报错）**：claude = 全量可用（PostToolUse 含完整 tool_response）；zcode = 可用·降级（PostToolUse 仅执行结果，成败可判、输出内容不可分析）；crush = 不可用（无 PostToolUse 事件，M7.3 实测）——采集端探测 = 注册后 N 天零记录即 stderr 提示一次，suggest 端 = 无 executions 文件时输出「当前 agent 无学习信号源」说明后 exit 0。
+- **与零内置策略的关系**：学习不引入任何内置规则——建议全部派生自用户自己的裁决/执行历史，且 v1 不自动落盘；引擎查表、脚本、定稿点三性质（定稿点唯一/逃逸检查/deny 终审）对学习写入的条目一视同仁。
 
 ### 规则测试工具（M7.1，定稿）
 

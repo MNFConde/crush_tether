@@ -2,6 +2,12 @@
 
 This file records substantive progress in reverse-chronological order — newest entry at the top, right below this line. Keep each entry short — summary and pointer only; conclusions settle into `cairn/<topic>.md`.
 
+## 2026-09-12 Ⅴ · M8.5 权限学习（suggest）设计定稿（实现硬门禁生效）
+
+- **设计定稿入 design.md 专节**：采集 = hook 事件分派（PreToolUse 管线不变 / PostToolUse 执行记录，恒 exit 0 零阻断）+ `executions.jsonl` **独立落盘**（裁决审计面 D-07 与学习派生数据解耦，`CRUSH_TETHER_LEARN` 开关对称）；关联 = session_id+tool_use_id 主键（字段全集列实现期探针核对点）；候选 = confirm ∩ 执行成功 ∩ ≥3 次保守三条件，附「执行即批准」成立性论证（hook 覆盖原生记忆 → 每次真人工；无头 confirm=拒绝 → 无头流量不构成候选，2026-09-12 场景批定性为其提供数据底座）；收窄 = bin+sub 且 kb may_write/irreversible/网络类永跳过；**suggest v1 零写入**（输出建议块+跳过清单，人工粘贴，git diff 即回滚面）；降级 = claude 全量 / zcode 降级 / crush 静默关闭。
+- **硬门禁**：实现不在 P8 授权范围，待用户讨论后明确授权；ROADMAP「P6 后候选」条目已升格并互指。
+- Details: design.md「权限学习（suggest）设计定稿（P8/M8.5，实现待用户明确授权）」节、ROADMAP P8/M8.5。
+
 ## 2026-09-12 Ⅳ · M8.4 无头场景批二定性（ask/timeout/exitjson）+ 断言固化
 
 - **新定性（本机实弹，mock 8788 + 探针 perm）**：① claude 无头 **ask=拒绝**（无宿主应答）；② claude 无头 **hook 超时=拒绝**——交互 ~32s 放行（2026-09-09）的形态分化新例，「交互如此≠无头如此」教训母题第三实例（fail-open、confirm、timeout 三连）；③ crush 无头 **ask=放行**（run 原生权限自动接受，新定性）；④ crush timeout=放行（34s 复证 2026-09-09 33s）；⑤ exit2+JSON 并发（B4）三家同向阻断，claude 侧「exit 2 覆盖 JSON」获无头实证。
