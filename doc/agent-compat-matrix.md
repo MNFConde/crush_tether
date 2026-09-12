@@ -47,12 +47,13 @@
 
 **zcode**（3.11.2 Desktop App 插件链路，2026-09-10 人工实测）
 
+- 旗标预研（2026-09-12，B2，内嵌 CLI `--help` 实探）：`-p/--print` 配 `--mode <build|edit|plan|yolo>`（**headless 默认 yolo**；`--permission-mode` 为 legacy 别名）——无头 confirm=拒绝（2026-09-11）的机制**推断（未实测）**：hook ask 强制进权限流，无头无宿主应答而自动拒，yolo 默认不改写该行为；模式交叉无头场景化前提成立（插件轨）。
 - 确认模式 × hook：allow **跳过原生弹窗**（变更类写操作实证）；ask 弹窗（人工批准）；deny 不弹直接阻断
 - 反证实验：弹窗上点拒绝 → agent 侧收 Denied，证实弹窗人工性
 - 计划模式 × hook：hook 照常评估（裁决日志增量可证）；计划模式只读分类器**短路 ask**（不弹窗直接拦）；agent 层系统硬约束禁写先于 hook（「hook allow 写操作」不可达）
 
-**claude-code**：未测（permission_mode 交叉挂 [test-and-ci.md §5](test-and-ci.md#5-测试规划与挂账)）
-**crush**：未测（yolo 语义有源码级核对，模式交叉挂 [test-and-ci.md §5](test-and-ci.md#5-测试规划与挂账)）
+**claude-code**：未测。旗标预研（2026-09-12，B2，`--help` 实探）：`--permission-mode <mode>` 存在，choices = `acceptEdits` / `auto` / `bypassPermissions` / `manual` / `dontAsk` / `plan`；`--permission-prompts` 定 headless 弹窗应答者（`host` / **`none` = 自动拒绝**——无头 confirm=拒绝的机制注脚）；`--dangerously-skip-permissions` 与 `--allowedTools` 存在。无头旗标形态齐备 → 模式交叉可场景化（第三批，`-p --permission-mode …`）。
+**crush**：未测（yolo 语义有源码级核对）。旗标预研（2026-09-12，B2，`--help` 实探）：`-y/--yolo`（自动接受全部权限）为唯一模式旗标，run/TUI 通用 → yolo × hook 无头交叉可场景化（`crush run --yolo`）；无 plan 类模式。
 
 ## 2. 版本测试结果记录
 

@@ -2,6 +2,13 @@
 
 This file records substantive progress in reverse-chronological order — newest entry at the top, right below this line. Keep each entry short — summary and pointer only; conclusions settle into `cairn/<topic>.md`.
 
+## 2026-09-12 Ⅲ · M8.3 无头模式旗标预研（B2 销账）
+
+- **三 agent 旗标全景（`--help` 实探，零成本）**：claude `--permission-mode` 六值（acceptEdits/auto/bypassPermissions/manual/dontAsk/plan）+ `--permission-prompts`（headless 弹窗应答者，`none`=自动拒绝——无头 confirm=拒绝的机制注脚）；crush 仅 `-y/--yolo` 一档（run/TUI 通用，无 plan 类）；zcode `-p` 配 `--mode <build|edit|plan|yolo>` 且 **headless 默认 yolo**（legacy 别名 `--permission-mode`）。
+- **推论（登记为推断，未实测）**：zcode 无头 confirm=拒绝的机制 = hook ask 强制进权限流、无头无宿主应答自动拒，yolo 默认不改写。
+- **C 组结论**：三 agent 模式交叉的无头等价形态全部可场景化（`claude -p --permission-mode …` / `crush run --yolo` / zcode 插件轨 `--mode`）——第三批场景组解锁；交互形态仍人工。
+- Details: 矩阵 §1.3 三 agent 预研注记、test-and-ci.md §5 销账。
+
 ## 2026-09-12 Ⅱ · M8.2 wrapper 插件一期落地（失效模式 #2 结构性对冲）
 
 - **spike 定论（bundle 源码级）**：zcode 对 hook `command` 做 `${ZCODE_PLUGIN_ROOT}`/`${ZCODE_PLUGIN_ROOT}` 模板变量展开、展开先于引号转义（`zcode.cjs` 插桩核对 + 官方 hookify 插件同款依赖佐证）——wrapper 可置于插件 `bin/`、以插件根绝对路径拉起，不依赖 PATH，绕开「插件目录是否上 PATH」的未知数。

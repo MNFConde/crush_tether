@@ -116,10 +116,9 @@ mock LLM 后端驱动 agent 完成一轮固定 tool_use(命令可配,`--cmd`),�
 |---|---|---|---|---|
 | claude-code **交互 + 全放行形态**(``--dangerously-skip-permissions`` / `allowedTools:["*"]`)下 hook 是否仍被评估 | agent 行为 | 人工交互 | [矩阵 §1.2](agent-compat-matrix.md) | 社区「权限管道跳过」假说(zcode 侧已有同构结论:hook 评估先于原生权限并可覆盖 yolo) |
 | exit 2 与 JSON 回包并发时的覆盖规则 | 协议 | 探针实验 | design.md 契约节核对 | **上游聚合语义引用(halt > deny > allow),非我方行为面**,仅可选抽查以验证 design.md 契约节引用的准确性 |
-| claude-code 非默认 permission_mode(plan/bypassPermissions 交互)× hook 交叉 | 模式×hook | 人工交互 | [矩阵 §1.3](agent-compat-matrix.md#13-原生模式-hook-交叉按-agent) | 未测 |
-| crush 原生确认/计划模式 × hook 交叉 | 模式×hook | 人工交互 | [矩阵 §1.3](agent-compat-matrix.md#13-原生模式-hook-交叉按-agent) | yolo 语义已有源码级核对,模式交叉未实测 |
-| zcode headless 全轴:ask 无头收场、超时、模式交叉在 headless 形态下的表现 | 协议+agent 行为 | 探针实验 | CI 场景组(第二批)+ [矩阵 §1.2](agent-compat-matrix.md) | 三档 deny/fail-open/rewrite 已由场景组覆盖(2026-09-11);ask 无头收场三 agent 均未定性,超时含 windows 进程清理观察 |
-| 无头模式旗标预研(claude `--permission-mode` / zcode `-p` 模式参数是否存在及形态) | 模式×hook | 人工交互 | [矩阵 §1.3](agent-compat-matrix.md#13-原生模式-hook-交叉按-agent) | 纯探测,第三批场景化的前提 |
+| claude-code 非默认 permission_mode(plan/bypassPermissions 交互)× hook 交叉 | 模式×hook | 人工交互 | [矩阵 §1.3](agent-compat-matrix.md#13-原生模式-hook-交叉按-agent) | 未测;无头等价形态可场景化(`-p --permission-mode …`,B2 预研 2026-09-12) |
+| crush 原生确认/计划模式 × hook 交叉 | 模式×hook | 人工交互 | [矩阵 §1.3](agent-compat-matrix.md#13-原生模式-hook-交叉按-agent) | yolo 语义有源码级核对;仅 `--yolo` 一档,无头交叉可场景化(`crush run --yolo`,B2 预研) |
+| zcode headless 全轴:ask 无头收场、超时、模式交叉在 headless 形态下的表现 | 协议+agent 行为 | 探针实验 | CI 场景组(第二批)+ [矩阵 §1.2](agent-compat-matrix.md) | 三档 deny/fail-open/rewrite 已由场景组覆盖(2026-09-11);ask 无头收场三 agent 均未定性,超时含 windows 进程清理观察;`--mode` 旗标存在(B2 预研,headless 默认 yolo) |
 | zcode ubuntu job | agent 行为 | 串联冒烟 | workflow | Linux 版内测中,公测后补(发行渠道落地即可平移 windows job 配方);同批换接 wrapper .sh(hooks.json 现指 .cmd,M8.2) |
 | wrapper 本机 zcode 0.2.0 实弹 | agent 行为 | 插件重装+headless | [矩阵 §1.2](agent-compat-matrix.md) | 0.2.0 wrapper 已落地(M8.2,CI 三 job 覆盖),本机 cache 拷贝须重装生效,现网 0.1.0 行为不变;随用户下次插件重装一并验 |
 | zcode cron latest 哨兵的首个自动触发尚待观察 | 协议 | 串联冒烟 | [矩阵 §1.1/§2](agent-compat-matrix.md) | 每周一 UTC |
