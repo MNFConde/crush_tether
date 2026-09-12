@@ -173,6 +173,24 @@ fn register_decision_types(engine: &mut Engine) {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AllowActivation(pub String);
 
+/// `confirm_as("子名")` 的子名标记（自定义类型）：声明式规则函数内数据驱动
+/// 分支（如按知识库 `write_tokens` 逐 token 判定）上报命中子名，溯源名拼为
+/// `规则名:子名`（decisions.jsonl `script.rule`）；只能由 `confirm_as` 原语
+/// 构造，返回固定映射 confirm。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConfirmAs(pub String);
+
+/// 声明式规则条目（`rule(名字, 优先级, 函数)` 注册产物）：加载期收集，
+/// 按优先级稳定排序（同值保注册序），运行时逐个调用、表态短路。
+struct RegisteredRule {
+    name: String,
+    priority: i64,
+    f: rhai::FnPtr,
+}
+
+/// 声明式规则数上限：防顶层注册循环（`for … rule(…)`）滥用加载期执行。
+const MAX_RULES: usize = 128;
+
 /// 脚本引擎抽象（引擎开闭落点；Rhai 为默认实现，Lua 为兼容实现）。
 pub trait RuleEngine {
     /// 单命令评估。`pipe_to_shell` 为管线原语计算的管道拓扑特征（整条
@@ -198,8 +216,10 @@ pub trait RuleEngine {
 pub enum ScriptOutcome {
     /// 无意见（`decision::PASS`）：保留查表裁决。
     Pass,
-    /// 脚本升级裁决（confirm / deny）；定稿点对查表 deny 终审不可翻。
-    Adjust(Decision),
+    /// 脚本升级裁决（confirm / deny）+ 产出规则名（`script.rule` 溯源：
+    /// 声明式 = 注册名，旧 check 形态经 `confirm_as` = `check:子名`，
+    /// 裸决策 = None）；定稿点对查表 deny 终审不可翻。
+    Adjust(Decision, Option<String>),
     /// `allow(name)` 激活：放行面 = 用户声明集 ∩ 脚本条件命中，由定稿点
     /// 按声明作用域元数据复查后放行。
     Activate(String),
@@ -209,6 +229,8 @@ pub enum ScriptOutcome {
 pub struct RhaiEngine {
     engine: Engine,
     ast: rhai::AST,
+    /// 声明式规则条目（`rule()` 注册，按优先级升序；空 = 旧 check 形态）。
+    rules: Vec<RegisteredRule>,
     /// 声明集副本（定稿点作用域化逃逸检查的判据）。
     decls: ScriptAllowDecls,
     /// 机制 1 提取的 `allow("…")` 字面量集。
@@ -238,6 +260,65 @@ impl RhaiEngine {
         register_ctx_type(&mut engine);
         register_allow(&mut engine, decls.clone());
 
+        // 声明式规则注册器（M8.6）：`rule(名字, 优先级, 函数)` 由引擎注入，
+        // 加载期执行顶层语句时收集。重复名/空名/负优先级/超上限在注册边界
+        // 报错 → 顶层执行失败 → 拒载整个脚本。
+        fn rule_err(msg: impl std::fmt::Display) -> Box<EvalAltResult> {
+            Box::new(EvalAltResult::ErrorRuntime(
+                Dynamic::from(msg.to_string()),
+                Position::NONE,
+            ))
+        }
+        let rules: std::rc::Rc<std::cell::RefCell<Vec<RegisteredRule>>> = Default::default();
+        {
+            let reg = rules.clone();
+            engine.register_fn(
+                "rule",
+                move |name: &str,
+                      priority: i64,
+                      f: rhai::FnPtr|
+                      -> Result<(), Box<EvalAltResult>> {
+                    let name = name.trim();
+                    if name.is_empty() {
+                        return Err(rule_err("rule() name must not be empty"));
+                    }
+                    if priority < 0 {
+                        return Err(rule_err(format!("rule(\"{name}\") priority must be >= 0")));
+                    }
+                    let mut list = reg.borrow_mut();
+                    if list.iter().any(|r| r.name == name) {
+                        return Err(rule_err(format!("duplicate rule name `{name}`")));
+                    }
+                    if list.len() >= MAX_RULES {
+                        return Err(rule_err(format!("too many rules (limit {MAX_RULES})")));
+                    }
+                    list.push(RegisteredRule {
+                        name: name.to_string(),
+                        priority,
+                        f,
+                    });
+                    Ok(())
+                },
+            );
+        }
+        {
+            let reg = rules.clone();
+            engine.register_fn(
+                "confirm_as",
+                move |sub: &str| -> Result<ConfirmAs, Box<EvalAltResult>> {
+                    let sub = sub.trim();
+                    if sub.is_empty() {
+                        return Err(rule_err("confirm_as() sub-name must not be empty"));
+                    }
+                    if reg.borrow().len() >= MAX_RULES {
+                        // 双保险：正常到不了（注册期已限），保守防御。
+                        return Err(rule_err(format!("too many rules (limit {MAX_RULES})")));
+                    }
+                    Ok(ConfirmAs(sub.to_string()))
+                },
+            );
+        }
+
         let ast = engine
             .compile(source)
             .map_err(|e| ScriptError::Compile(e.to_string()))?;
@@ -256,9 +337,30 @@ impl RhaiEngine {
             }
         }
 
+        // 声明式：加载期执行顶层语句（`rule()` 注册在此发生；一次性，
+        // 沙箱限流照盖）。
+        engine
+            .eval_ast::<()>(&ast)
+            .map_err(|e| ScriptError::Rejected(format!("script top-level failed: {e}")))?;
+        let mut collected: Vec<RegisteredRule> = std::mem::take(&mut *rules.borrow_mut());
+        if collected.is_empty() {
+            // 兼容形态：无注册规则 → 必须有 `check(ctx)` 入口。
+            if !ast.iter_functions().any(|f| f.name == "check") {
+                return Err(ScriptError::Rejected(
+                    "script must define `check(ctx)` or register rules via \
+                     `rule(name, priority, fn)`"
+                        .into(),
+                ));
+            }
+        } else {
+            // 稳定排序：同优先级保注册顺序（= 定义顺序）。
+            collected.sort_by_key(|r| r.priority);
+        }
+
         Ok(Self {
             engine,
             ast,
+            rules: collected,
             decls,
             allow_literals: extracted,
         })
@@ -281,36 +383,76 @@ impl RuleEngine for RhaiEngine {
         project: &Path,
         pipe_to_shell: bool,
     ) -> Result<ScriptOutcome, ScriptError> {
-        let mut scope = rhai::Scope::new();
         let ctx = ScriptCtx::new(cmd, verdict, project, pipe_to_shell);
-        let result: Dynamic = self
-            .engine
-            .call_fn(&mut scope, &self.ast, "check", (ctx,))
-            .map_err(|e| ScriptError::Runtime(e.to_string()))?;
-        // 激活标记（allow 原语构造的自定义类型）→ 交给定稿点。
-        if let Some(a) = result.clone().try_cast::<AllowActivation>() {
-            return Ok(ScriptOutcome::Activate(a.0));
+        if self.rules.is_empty() {
+            // 兼容形态：单 `check(ctx)` 入口（机制不变，M8.6 双形态并存）。
+            let mut scope = rhai::Scope::new();
+            let result: Dynamic = self
+                .engine
+                .call_fn(&mut scope, &self.ast, "check", (ctx,))
+                .map_err(|e| ScriptError::Runtime(e.to_string()))?;
+            return parse_return(result, "check", false);
         }
-        // 类型化决策值（decision:: 常量或与其同型的返回值）。
-        if let Some(d) = result.clone().try_cast::<ScriptDecision>() {
-            return script_outcome_of(d);
+        // 声明式形态：按优先级序逐规则调用——PASS（不表态）交下一个，
+        // 表态（confirm/deny/激活）短路。ctx 每规则重建自同一查表基线
+        // （与旧 check 内分支共享同一 verdict 语义一致）。
+        for r in &self.rules {
+            let result: Dynamic =
+                r.f.call(&self.engine, &self.ast, (ctx.clone(),))
+                    .map_err(|e| ScriptError::Runtime(format!("rule `{}`: {e}", r.name)))?;
+            let outcome = parse_return(result, &r.name, true)?;
+            if !matches!(outcome, ScriptOutcome::Pass) {
+                return Ok(outcome);
+            }
         }
-        // 双保险：等价裸字符串在返回边界统一解析。
-        let s = result
-            .into_string()
-            .map_err(|_| ScriptError::Contract("check() must return a decision value".into()))?;
-        script_outcome_of(ScriptDecision::parse(&s).ok_or_else(|| {
+        Ok(ScriptOutcome::Pass)
+    }
+}
+
+/// 脚本返回值 → 评估产出（唯一出口；`unit` = 当前执行单元名——声明式为
+/// 规则名、旧形态为 "check"；`named` = 该单元是否携带溯源名——声明式恒
+/// true，旧 check 仅 `confirm_as` 子名通道有名）。allow 契约：放行必须走
+/// `allow("bin")` 带名通道——引擎才有的对账，脚本直接返回 allow 值一律
+/// 违约；`confirm_as(子名)` 固定映射 confirm 且溯源名为 `单元:子名`。
+fn parse_return(result: Dynamic, unit: &str, named: bool) -> Result<ScriptOutcome, ScriptError> {
+    // 激活标记（allow 原语构造的自定义类型）→ 交给定稿点。
+    if let Some(a) = result.clone().try_cast::<AllowActivation>() {
+        return Ok(ScriptOutcome::Activate(a.0));
+    }
+    // 子名标记（confirm_as 原语构造）→ confirm + `单元:子名` 溯源。
+    if let Some(c) = result.clone().try_cast::<ConfirmAs>() {
+        return Ok(ScriptOutcome::Adjust(
+            Decision::Confirm,
+            Some(format!("{unit}:{}", c.0)),
+        ));
+    }
+    // 类型化决策值（decision:: 常量或与其同型的返回值）。
+    if let Some(d) = result.clone().try_cast::<ScriptDecision>() {
+        return script_outcome_of(d, unit, named);
+    }
+    // 双保险：等价裸字符串在返回边界统一解析。
+    let s = result
+        .into_string()
+        .map_err(|_| ScriptError::Contract("check() must return a decision value".into()))?;
+    script_outcome_of(
+        ScriptDecision::parse(&s).ok_or_else(|| {
             ScriptError::Contract(format!(
                 "check() returned `{s}`; expected one of \"\", confirm, deny, \
                  allow(\"bin\")"
             ))
-        })?)
-    }
+        })?,
+        unit,
+        named,
+    )
 }
 
 /// 决策值 → 评估产出（唯一出口；allow 契约：放行必须走 `allow("bin")`
 /// 带名通道——引擎才有的对账，脚本直接返回 allow 值一律违约）。
-fn script_outcome_of(d: ScriptDecision) -> Result<ScriptOutcome, ScriptError> {
+fn script_outcome_of(
+    d: ScriptDecision,
+    unit: &str,
+    named: bool,
+) -> Result<ScriptOutcome, ScriptError> {
     match d {
         ScriptDecision::Pass => Ok(ScriptOutcome::Pass),
         ScriptDecision::Allow => Err(ScriptError::Contract(
@@ -318,8 +460,14 @@ fn script_outcome_of(d: ScriptDecision) -> Result<ScriptOutcome, ScriptError> {
              channel; bare values cannot be reconciled)"
                 .into(),
         )),
-        ScriptDecision::Confirm => Ok(ScriptOutcome::Adjust(Decision::Confirm)),
-        ScriptDecision::Deny => Ok(ScriptOutcome::Adjust(Decision::Deny)),
+        ScriptDecision::Confirm => Ok(ScriptOutcome::Adjust(
+            Decision::Confirm,
+            named.then(|| unit.to_string()),
+        )),
+        ScriptDecision::Deny => Ok(ScriptOutcome::Adjust(
+            Decision::Deny,
+            named.then(|| unit.to_string()),
+        )),
     }
 }
 
@@ -367,14 +515,15 @@ pub fn finalize(
 ) -> (Decision, Option<String>) {
     match outcome {
         ScriptOutcome::Pass => (initial, None),
-        ScriptOutcome::Adjust(d) => {
+        ScriptOutcome::Adjust(d, rule) => {
             if initial == Decision::Deny {
                 (
                     Decision::Deny,
                     Some("script outcome discarded: deny is final".into()),
                 )
             } else {
-                (d, Some("adjusted by rules.rhai".into()))
+                let suffix = rule.map(|r| format!(" (rule: {r})")).unwrap_or_default();
+                (d, Some(format!("adjusted by rules.rhai{suffix}")))
             }
         }
         ScriptOutcome::Activate(name) => {
@@ -597,10 +746,21 @@ pub struct ScriptChain {
     engines: Vec<(&'static str, Box<dyn RuleEngine>)>,
 }
 
+/// 脚本层链评估产出（最终裁决 + 溯源三元组；M8.6 起含生效规则名）。
+pub struct ChainOutcome {
+    /// 最终裁决（deny 终审与激活逃逸降级已在链内定稿）。
+    pub decision: Decision,
+    /// 生效裁决所在层标签（激活或改判的层；"global"/"user"/"project"）。
+    pub layer: Option<&'static str>,
+    /// 累积的最后一个原因说明（裁决日志 reason 数据源）。
+    pub reason: Option<String>,
+    /// 生效改判的脚本规则名（声明式 = 注册名；旧 check 裸决策 = None）。
+    pub rule: Option<String>,
+}
+
 impl ScriptChain {
     /// 依层序评估整条链；任一层出错整体 `Err`（调用方 fail-safe confirm）。
-    /// 返回（最终裁决，生效裁决所在层标签——激活或改判的层，
-    /// 累积的最后一个原因说明）。`escape_check` 为写目标感知逃逸检查回调
+    /// `escape_check` 为写目标感知逃逸检查回调
     /// （M7.0：调用方注入，与查表层同一实现——定稿点单点语义）。
     pub fn evaluate(
         &self,
@@ -609,23 +769,35 @@ impl ScriptChain {
         project: &Path,
         pipe_to_shell: bool,
         escape_check: &dyn Fn(&SimpleCommand, &Path) -> bool,
-    ) -> Result<(Decision, Option<&'static str>, Option<String>), ScriptError> {
+    ) -> Result<ChainOutcome, ScriptError> {
         let mut current = initial;
         let mut layer: Option<&'static str> = None;
         let mut reason = None;
+        let mut rule: Option<String> = None;
         for (tag, engine) in &self.engines {
             let outcome = engine.evaluate(cmd, current, project, pipe_to_shell)?;
             let activate = matches!(outcome, ScriptOutcome::Activate(_));
+            // 生效改判的规则名（被 discard 的产出不带名）先取出再定稿。
+            let effective_rule = match &outcome {
+                ScriptOutcome::Adjust(_, r) => r.clone(),
+                _ => None,
+            };
             let (d, r) = finalize(current, outcome, engine.decls(), cmd, project, escape_check);
             if activate || d != current {
                 layer = Some(tag);
+                rule = effective_rule;
             }
             if r.is_some() {
                 reason = r;
             }
             current = d;
         }
-        Ok((current, layer, reason))
+        Ok(ChainOutcome {
+            decision: current,
+            layer,
+            reason,
+            rule,
+        })
     }
 
     /// 全链 `allow("…")` 字面量并集（lint 死声明检查的数据源）。
@@ -762,12 +934,12 @@ mod tests {
         assert_eq!(
             e.evaluate(&cmd("sudo x"), Decision::Allow, Path::new(PROJ), false)
                 .unwrap(),
-            ScriptOutcome::Adjust(Decision::Deny)
+            ScriptOutcome::Adjust(Decision::Deny, None)
         );
         assert_eq!(
             e.evaluate(&cmd("rm x"), Decision::Allow, Path::new(PROJ), false)
                 .unwrap(),
-            ScriptOutcome::Adjust(Decision::Confirm)
+            ScriptOutcome::Adjust(Decision::Confirm, None)
         );
         assert_eq!(
             e.evaluate(&cmd("ls"), Decision::Allow, Path::new(PROJ), false)
@@ -788,7 +960,7 @@ mod tests {
         assert_eq!(
             e.evaluate(&cmd("git push"), Decision::Allow, Path::new(PROJ), false)
                 .unwrap(),
-            ScriptOutcome::Adjust(Decision::Deny)
+            ScriptOutcome::Adjust(Decision::Deny, None)
         );
     }
 
@@ -872,7 +1044,7 @@ mod tests {
                 false
             )
             .unwrap(),
-            ScriptOutcome::Adjust(Decision::Confirm)
+            ScriptOutcome::Adjust(Decision::Confirm, None)
         );
         assert_eq!(
             e.evaluate(&cmd("git branch"), Decision::Allow, Path::new(PROJ), false)
@@ -887,7 +1059,7 @@ mod tests {
                 false
             )
             .unwrap(),
-            ScriptOutcome::Adjust(Decision::Confirm)
+            ScriptOutcome::Adjust(Decision::Confirm, None)
         );
         assert_eq!(
             e.evaluate(
@@ -907,12 +1079,12 @@ mod tests {
                 false
             )
             .unwrap(),
-            ScriptOutcome::Adjust(Decision::Deny)
+            ScriptOutcome::Adjust(Decision::Deny, None)
         );
         assert_eq!(
             e.evaluate(&cmd("npx foo"), Decision::Allow, Path::new(PROJ), false)
                 .unwrap(),
-            ScriptOutcome::Adjust(Decision::Confirm)
+            ScriptOutcome::Adjust(Decision::Confirm, None)
         );
         assert_eq!(
             e.evaluate(
@@ -922,7 +1094,7 @@ mod tests {
                 false
             )
             .unwrap(),
-            ScriptOutcome::Adjust(Decision::Confirm)
+            ScriptOutcome::Adjust(Decision::Confirm, None)
         );
         // 知识库删光：查不到数据 → 各兜底分支不触发 → 无意见。
         let e_empty = RhaiEngine::compile(
@@ -976,12 +1148,12 @@ mod tests {
         assert_eq!(
             e.evaluate(&cmd("ls"), Decision::Allow, Path::new(PROJ), false)
                 .unwrap(),
-            ScriptOutcome::Adjust(Decision::Confirm)
+            ScriptOutcome::Adjust(Decision::Confirm, None)
         );
         assert_eq!(
             e.evaluate(&cmd("sudo x"), Decision::Deny, Path::new(PROJ), false)
                 .unwrap(),
-            ScriptOutcome::Adjust(Decision::Deny)
+            ScriptOutcome::Adjust(Decision::Deny, None)
         );
     }
 
@@ -996,7 +1168,7 @@ mod tests {
         assert_eq!(
             e.evaluate(&cmd("sh"), Decision::Allow, Path::new(PROJ), true)
                 .unwrap(),
-            ScriptOutcome::Adjust(Decision::Deny)
+            ScriptOutcome::Adjust(Decision::Deny, None)
         );
         assert_eq!(
             e.evaluate(&cmd("sh"), Decision::Allow, Path::new(PROJ), false)
@@ -1018,12 +1190,12 @@ mod tests {
         assert_eq!(
             e.evaluate(&cmd("sudo x"), Decision::Allow, Path::new(PROJ), false)
                 .unwrap(),
-            ScriptOutcome::Adjust(Decision::Deny)
+            ScriptOutcome::Adjust(Decision::Deny, None)
         );
         assert_eq!(
             e.evaluate(&cmd("rm x"), Decision::Allow, Path::new(PROJ), false)
                 .unwrap(),
-            ScriptOutcome::Adjust(Decision::Confirm)
+            ScriptOutcome::Adjust(Decision::Confirm, None)
         );
         assert_eq!(
             e.evaluate(&cmd("ls"), Decision::Allow, Path::new(PROJ), false)
@@ -1050,7 +1222,7 @@ mod tests {
         assert_eq!(
             e.evaluate(&cmd("ls"), Decision::Allow, Path::new(PROJ), false)
                 .unwrap(),
-            ScriptOutcome::Adjust(Decision::Confirm)
+            ScriptOutcome::Adjust(Decision::Confirm, None)
         );
         assert_eq!(
             e.evaluate(&cmd("git status"), Decision::Allow, Path::new(PROJ), false)
@@ -1074,13 +1246,13 @@ mod tests {
         assert_eq!(
             e.evaluate(&cmd("ls"), Decision::Deny, Path::new(PROJ), false)
                 .unwrap(),
-            ScriptOutcome::Adjust(Decision::Deny)
+            ScriptOutcome::Adjust(Decision::Deny, None)
         );
         // != 裸字符串分支：查表 allow 升 confirm。
         assert_eq!(
             e.evaluate(&cmd("ls"), Decision::Allow, Path::new(PROJ), false)
                 .unwrap(),
-            ScriptOutcome::Adjust(Decision::Confirm)
+            ScriptOutcome::Adjust(Decision::Confirm, None)
         );
         // Confirm 命中 else：== "bogus"（未知词）为 false 不报错。
         assert_eq!(
@@ -1177,7 +1349,7 @@ mod tests {
         // Adjust 在 deny 之上无效（终审）。
         let (v, reason) = finalize(
             Decision::Deny,
-            ScriptOutcome::Adjust(Decision::Confirm),
+            ScriptOutcome::Adjust(Decision::Confirm, None),
             &d,
             &cmd_deny,
             proj,

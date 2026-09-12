@@ -184,6 +184,9 @@ pub struct DecisionTrace {
     pub script_changed: bool,
     /// 生效脚本层标签（"user"/"project"；日志 script.file 溯源数据源）。
     pub script_layer: Option<&'static str>,
+    /// 生效脚本规则名（M8.6 声明式规则函数注册名，`confirm_as` 拼
+    /// `规则名:子名`；旧 check 裸决策 = None。日志 script.rule 数据源）。
+    pub script_rule: Option<String>,
     /// 查表层最终产出（脚本评估前基线；allow 命中经 M7.0 写逃逸降级后即
     /// confirm——命中桶看 `source.entry`，产出档看本字段。explain 溯源用）。
     pub table_decision: Decision,
@@ -196,6 +199,7 @@ impl Default for DecisionTrace {
             normalized: None,
             script_changed: false,
             script_layer: None,
+            script_rule: None,
             // Default 基线取 Allow 无语义（日志不消费此字段；explain 恒显式赋值）。
             table_decision: Decision::Allow,
         }
@@ -388,11 +392,11 @@ impl RuleSet {
                 ) {
                     // 链式定稿点：deny 终审 + allow 激活作用域化逃逸检查的
                     // 唯一出口（用户层先、项目层最后）。
-                    Ok((d, layer, r)) => {
+                    Ok(outcome) => {
                         // script 字段自证：激活或改判（含 deny 终审拦截）留痕；
                         // 生效裁决出自脚本 → source.layer 换为 script（D-07
                         // 词表），层标签供 file 区分两层。
-                        if let Some(tag) = layer {
+                        if let Some(tag) = outcome.layer {
                             trace.script_changed = true;
                             trace.script_layer = Some(tag);
                             trace.source = Some(crate::lookup::EntrySource {
@@ -401,7 +405,8 @@ impl RuleSet {
                                 token: cmd.bin().unwrap_or("").to_string(),
                             });
                         }
-                        (d, r)
+                        trace.script_rule = outcome.rule;
+                        (outcome.decision, outcome.reason)
                     }
                     Err(e) => {
                         eprintln!("crush-tether: script evaluation failed: {e}; fail-safe confirm");
@@ -476,6 +481,7 @@ impl RuleSet {
                 write_escape: escape_check(),
                 script_changed: t.script_changed,
                 script_layer: t.script_layer,
+                script_rule: t.script_rule.clone(),
                 final_decision: v.decision,
                 reason: v.reason.clone(),
             });
@@ -487,7 +493,7 @@ impl RuleSet {
 }
 
 /// trace 合并规则（与逐条短路组合语义一致）：source/normalized 首个优先，
-/// script_changed 永久置位，script_layer 后到覆盖。
+/// script_changed 永久置位，script_layer/script_rule 后到覆盖。
 fn merge_trace(merged: &mut DecisionTrace, t: DecisionTrace) {
     if merged.source.is_none() {
         merged.source = t.source;
@@ -499,6 +505,7 @@ fn merge_trace(merged: &mut DecisionTrace, t: DecisionTrace) {
     if t.script_changed {
         merged.script_changed = true;
         merged.script_layer = t.script_layer;
+        merged.script_rule = t.script_rule;
     }
 }
 
@@ -527,6 +534,8 @@ pub struct CommandExplain {
     pub script_changed: bool,
     /// 生效脚本层（user/project）。
     pub script_layer: Option<&'static str>,
+    /// 生效脚本规则名（声明式注册名；None = 旧形态裸决策）。
+    pub script_rule: Option<String>,
     /// 该命令最终裁决。
     pub final_decision: Decision,
     /// 原因说明。
@@ -657,7 +666,7 @@ pub fn log_verdict(
                 Some(_) => serde_json::json!(ctx.script_file.unwrap_or("rules.rhai")),
                 None => serde_json::Value::Null,
             },
-            "rule": serde_json::Value::Null,
+            "rule": trace.script_rule,
         },
     });
     log_jsonl(project, &rec);

@@ -34,10 +34,12 @@ pub fn render_command(idx: usize, c: &CommandExplain) -> String {
     ));
     out.push_str(&format!(
         "    script: {}\n",
-        match (c.script_changed, c.script_layer) {
-            (true, Some(l)) => format!("changed (layer: {l})"),
-            (true, None) => "changed".to_string(),
-            (false, _) => "-".to_string(),
+        match (c.script_changed, c.script_layer, &c.script_rule) {
+            (true, Some(l), Some(r)) => format!("changed (layer: {l}, rule: {r})"),
+            (true, Some(l), None) => format!("changed (layer: {l})"),
+            (true, None, Some(r)) => format!("changed (rule: {r})"),
+            (true, None, None) => "changed".to_string(),
+            (false, _, _) => "-".to_string(),
         }
     ));
     if let Some(r) = &c.reason {

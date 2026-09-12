@@ -39,7 +39,7 @@ use crate::config::merge::ScriptAllowDecls;
 use crate::knowledge::KnowledgeBase;
 use crate::model::Decision;
 
-use super::{AllowActivation, ScriptCtx, ScriptDecision, ScriptError, ScriptOutcome};
+use super::{AllowActivation, ConfirmAs, ScriptCtx, ScriptDecision, ScriptError, ScriptOutcome};
 
 /// 指令预算（对齐 rhai `set_max_operations(100_000)` 同量级；hook 每
 /// [`INSTRUCTION_CHECK_INTERVAL`] 条指令核对一次）。
@@ -54,6 +54,16 @@ const MEMORY_LIMIT: usize = 16 * 1024 * 1024;
 /// `print` 污染 stdout（check/hook 协议通道）。
 const DANGEROUS_BASE_GLOBALS: &[&str] = &["dofile", "loadfile", "load", "print"];
 
+/// 声明式规则条目（Lua 侧，`rule(名字, 优先级, 函数)` 注册产物）。
+struct LuaRule {
+    name: String,
+    priority: i64,
+    f: Function,
+}
+
+/// 声明式规则数上限（与 rhai 侧 [`super::MAX_RULES`] 同值）。
+const MAX_RULES: usize = super::MAX_RULES;
+
 /// Lua 引擎实例：编译缓存 + 原语闭包捕获的上下文。
 pub struct LuaEngine {
     /// Lua 状态锚：`check` Function 绑定其状态，字段本身无需读取，但必须
@@ -61,6 +71,8 @@ pub struct LuaEngine {
     #[allow(dead_code)]
     lua: Lua,
     check: Function,
+    /// 声明式规则条目（按优先级升序；空 = 旧 check 形态）。
+    rules: Vec<LuaRule>,
     /// 指令预算计数器（每次 evaluate 归零；hook 闭包持有同一 Arc）。
     budget: Arc<AtomicU64>,
     /// 声明集副本（定稿点作用域化逃逸检查的判据）。
@@ -113,19 +125,93 @@ impl LuaEngine {
         register_decision_table(&lua)?;
         register_allow(&lua, decls.clone())?;
 
-        // 顶层语句执行一次（函数定义落全局）；语法错误在此暴露。
+        // 声明式规则注册器（M8.6）：`rule(名字, 优先级, 函数)` 引擎注入；
+        // chunk 顶层执行本就发生（函数定义落全局），注册调用同批收集。
+        // 重复名/空名/负优先级/超上限在注册边界报错 → chunk 执行失败 → 拒载。
+        let rules: std::rc::Rc<std::cell::RefCell<Vec<LuaRule>>> = Default::default();
+        {
+            let reg = rules.clone();
+            let f = lua
+                .create_function(move |_, (name, priority, f): (String, i64, Function)| {
+                    let name = name.trim().to_string();
+                    if name.is_empty() {
+                        return Err(mlua::Error::runtime("rule() name must not be empty"));
+                    }
+                    if priority < 0 {
+                        return Err(mlua::Error::runtime(format!(
+                            "rule(\"{name}\") priority must be >= 0"
+                        )));
+                    }
+                    let mut list = reg.borrow_mut();
+                    if list.iter().any(|r| r.name == name) {
+                        return Err(mlua::Error::runtime(format!(
+                            "duplicate rule name `{name}`"
+                        )));
+                    }
+                    if list.len() >= MAX_RULES {
+                        return Err(mlua::Error::runtime(format!(
+                            "too many rules (limit {MAX_RULES})"
+                        )));
+                    }
+                    list.push(LuaRule { name, priority, f });
+                    Ok(())
+                })
+                .map_err(compile_err)?;
+            lua.globals().set("rule", f).map_err(compile_err)?;
+        }
+        {
+            let f = lua
+                .create_function(|_, sub: String| {
+                    let sub = sub.trim().to_string();
+                    if sub.is_empty() {
+                        return Err(mlua::Error::runtime(
+                            "confirm_as() sub-name must not be empty",
+                        ));
+                    }
+                    Ok(ConfirmAs(sub))
+                })
+                .map_err(compile_err)?;
+            lua.globals().set("confirm_as", f).map_err(compile_err)?;
+        }
+
+        // 顶层语句执行一次（函数定义落全局；`rule()` 注册同批收集）；
+        // 语法错误在此暴露。
         let chunk: Function = lua
             .load(source)
             .set_name("rules.lua")
             .into_function()
             .map_err(|e| ScriptError::Compile(e.to_string()))?;
+        // 顶层执行错误（含 rule() 注册边界与限流）→ 加载期语义拒载；
+        // 语法错误已在 into_function 阶段以 Compile 暴露。
         chunk
             .call::<()>(())
-            .map_err(|e| ScriptError::Compile(e.to_string()))?;
-        let check: Function = lua
-            .globals()
-            .get("check")
-            .map_err(|_| ScriptError::Compile("rules.lua must define `check(ctx)`".into()))?;
+            .map_err(|e| ScriptError::Rejected(format!("script top-level failed: {e}")))?;
+        let check: Function = lua.globals().get("check").unwrap_or_else(|_| {
+            // 占位：无 check 的声明式脚本由下方校验放行，占位函数不会被调用。
+            lua.create_function(|_, ()| Ok(()))
+                .expect("placeholder function")
+        });
+
+        let mut collected: Vec<LuaRule> = std::mem::take(&mut *rules.borrow_mut());
+        if collected.is_empty() {
+            // 兼容形态：无注册规则 → 必须有 `check(ctx)` 入口。
+            let has_check = lua
+                .globals()
+                .get::<Option<Function>>("check")
+                .ok()
+                .flatten()
+                .is_some();
+            if !has_check {
+                return Err(ScriptError::Rejected(
+                    "rules.lua must define `check(ctx)` or register rules via \
+                     `rule(name, priority, fn)`"
+                        .into(),
+                ));
+            }
+        } else {
+            // 稳定排序：同优先级保注册顺序（= 定义顺序）。
+            collected.sort_by_key(|r| r.priority);
+        }
 
         // 机制 1：加载期字面量提取（非字面量实参 → 拒载）；机制 2：声明集
         // 对账——提取集 − 声明集 ≠ ∅ → 拒载。
@@ -143,6 +229,7 @@ impl LuaEngine {
         Ok(Self {
             lua,
             check,
+            rules: collected,
             budget,
             decls,
             allow_literals: extracted,
@@ -168,40 +255,98 @@ impl super::RuleEngine for LuaEngine {
     ) -> Result<ScriptOutcome, ScriptError> {
         self.budget.store(0, Ordering::Relaxed);
         let ctx = ScriptCtx::new(cmd, verdict, project, pipe_to_shell);
-        let result: Value = self
-            .check
-            .call(ctx)
-            .map_err(|e| ScriptError::Runtime(e.to_string()))?;
-        match result {
-            // nil = PASS（词汇约定：Lua 侧映射 nil 等价）。
-            Value::Nil => Ok(ScriptOutcome::Pass),
-            Value::UserData(u) => {
-                if let Ok(d) = u.borrow::<ScriptDecision>() {
-                    return super::script_outcome_of(*d);
-                }
-                if let Ok(a) = u.borrow::<AllowActivation>() {
-                    return Ok(ScriptOutcome::Activate(a.0.clone()));
-                }
-                Err(ScriptError::Contract(
-                    "check() must return a decision value".into(),
-                ))
-            }
-            // 双保险：等价裸字符串在返回边界统一解析。
-            Value::String(s) => {
-                let s = s
-                    .to_str()
-                    .map_err(|_| ScriptError::Contract("check() returned invalid UTF-8".into()))?;
-                super::script_outcome_of(ScriptDecision::parse(&s).ok_or_else(|| {
-                    ScriptError::Contract(format!(
-                        "check() returned `{s}`; expected one of nil, confirm, deny, \
-                         allow(\"bin\")"
-                    ))
-                })?)
-            }
-            _ => Err(ScriptError::Contract(
-                "check() must return a decision value".into(),
-            )),
+        if self.rules.is_empty() {
+            // 兼容形态：单 `check(ctx)` 入口（机制不变，M8.6 双形态并存）。
+            let result: Value = self
+                .check
+                .call(ctx)
+                .map_err(|e| ScriptError::Runtime(e.to_string()))?;
+            return parse_return(result, "check", false);
         }
+        // 声明式形态：按优先级序逐规则调用——PASS（不表态）交下一个，
+        // 表态（confirm/deny/激活）短路；指令预算跨规则共享（更严侧）。
+        for r in &self.rules {
+            let result: Value =
+                r.f.call(ctx.clone())
+                    .map_err(|e| ScriptError::Runtime(format!("rule `{}`: {e}", r.name)))?;
+            let outcome = parse_return(result, &r.name, true)?;
+            if !matches!(outcome, ScriptOutcome::Pass) {
+                return Ok(outcome);
+            }
+        }
+        Ok(ScriptOutcome::Pass)
+    }
+}
+
+/// 脚本返回值 → 评估产出（与 rhai 侧 [`super::parse_return`] 同语义）；
+/// `unit` = 执行单元名、`named` = 该单元是否携带溯源名。
+fn parse_return(result: Value, unit: &str, named: bool) -> Result<ScriptOutcome, ScriptError> {
+    match result {
+        // nil = PASS（词汇约定：Lua 侧映射 nil 等价）。
+        Value::Nil => Ok(ScriptOutcome::Pass),
+        Value::UserData(u) => {
+            if let Ok(a) = u.borrow::<AllowActivation>() {
+                return Ok(ScriptOutcome::Activate(a.0.clone()));
+            }
+            if let Ok(c) = u.borrow::<ConfirmAs>() {
+                return Ok(ScriptOutcome::Adjust(
+                    Decision::Confirm,
+                    Some(format!("{unit}:{}", c.0)),
+                ));
+            }
+            if let Ok(d) = u.borrow::<ScriptDecision>() {
+                return match *d {
+                    ScriptDecision::Pass => Ok(ScriptOutcome::Pass),
+                    ScriptDecision::Allow => Err(ScriptError::Contract(
+                        "scripts cannot return a bare `allow` (use the declared \
+                         allow(\"bin\") channel; bare values cannot be reconciled)"
+                            .into(),
+                    )),
+                    ScriptDecision::Confirm => Ok(ScriptOutcome::Adjust(
+                        Decision::Confirm,
+                        named.then(|| unit.to_string()),
+                    )),
+                    ScriptDecision::Deny => Ok(ScriptOutcome::Adjust(
+                        Decision::Deny,
+                        named.then(|| unit.to_string()),
+                    )),
+                };
+            }
+            Err(ScriptError::Contract(
+                "check() must return a decision value".into(),
+            ))
+        }
+        // 双保险：等价裸字符串在返回边界统一解析。
+        Value::String(s) => {
+            let s = s
+                .to_str()
+                .map_err(|_| ScriptError::Contract("check() returned invalid UTF-8".into()))?;
+            let d = ScriptDecision::parse(&s).ok_or_else(|| {
+                ScriptError::Contract(format!(
+                    "check() returned `{s}`; expected one of nil, confirm, deny, \
+                     allow(\"bin\")"
+                ))
+            })?;
+            match d {
+                ScriptDecision::Pass => Ok(ScriptOutcome::Pass),
+                ScriptDecision::Allow => Err(ScriptError::Contract(
+                    "scripts cannot return a bare `allow` (use the declared \
+                     allow(\"bin\") channel; bare values cannot be reconciled)"
+                        .into(),
+                )),
+                ScriptDecision::Confirm => Ok(ScriptOutcome::Adjust(
+                    Decision::Confirm,
+                    named.then(|| unit.to_string()),
+                )),
+                ScriptDecision::Deny => Ok(ScriptOutcome::Adjust(
+                    Decision::Deny,
+                    named.then(|| unit.to_string()),
+                )),
+            }
+        }
+        _ => Err(ScriptError::Contract(
+            "check() must return a decision value".into(),
+        )),
     }
 }
 
@@ -473,6 +618,8 @@ impl UserData for ScriptDecision {
 }
 
 impl UserData for AllowActivation {}
+
+impl UserData for ConfirmAs {}
 
 #[cfg(test)]
 mod tests {

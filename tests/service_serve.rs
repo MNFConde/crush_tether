@@ -12,13 +12,16 @@ mod common;
 
 use std::time::{Duration, Instant};
 
-use common::{TempDir, run_mode_env, spawn_serve};
+use common::{TempDir, run_init, run_mode_env, spawn_serve};
 
 const CHECK_INTERVAL: Duration = Duration::from_millis(100);
 
 #[test]
 fn thundering_herd_converges_to_single_instance() {
     let proj = TempDir::new("m41-herd");
+    // P8/M8.1：配置创建唯一路径 = init（自动生成已移除）——默认包在 herd
+    // 之前就位，确保 `ls` 在查表层即 allow（检验的是 serve 收敛不是配置生成）。
+    run_init(proj.path(), &[], &[]);
     // 不变量：并发冷启动后「恰好一个存活」，其余静默退出 0——赢家由独占
     // bind 竞争决定，测试不预设是哪一个。
     let mut herd = [

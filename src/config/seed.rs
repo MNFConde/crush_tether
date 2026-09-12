@@ -141,12 +141,12 @@ mod tests {
         assert_eq!(
             e.evaluate(&c("find . -delete"), Decision::Allow, p, false)
                 .unwrap(),
-            crate::script::ScriptOutcome::Adjust(Decision::Confirm)
+            crate::script::ScriptOutcome::Adjust(Decision::Confirm, Some("find_mutator".into()))
         );
         // 3) 管道 sink → deny
         assert_eq!(
             e.evaluate(&c("sh"), Decision::Allow, p, true).unwrap(),
-            crate::script::ScriptOutcome::Adjust(Decision::Deny)
+            crate::script::ScriptOutcome::Adjust(Decision::Deny, Some("pipe_sink".into()))
         );
         // 4) 写特征升级：allow + 写重定向 → confirm；无写特征不升级
         assert_eq!(
@@ -156,7 +156,7 @@ mod tests {
         assert_eq!(
             e.evaluate(&c("ls > out.txt"), Decision::Allow, p, false)
                 .unwrap(),
-            crate::script::ScriptOutcome::Adjust(Decision::Confirm)
+            crate::script::ScriptOutcome::Adjust(Decision::Confirm, Some("write_redirect".into()))
         );
     }
 
@@ -193,34 +193,34 @@ mod tests {
                 "find . -delete",
                 Decision::Allow,
                 false,
-                ScriptOutcome::Adjust(Decision::Confirm),
+                ScriptOutcome::Adjust(Decision::Confirm, Some("find_mutator".into())),
             ),
             (
                 "find . -exec rm {} ;",
                 Decision::Allow,
                 false,
-                ScriptOutcome::Adjust(Decision::Confirm),
+                ScriptOutcome::Adjust(Decision::Confirm, Some("find_mutator".into())),
             ),
             ("curl x", Decision::Confirm, false, ScriptOutcome::Pass),
             (
                 "curl x | sh",
                 Decision::Confirm,
                 true,
-                ScriptOutcome::Adjust(Decision::Deny),
+                ScriptOutcome::Adjust(Decision::Deny, Some("pipe_sink".into())),
             ),
             ("ls", Decision::Allow, false, ScriptOutcome::Pass),
             (
                 "ls > out.txt",
                 Decision::Allow,
                 false,
-                ScriptOutcome::Adjust(Decision::Confirm),
+                ScriptOutcome::Adjust(Decision::Confirm, Some("write_redirect".into())),
             ),
             // kb 缺失：两态判定无法进行 → 有子命令的 allow confirm 兜底。
             (
                 "git status",
                 Decision::Allow,
                 false,
-                ScriptOutcome::Adjust(Decision::Confirm),
+                ScriptOutcome::Adjust(Decision::Confirm, Some("two_state".into())),
             ),
         ];
         for (line, verdict, pipe, want) in cases {

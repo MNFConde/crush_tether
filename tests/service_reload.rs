@@ -6,7 +6,7 @@ mod common;
 use std::path::Path;
 use std::time::{Duration, Instant};
 
-use common::{TempDir, run_mode_env, spawn_serve};
+use common::{TempDir, run_init, run_mode_env, spawn_serve};
 
 fn hook(project: &Path, command: &str) -> (String, i32) {
     let r = run_mode_env(project, "hook", &[], command, &[]);
@@ -38,6 +38,8 @@ fn allow(out: &str, _code: i32) -> bool {
 #[test]
 fn hot_reload_picks_up_rule_changes_without_restart() {
     let proj = TempDir::new("m42-reload");
+    // P8/M8.1：配置创建唯一路径 = init（自动生成已移除）。
+    run_init(proj.path(), &[], &[]);
     let _serve = spawn_serve(proj.path(), "30", None);
 
     // 初始：默认包生成，ls → allow。
@@ -75,6 +77,8 @@ fn hot_reload_picks_up_rule_changes_without_restart() {
 fn hot_reload_waits_for_write_quiescence() {
     // debounce：连续写入（编辑器 temp-rename 模拟）聚成一次重载，最终状态生效。
     let proj = TempDir::new("m42-debounce");
+    // P8/M8.1：配置创建唯一路径 = init（自动生成已移除）。
+    run_init(proj.path(), &[], &[]);
     let _serve = spawn_serve(proj.path(), "30", None);
     // 等 serve 完成引导生成（同步点）。
     let (out, _) = hook(proj.path(), "ls");

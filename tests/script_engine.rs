@@ -200,3 +200,184 @@ fn unconditional_allow_script_rejected_by_contract() {
     );
     assert!(r.stderr.contains("fail-safe confirm"), "got: {}", r.stderr);
 }
+
+// ── M8.6 声明式规则函数（rule 注册器）────────────────────────────────
+
+use crush_tether::script::{RhaiEngine, RuleEngine};
+
+fn compile_rules(src: &str) -> RhaiEngine {
+    RhaiEngine::compile(
+        src,
+        std::path::PathBuf::from("D:/code/tmp/proj"),
+        None,
+        crush_tether::config::merge::ScriptAllowDecls::default(),
+    )
+    .expect("compiles")
+}
+
+#[test]
+fn declarative_rules_assemble_by_priority_with_short_circuit() {
+    // 数值小先执行；同值按注册顺序；表态短路（后面的规则不再评估）。
+    let e = compile_rules(concat!(
+        "rule(\"a_second\", 20, |ctx| {",
+        "  if ctx.bin == \"x\" { return decision::CONFIRM; }",
+        "  decision::PASS",
+        "});",
+        "rule(\"b_first\", 10, |ctx| {",
+        "  if ctx.bin == \"x\" { return decision::DENY; }",
+        "  decision::PASS",
+        "});",
+        "rule(\"c_first_tie\", 10, |ctx| decision::PASS);",
+    ));
+    // 优先级 10 先于 20：`x` 被 b_first DENY 短路（若组装反了会是 CONFIRM）。
+    assert_eq!(
+        e.evaluate(
+            &crush_tether::cmd_parse::flatten_commands("x")
+                .unwrap()
+                .into_iter()
+                .next()
+                .unwrap(),
+            crush_tether::model::Decision::Allow,
+            std::path::Path::new("D:/code/tmp/proj"),
+            false,
+        )
+        .unwrap(),
+        crush_tether::script::ScriptOutcome::Adjust(
+            crush_tether::model::Decision::Deny,
+            Some("b_first".into())
+        )
+    );
+}
+
+#[test]
+fn declarative_rules_pass_through_when_none_votes() {
+    // 全员 PASS → 无意见（保留查表基线）。
+    let e = compile_rules(concat!(
+        "rule(\"r1\", 10, |ctx| decision::PASS);",
+        "rule(\"r2\", 20, |ctx| \"\");",
+    ));
+    assert_eq!(
+        e.evaluate(
+            &crush_tether::cmd_parse::flatten_commands("ls")
+                .unwrap()
+                .into_iter()
+                .next()
+                .unwrap(),
+            crush_tether::model::Decision::Allow,
+            std::path::Path::new("D:/code/tmp/proj"),
+            false,
+        )
+        .unwrap(),
+        crush_tether::script::ScriptOutcome::Pass
+    );
+}
+
+#[test]
+fn declarative_confirm_as_reports_sub_name() {
+    // confirm_as(子名)：固定 confirm + `规则名:子名` 溯源。
+    let e = compile_rules(concat!(
+        "rule(\"tok\", 10, |ctx| {",
+        "  for t in [\"-d\", \"-D\"] {",
+        "    if ctx.args.contains(t) { return confirm_as(t); }",
+        "  }",
+        "  decision::PASS",
+        "});",
+    ));
+    assert_eq!(
+        e.evaluate(
+            &crush_tether::cmd_parse::flatten_commands("git branch -d x")
+                .unwrap()
+                .into_iter()
+                .next()
+                .unwrap(),
+            crush_tether::model::Decision::Allow,
+            std::path::Path::new("D:/code/tmp/proj"),
+            false,
+        )
+        .unwrap(),
+        crush_tether::script::ScriptOutcome::Adjust(
+            crush_tether::model::Decision::Confirm,
+            Some("tok:-d".into())
+        )
+    );
+}
+
+#[test]
+fn declarative_old_check_still_works_without_rules() {
+    // 双形态并存：无 rule() 注册的旧脚本照旧走 check（机制零变化）。
+    let e = compile_rules("fn check(ctx) { if ctx.bin == \"rm\" { \"confirm\" } else { \"\" } }");
+    assert_eq!(
+        e.evaluate(
+            &crush_tether::cmd_parse::flatten_commands("rm x")
+                .unwrap()
+                .into_iter()
+                .next()
+                .unwrap(),
+            crush_tether::model::Decision::Allow,
+            std::path::Path::new("D:/code/tmp/proj"),
+            false,
+        )
+        .unwrap(),
+        crush_tether::script::ScriptOutcome::Adjust(crush_tether::model::Decision::Confirm, None),
+        "旧 check 裸决策无规则名"
+    );
+}
+
+#[test]
+fn declarative_rejections_at_load_time() {
+    // 注册边界校验：重复名 / 空名 / 负优先级 / 超上限 / 两者皆无 → 拒载。
+    for src in [
+        concat!(
+            "rule(\"dup\", 10, |ctx| decision::PASS);",
+            "rule(\"dup\", 20, |ctx| decision::PASS);",
+        ),
+        "rule(\"\", 10, |ctx| decision::PASS);",
+        "rule(\"neg\", -1, |ctx| decision::PASS);",
+        // 两者皆无（无 rule 也无 check）。
+        "let x = 1;",
+    ] {
+        let r = RhaiEngine::compile(
+            src,
+            std::path::PathBuf::from("D:/code/tmp/proj"),
+            None,
+            crush_tether::config::merge::ScriptAllowDecls::default(),
+        );
+        assert!(
+            matches!(r, Err(crush_tether::script::ScriptError::Rejected(_))),
+            "{src}"
+        );
+    }
+}
+
+#[test]
+fn declarative_allow_activation_works_inside_rule_fn() {
+    // script_allow 的受控放行通道在规则函数内照常可用（对账/定稿点不变）。
+    let mut d = crush_tether::config::merge::ScriptAllowDecls::default();
+    d.declare_local("ls");
+    let e = RhaiEngine::compile(
+        concat!(
+            "rule(\"ls_write\", 10, |ctx| {",
+            "  if ctx.bin == \"ls\" && ctx.writes_redirect { return allow(\"ls\"); }",
+            "  decision::PASS",
+            "});",
+        ),
+        std::path::PathBuf::from("D:/code/tmp/proj"),
+        None,
+        d,
+    )
+    .expect("compiles");
+    assert_eq!(
+        e.evaluate(
+            &crush_tether::cmd_parse::flatten_commands("ls > out.txt")
+                .unwrap()
+                .into_iter()
+                .next()
+                .unwrap(),
+            crush_tether::model::Decision::Confirm,
+            std::path::Path::new("D:/code/tmp/proj"),
+            false,
+        )
+        .unwrap(),
+        crush_tether::script::ScriptOutcome::Activate("ls".into())
+    );
+}

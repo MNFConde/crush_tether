@@ -48,12 +48,12 @@ fn lua_returns_decision_constants_and_nil_pass() {
     assert_eq!(
         e.evaluate(&cmd("sudo x"), Decision::Allow, Path::new(PROJ), false)
             .unwrap(),
-        ScriptOutcome::Adjust(Decision::Deny)
+        ScriptOutcome::Adjust(Decision::Deny, None)
     );
     assert_eq!(
         e.evaluate(&cmd("rm x"), Decision::Allow, Path::new(PROJ), false)
             .unwrap(),
-        ScriptOutcome::Adjust(Decision::Confirm)
+        ScriptOutcome::Adjust(Decision::Confirm, None)
     );
     assert_eq!(
         e.evaluate(&cmd("ls"), Decision::Allow, Path::new(PROJ), false)
@@ -81,17 +81,17 @@ fn lua_reads_ctx_fields_and_verdict_equality() {
     assert_eq!(
         e.evaluate(&cmd("ls > o.txt"), Decision::Allow, Path::new(PROJ), false)
             .unwrap(),
-        ScriptOutcome::Adjust(Decision::Confirm)
+        ScriptOutcome::Adjust(Decision::Confirm, None)
     );
     assert_eq!(
         e.evaluate(&cmd("git push"), Decision::Allow, Path::new(PROJ), false)
             .unwrap(),
-        ScriptOutcome::Adjust(Decision::Deny)
+        ScriptOutcome::Adjust(Decision::Deny, None)
     );
     assert_eq!(
         e.evaluate(&cmd("ls"), Decision::Allow, Path::new(PROJ), false)
             .unwrap(),
-        ScriptOutcome::Adjust(Decision::Confirm)
+        ScriptOutcome::Adjust(Decision::Confirm, None)
     );
     assert_eq!(
         e.evaluate(&cmd("git status"), Decision::Allow, Path::new(PROJ), false)
@@ -122,13 +122,14 @@ fn lua_contract_violations() {
 
 #[test]
 fn lua_missing_check_is_rejected_at_compile() {
+    // M8.6：无 rule() 注册且无 check(ctx) → 加载期语义拒载（Rejected）。
     let r = crush_tether::script::LuaEngine::compile(
         "x = 1",
         std::path::PathBuf::from(PROJ),
         None,
         Default::default(),
     );
-    assert!(matches!(r, Err(ScriptError::Compile(_))));
+    assert!(matches!(r, Err(ScriptError::Rejected(_))));
 }
 
 #[test]
@@ -169,7 +170,7 @@ fn lua_coroutine_loop_is_bounded_by_global_hook() {
     assert_eq!(
         e.evaluate(&cmd("ls"), Decision::Allow, Path::new(PROJ), false)
             .unwrap(),
-        ScriptOutcome::Adjust(Decision::Deny),
+        ScriptOutcome::Adjust(Decision::Deny, None),
         "协程死循环必须在指令预算内被终止（done 不置位）"
     );
 }
@@ -244,7 +245,7 @@ fn lua_kb_primitives_compose() {
             false
         )
         .unwrap(),
-        ScriptOutcome::Adjust(Decision::Confirm)
+        ScriptOutcome::Adjust(Decision::Confirm, None)
     );
     assert_eq!(
         e.evaluate(&cmd("git branch"), Decision::Allow, Path::new(PROJ), false)
@@ -259,7 +260,7 @@ fn lua_kb_primitives_compose() {
             false
         )
         .unwrap(),
-        ScriptOutcome::Adjust(Decision::Confirm)
+        ScriptOutcome::Adjust(Decision::Confirm, None)
     );
     assert_eq!(
         e.evaluate(
@@ -320,4 +321,104 @@ fn lua_engine_flag_runs_end_to_end_with_inited_lua_pack() {
         "无他引擎脚本时不应告警：{}",
         r.stderr
     );
+}
+
+// ── M8.6 声明式规则函数（rule 注册器，Lua 侧同构）────────────────────
+
+#[test]
+fn lua_declarative_rules_assemble_by_priority_and_short_circuit() {
+    let e = compile(
+        concat!(
+            "rule(\"a_second\", 20, function(ctx)
+",
+            "  if ctx.bin == \"x\" then return decision.CONFIRM end
+",
+            "  return decision.PASS
+",
+            "end)
+",
+            "rule(\"b_first\", 10, function(ctx)
+",
+            "  if ctx.bin == \"x\" then return decision.DENY end
+",
+            "  return decision.PASS
+",
+            "end)
+",
+        ),
+        Default::default(),
+    );
+    // 优先级 10 先于 20：`x` 被 b_first DENY 短路（组装反了会是 CONFIRM）。
+    assert_eq!(
+        e.evaluate(&cmd("x"), Decision::Allow, Path::new(PROJ), false)
+            .unwrap(),
+        ScriptOutcome::Adjust(Decision::Deny, Some("b_first".into()))
+    );
+}
+
+#[test]
+fn lua_declarative_confirm_as_reports_sub_name_and_old_check_still_works() {
+    // confirm_as(子名) → `规则名:子名`；旧 check 形态（无 rule 注册）照旧。
+    let e = compile(
+        concat!(
+            "rule(\"tok\", 10, function(ctx)
+",
+            "  for _, t in ipairs({\"-d\"}) do
+",
+            "    for _, a in ipairs(ctx.args) do
+",
+            "      if a == t then return confirm_as(t) end
+",
+            "    end
+",
+            "  end
+",
+            "  return decision.PASS
+",
+            "end)
+",
+        ),
+        Default::default(),
+    );
+    assert_eq!(
+        e.evaluate(
+            &cmd("git branch -d x"),
+            Decision::Allow,
+            Path::new(PROJ),
+            false
+        )
+        .unwrap(),
+        ScriptOutcome::Adjust(Decision::Confirm, Some("tok:-d".into()))
+    );
+
+    let old = compile(
+        "function check(ctx) if ctx.bin == \"rm\" then return decision.CONFIRM end return nil end",
+        Default::default(),
+    );
+    assert_eq!(
+        old.evaluate(&cmd("rm x"), Decision::Allow, Path::new(PROJ), false)
+            .unwrap(),
+        ScriptOutcome::Adjust(Decision::Confirm, None),
+        "旧 check 裸决策无规则名"
+    );
+}
+
+#[test]
+fn lua_declarative_rejections_at_load_time() {
+    // 注册边界校验：重复名 / 空名 / 负优先级 / 两者皆无 → 拒载。
+    for src in [
+        "rule(\"dup\", 10, function(ctx) return nil end)
+rule(\"dup\", 20, function(ctx) return nil end)",
+        "rule(\"\", 10, function(ctx) return nil end)",
+        "rule(\"neg\", -1, function(ctx) return nil end)",
+        "local x = 1",
+    ] {
+        let r = crush_tether::script::LuaEngine::compile(
+            src,
+            std::path::PathBuf::from(PROJ),
+            None,
+            Default::default(),
+        );
+        assert!(matches!(r, Err(ScriptError::Rejected(_))), "{src}");
+    }
 }
