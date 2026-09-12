@@ -183,7 +183,7 @@ jobs:
             }
           }
           EOF
-          for s in deny failopen rewrite; do
+          for s in deny failopen rewrite ask timeout exitjson; do
             bash script/ci_scenario.sh setup "$s" "$ws/.hook-probe" claudecode "$ws"
             DISABLE_GROWTHBOOK=1 claude -p "请运行命令: echo agent-matrix-smoke" \
               --settings ci-scenario-settings.json
@@ -309,7 +309,7 @@ jobs:
             }
           }
           EOF
-          for s in deny failopen rewrite; do
+          for s in deny failopen rewrite ask timeout exitjson; do
             bash script/ci_scenario.sh setup "$s" "$ws/.hook-probe" crush "$ws"
             crush run -m mockspike/mock-model "agent-matrix scenario"
             bash script/ci_scenario.sh assert "$s" "$ws/.hook-probe" crush "$ws"
@@ -435,7 +435,7 @@ jobs:
             }
           }
           EOF
-          for s in deny failopen rewrite; do
+          for s in deny failopen rewrite ask timeout exitjson; do
             bash script/ci_scenario.sh setup "$s" "$ws/.hook-probe" claudecode "$ws"
             DISABLE_GROWTHBOOK=1 claude -p "Run exactly: echo agent-matrix-smoke" \
               --settings ci-scenario-settings.json
@@ -583,7 +583,7 @@ jobs:
             }
           }
           EOF
-          for s in deny failopen rewrite; do
+          for s in deny failopen rewrite ask timeout exitjson; do
             bash script/ci_scenario.sh setup "$s" "$ws/.hook-probe" crush "$ws"
             crush run -m mockspike/mock-model "agent-matrix scenario"
             bash script/ci_scenario.sh assert "$s" "$ws/.hook-probe" crush "$ws"
@@ -773,7 +773,8 @@ jobs:
           print("provisioned probe plugin:", plug_id)
           PYEOF
           ws="$(cygpath -m "$PWD")"
-          for s in deny failopen rewrite; do
+          # zcode 暂不入 timeout 环:超时收场未定性(挂账 test-and-ci.md §5)
+          for s in deny failopen rewrite ask exitjson; do
             bash script/ci_scenario.sh setup "$s" "$ws/.hook-probe" zcode "$ws"
             node "$ZCODE_CJS" -p "Run exactly: echo agent-matrix-smoke"
             bash script/ci_scenario.sh assert "$s" "$ws/.hook-probe" zcode "$ws"

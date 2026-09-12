@@ -12,15 +12,18 @@ mock LLM 后端驱动 agent 完成一轮固定 tool_use(命令可配,`--cmd`),�
 
 每 job 的正向断言走**真引擎全链**:探针 bash 角色转发 `crush-tether hook`(claude/crush)或正式插件直挂引擎(zcode),断言 `.crush-tether/decisions.jsonl` 落 `echo mock-hook-test → allow` = 「hook 拉起 + 引擎裁决 + agent 采纳」。守护对象是**契约两侧的漂移**(手写 mock 信封 vs 引擎真实产物),每 agent 一条即足,不铺场景。
 
-### 场景组(deny / fail-open / updated_input)
+### 场景组(deny / failopen / rewrite / ask / timeout / exitjson)
 
 探针 perm 角色直回控制文件信封(**引擎不在场**),断言物理副作用 `ci-exec.txt`(场景 mock `--cmd` 发带写命令 `echo mock-hook-test > ci-exec.txt`;冒烟与场景各一个 mock 实例,8787/8788——冒烟命令须引擎默认规则放行[带写命令实测裁 confirm],场景命令只求留痕,互不牵制):
 
-| 场景 | 控制文件 | 断言(按 agent 分化,2026-09-11 定性) |
+| 场景 | 控制文件 | 断言(按 agent 分化;2026-09-11/09-12 定性) |
 |---|---|---|
 | deny | `perm-out.txt` 回 deny 信封 | 三家一致:文件**不存在**(工具被阻断) |
 | fail-open | `perm-exit.txt`=3(无信封) | **claude:文件不存在**(无头把 hook 失联兜底为拒绝,`permission_denials` 回执);**crush/zcode:文件存在**(放行,与交互一致) |
 | rewrite | `perm-out.txt` 回 allow+改写信封 | 三家一致:文件内容含 `rewritten-marker`(改写命令执行) |
+| ask | `perm-out.txt` 回 ask 信封(crush=空输出=无意见) | **claude:不存在**(无头拒绝,2026-09-12);**crush:存在**(run 原生权限自动接受,2026-09-12 新定性);**zcode:不存在**(2026-09-11 定性,场景批回归固化) |
+| timeout | `delay.txt`=40s 压过探针 timeout 30s + allow 信封 | **claude:不存在**(无头超时=拒绝,2026-09-12——交互 ~32s 放行的形态分化);**crush:存在**(34s,复证 2026-09-09 33s);**zcode 不入环**(未定性,挂账 §5) |
+| exitjson | deny 信封 + `perm-exit.txt`=2 并发(B4) | 三家一致:文件不存在(两通道同向 deny;上游聚合 halt>deny>allow 任一解释下一致) |
 
 脚本 `script/ci_scenario.sh`(setup/assert 两段式);信封按 agent 分支(claude/zcode = `hookSpecificOutput`,`updatedInput` 全替换须含 schema 全字段;crush = 顶层 `decision`/`updated_input` 浅合并)。首跑红灯语义 = 上游采纳语义漂移或我方信封笔误,人工判读后回填[矩阵 §2](agent-compat-matrix.md#2-版本测试结果记录)。
 
@@ -118,7 +121,7 @@ mock LLM 后端驱动 agent 完成一轮固定 tool_use(命令可配,`--cmd`),�
 | exit 2 与 JSON 回包并发时的覆盖规则 | 协议 | 探针实验 | design.md 契约节核对 | **上游聚合语义引用(halt > deny > allow),非我方行为面**,仅可选抽查以验证 design.md 契约节引用的准确性 |
 | claude-code 非默认 permission_mode(plan/bypassPermissions 交互)× hook 交叉 | 模式×hook | 人工交互 | [矩阵 §1.3](agent-compat-matrix.md#13-原生模式-hook-交叉按-agent) | 未测;无头等价形态可场景化(`-p --permission-mode …`,B2 预研 2026-09-12) |
 | crush 原生确认/计划模式 × hook 交叉 | 模式×hook | 人工交互 | [矩阵 §1.3](agent-compat-matrix.md#13-原生模式-hook-交叉按-agent) | yolo 语义有源码级核对;仅 `--yolo` 一档,无头交叉可场景化(`crush run --yolo`,B2 预研) |
-| zcode headless 全轴:ask 无头收场、超时、模式交叉在 headless 形态下的表现 | 协议+agent 行为 | 探针实验 | CI 场景组(第二批)+ [矩阵 §1.2](agent-compat-matrix.md) | 三档 deny/fail-open/rewrite 已由场景组覆盖(2026-09-11);ask 无头收场三 agent 均未定性,超时含 windows 进程清理观察;`--mode` 旗标存在(B2 预研,headless 默认 yolo) |
+| zcode headless 超时收场(hook timeout 杀进程后工具命运) | 协议+agent 行为 | 探针实验 | CI 场景组+ [矩阵 §1.2](agent-compat-matrix.md) | 未定性未入 CI 环(2026-09-12):探针 timeoutMs 30s+delay 40s 配方就绪;本机实弹因 App 运行中不动 live 配置而缓——CI 首跑或 App 关闭后补;ask/exitjson 已入环(assert 有定性/语义支撑) |
 | zcode ubuntu job | agent 行为 | 串联冒烟 | workflow | Linux 版内测中,公测后补(发行渠道落地即可平移 windows job 配方);同批换接 wrapper .sh(hooks.json 现指 .cmd,M8.2) |
 | wrapper 本机 zcode 0.2.0 实弹 | agent 行为 | 插件重装+headless | [矩阵 §1.2](agent-compat-matrix.md) | 0.2.0 wrapper 已落地(M8.2,CI 三 job 覆盖),本机 cache 拷贝须重装生效,现网 0.1.0 行为不变;随用户下次插件重装一并验 |
 | zcode cron latest 哨兵的首个自动触发尚待观察 | 协议 | 串联冒烟 | [矩阵 §1.1/§2](agent-compat-matrix.md) | 每周一 UTC |

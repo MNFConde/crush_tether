@@ -2,6 +2,13 @@
 
 This file records substantive progress in reverse-chronological order — newest entry at the top, right below this line. Keep each entry short — summary and pointer only; conclusions settle into `cairn/<topic>.md`.
 
+## 2026-09-12 Ⅳ · M8.4 无头场景批二定性（ask/timeout/exitjson）+ 断言固化
+
+- **新定性（本机实弹，mock 8788 + 探针 perm）**：① claude 无头 **ask=拒绝**（无宿主应答）；② claude 无头 **hook 超时=拒绝**——交互 ~32s 放行（2026-09-09）的形态分化新例，「交互如此≠无头如此」教训母题第三实例（fail-open、confirm、timeout 三连）；③ crush 无头 **ask=放行**（run 原生权限自动接受，新定性）；④ crush timeout=放行（34s 复证 2026-09-09 33s）；⑤ exit2+JSON 并发（B4）三家同向阻断，claude 侧「exit 2 覆盖 JSON」获无头实证。
+- **断言固化**：ci_scenario.sh 扩至六场景（deny/failopen/rewrite/ask/timeout/exitjson），assert 按 agent 分化；workflow claude/crush 四 job 全量入环，zcode 入 ask/exitjson（有定性/语义支撑）、**timeout 未入环**（未定性挂账 §5——本机实弹因 ZCode App 运行中不动 live 配置而缓，CI 首跑或 App 关闭后补）。
+- **方法论注**：zcode CI 探针插件 timeoutMs=30000（非正式插件 8000），delay 配方统一 40s；「无 tool result ≠ 工具执行过」再次生效——收场判定一律以 ci-exec.txt 物理副作用为准。
+- Details: 矩阵 §1.2（新增 ask 无头收场行 + 超时行形态分化）/§2 两行、test-and-ci.md §1 场景组表/§5。
+
 ## 2026-09-12 Ⅲ · M8.3 无头模式旗标预研（B2 销账）
 
 - **三 agent 旗标全景（`--help` 实探，零成本）**：claude `--permission-mode` 六值（acceptEdits/auto/bypassPermissions/manual/dontAsk/plan）+ `--permission-prompts`（headless 弹窗应答者，`none`=自动拒绝——无头 confirm=拒绝的机制注脚）；crush 仅 `-y/--yolo` 一档（run/TUI 通用，无 plan 类）；zcode `-p` 配 `--mode <build|edit|plan|yolo>` 且 **headless 默认 yolo**（legacy 别名 `--permission-mode`）。

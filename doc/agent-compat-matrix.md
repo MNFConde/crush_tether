@@ -32,7 +32,8 @@
 | deny 阻断 | 需要 | ✅ exit 2 + stderr（工具调用不执行） | ✅ exit 2 + stderr，或 JSON deny | ✅ |
 | `updated_input` 改写采纳 | 备用 | ✅ 全替换语义（echo 被改写执行） | ✅ 浅合并（配置序最后者赢；TUI 标记 `Rewrote Output`） | ✅ 采纳——Claude 式 `updatedInput` 全替换（整条命令被替换执行）；crush 式顶层 `updated_input` 信封不采纳 |
 | fail-open（hook 非 2 退出） | 需要 | ✅ 交互放行（UI 明示 non-blocking）；**无头拒绝**（`permission_denials`，2026-09-11，[test-and-ci.md §2](test-and-ci.md#2-agent-差异与规避) 差异 13） | ✅ 无头一致：其他退出码 = 非阻断放行 | ✅ 无头一致：exit 3 放行（M5.3） |
-| hook 超时语义 | 需要 | ✅ 挂 45s > timeout 30s → ~32s 放行 | ✅ headless 实测 33s 非阻断放行 | 未测 |
+| ask 无头收场（hook ask 的无头终局） | 需要 | ✅ 拒绝（2026-09-12 场景批，无头无宿主应答） | ✅ 放行（run 原生权限自动接受，2026-09-12 新定性） | ✅ 拒绝（2026-09-11 定性；场景批回归固化） |
+| hook 超时语义 | 需要 | ✅ 交互放行（45s > 30s → ~32s）；**无头拒绝**（2026-09-12 场景批——形态分化又一例） | ✅ headless 放行（2026-09-09 33s；2026-09-12 复证 34s） | 未测（挂账 [test-and-ci.md §5](test-and-ci.md#5-测试规划与挂账)，探针 30s 配方就绪） |
 | halt 整个回合 | 认知 | ❌ 无此概念 | ✅ exit 49（**引擎不使用**，保持单命令阻断统一） | ❌ |
 | `PermissionRequest` 事件 | 认知 | ❌ 无同语义事件 | ❌ | ✅ 存在但 JSON 回包不被采纳（M5.3，挂点定 PreToolUse 的依据） |
 | 用户选择回传 | 备用 | ❌（PostToolUse 仅执行结果） | ❌（无 post 类事件） | ❌（仅执行结果） |
@@ -73,6 +74,8 @@
 | 2026-09-10 | crush | 0.92.0 | CI 首跑（windows，pinned） | ✅ | zip 资产带版本嵌套目录（crush.exe 需归位 PATH 根，首跑 127 修 68d1055） |
 | 2026-09-10 | zcode | 3.11.2(内嵌 CLI 0.16.5) | CI 首跑(windows,pinned) | ✅ | **zcode 首次入 CI**:CDN 直链 + 7z 解包取内嵌 CLI + 插件无人值守装配 + mock 驱动 headless,decisions.jsonl allow 断言通过 |
 | 2026-09-11 | claude + crush + zcode | pinned(本机) | 无头场景组首测(deny/fail-open/rewrite) | ✅ | deny/rewrite 三家与交互定性一致;fail-open 分化:claude 无头拒绝(`permission_denials`)/crush、zcode 放行(见 [test-and-ci.md §1](test-and-ci.md#1-测试方法) 场景组);附带定性:zcode 无头对 confirm=拒绝、zcode spawn hook 精简 env(`uv` 不可用,差异 12) |
+| 2026-09-12 | claude-code | 2.1.263 | 无头场景批二(ask/timeout/exitjson,本机实弹) | ✅ | ask=拒绝(无头无宿主应答);**timeout=拒绝——交互 ~32s 放行的形态分化新例**;exit2+JSON 并发=阻断(design.md 契约节「exit 2 覆盖 JSON」无头实证);断言固化 ci_scenario.sh |
+| 2026-09-12 | crush | 0.92.0 | 无头场景批二(ask/timeout/exitjson,本机实弹) | ✅ | **ask=放行(run 原生权限自动接受,新定性)**;timeout=放行(34s 复证 2026-09-09 33s);并发=阻断 |
 
 ## 3. 维护规则
 
