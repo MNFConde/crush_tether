@@ -50,12 +50,15 @@ crush-tether benchmark
 crush-tether explain '<command>'   # 单发全溯源报告（M7.1 调试）
 crush-tether repl                  # 规则调试器：改规则即测（M7.1）
 crush-tether init [--user|--global]  # 显式生成默认配置包（缺省项目层）
+crush-tether suggest [--threshold 3] [--window 30] [--format toml|table]
 ```
 
 - **hook**（agent 接入的主路径）：connect-or-spawn——尝试连接项目 serve 端点；无实例则 detached 拉起 serve 并有界等就绪；仍失败则本进程跑全量管线，绝不无裁决放行。
 - **serve**：常驻服务，端点名 `hash(项目根, engine, --config)` 每项目一实例；notify 热重载（失败保留旧快照）；连接归零 + idle 退出；裁决日志默认开（`CRUSH_TETHER_LOG=0|off|false` 关闭）。
 - **check**：单发全量管线（in-process），兜底与冒烟。
 - **规则测试工具**（M7.1）：`explain` 逐条溯源（命中层级/桶/token、归一链、写效果扫描、脚本改判）；`check --batch`（stdin 一行一命令 → 裁决表）；`check --cases <file>`（断言用例文件 `[[case]] cmd/expect` 批量对账，规则变更的回归护栏）；`repl` 调试器（空行重复上一条、`!N` 重跑、每条输入重载配置——改规则即测免重启）。
+- **会话内临时放行**（M8.6）：弹窗批准并执行过的命令，**本次会话内**不再重复问（按触发原因匹配——批 `git push origin x` 后 `git push y` 也不问了）；拒绝档永不放行、跨会话不串、永不改配置文件；`CRUSH_TETHER_SESSION_ALLOW=off` 恢复每条必问。
+- **suggest 权限建议**（M8.6，零写入）：统计最近反复批准且执行成功的命令（默认 ≥3 次/30 天），输出可粘贴进 `rules.toml` 的建议块 + 跳过清单（危险类别永不建议）。**人工审阅后自行粘贴**——git diff 即回滚面与审计面。
 
 ## agent 接入
 

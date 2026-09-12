@@ -2,6 +2,14 @@
 
 This file records substantive progress in reverse-chronological order — newest entry at the top, right below this line. Keep each entry short — summary and pointer only; conclusions settle into `cairn/<topic>.md`.
 
+## 2026-09-12 Ⅵ · M8.6 会话临时放行 + 脚本声明式规则 + suggest 实现（用户批准计划，硬门禁解除）
+
+- **两轮讨论拍板（用户）**：①会话临时放行为主（优先级 > suggest），便签粒度 = **触发原因**（定位到触发询问的规则条目、多个全记全中才放行），危险类别**不跳**（便签信当下/suggest 守长期）；②脚本声明式 = `rule(名字, 优先级, 函数)` 引擎注入注册器（装饰器等价物），数值优先级小值先 + 同值保注册序，check 双形态长期并存；③纠正「脚本无命名规则概念」——结构上每分支即规则，缺的只是命名通道（更正登记 25）。
+- **实现四提交**：脚本声明式（rule 注册器/加载期顶层执行/`confirm_as` 子名/`script.rule` 激活/默认包四具名规则）→ executions 采集（PostToolUse 恒 0 落盘 + `CRUSH_TETHER_LEARN`）→ 会话放行（SessionCache/post op/降级态 session-cache.jsonl/触发原因粒度含 default 收敛整命令补强）→ suggest（交叉推断 + 建议块零写入 + decisions.jsonl 补 session/tool_use_id）。测试 237 绿；D-10/D-11 入档。
+- **顺手修 M8.1 遗漏**：service_reload/service_serve 三用例缺 run_init 前置（自动生成移除后依赖默认包的测试在 master 已挂，stash 验证确认非本轮引入）。
+- **工具坑**：rhai 匿名函数经 `FnPtr` 类型可被 `register_fn` 接收并 `call(&engine, &ast, args)` 存后调用（evaluate 时用实例字段借用）——存闭包的替代路径；Lua chunk 顶层执行错误语义上属加载期拒载（Rejected）非编译错误。
+- Details: design.md「会话内临时放行」「声明式规则函数」节 + suggest 节改写 + 更正登记 24/25、decisions.md D-10/D-11、ROADMAP P8/M8.6、README 运行模式、test-and-ci.md §5 两条挂账（zcode PostToolUse 探针核对/会话放行交互实弹）。
+
 ## 2026-09-12 Ⅴ · M8.5 权限学习（suggest）设计定稿（实现硬门禁生效）
 
 - **设计定稿入 design.md 专节**：采集 = hook 事件分派（PreToolUse 管线不变 / PostToolUse 执行记录，恒 exit 0 零阻断）+ `executions.jsonl` **独立落盘**（裁决审计面 D-07 与学习派生数据解耦，`CRUSH_TETHER_LEARN` 开关对称）；关联 = session_id+tool_use_id 主键（字段全集列实现期探针核对点）；候选 = confirm ∩ 执行成功 ∩ ≥3 次保守三条件，附「执行即批准」成立性论证（hook 覆盖原生记忆 → 每次真人工；无头 confirm=拒绝 → 无头流量不构成候选，2026-09-12 场景批定性为其提供数据底座）；收窄 = bin+sub 且 kb may_write/irreversible/网络类永跳过；**suggest v1 零写入**（输出建议块+跳过清单，人工粘贴，git diff 即回滚面）；降级 = claude 全量 / zcode 降级 / crush 静默关闭。

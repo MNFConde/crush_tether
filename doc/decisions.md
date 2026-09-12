@@ -17,6 +17,10 @@
 | [D-05](#d-05-guardpy-定位重置参考对象而非验收标准) | guard.py 定位重置：参考对象而非验收标准 | 已决策 | [design.md「判定表」](design.md#判定表纯语义可-11-平移) |
 | [D-06](#d-06-单命令建模完备性标准) | 单命令建模完备性：槽位跟着消费机制走 | 已决策 | [design.md「单命令建模」](design.md#单命令建模定稿) |
 | [D-07](#d-07-裁决日志默认开与落盘形态) | 裁决日志默认开：JSONL 落盘 decisions.jsonl | 已决策 | [design.md「日志」](design.md#日志格式先行开关位置-p4-定) |
+| [D-08](#d-08-audit-警告口径接受-smartstring-unmaintained-并名册化) | audit 警告口径：接受 smartstring unmaintained 并名册化 | 已决策 | design.md 依赖钉版注记 |
+| [D-09](#d-09-init-显式生成取代自动生成与全局层路径定稿) | init 显式生成取代自动生成 + 全局层系统路径 | 已决策 | [design.md「零内置策略」](design.md#零内置策略与默认配置生成定稿) |
+| [D-10](#d-10-会话内临时放行为主suggest-降级为配置打磨手段) | 会话内临时放行为主；suggest 降级为配置打磨手段 | 已决策 | [design.md「会话内临时放行」](design.md#会话内临时放行session-allow定稿) |
+| [D-11](#d-11-脚本声明式规则函数rule-注册器) | 脚本声明式规则函数：rule() 注册器 + check 双形态并存 | 已决策 | [design.md「声明式规则函数」](design.md#声明式规则函数rule-注册器定稿) |
 
 ---
 
@@ -228,6 +232,72 @@
 > 折中「保留 + `CRUSH_TETHER_NO_INIT` 可关 + stderr 明示」同批否决——多一个开关面，默认行为仍是隐式。
 
 **影响**：`service.rs` 引导生成分支移除（改裸兜底 + 提示）；`seed` 生成器泛化为 init 写入器（三层层位）；`discover` 增全局层发现与 `CRUSH_TETHER_GLOBAL_DIR`；脚本链增全局层；`tests/seed_defaults.rs` 重写为 init 驱动 + 三层继承端到端；README 配置节同步；D-07 词表 global 达成可达。
+
+---
+
+## D-10 会话内临时放行为主、suggest 降级为配置打磨手段
+
+| 状态 | 日期 | 规范位置 |
+|---|---|---|
+| 已决策（含实现落地 M8.6） | 2026-09-12 | design.md「会话内临时放行（session allow，定稿）」+「权限建议（suggest）」 |
+
+**背景**：hook ask 无状态——门卫记不住用户批准过什么，同一条 confirm 命令反复弹窗；AI 工具原生「以后都放行」又被 hook 覆盖失效（zcode 实测）。M8.5 原设计以离线 suggest 为主功能；用户 2026-09-12 提出：真正想要的是**单会话生效的临时放行**（类原生「以后都放行」的体验），suggest 降级为打磨配置的参考工具。
+
+**决策**：
+
+- **优先级排序（用户拍板）**：会话临时放行 > 正式配置的裁决地位（不变）> suggest。便签只把 confirm 升级为 allow；deny 终审与 allow 不受影响。
+- **便签粒度 = 触发原因**（用户拍板「定位到是什么触发了询问，多个就都放行」）：查表条目按 `layer/entry/token` 记（entry 键）、声明式脚本规则按注册名记（script 键）；放行判据 = 新命令触发原因全部命中便签。**兜底（default）与无名脚本退回完整命令粒度**（whole 键）——兜底语义是「我不认识它」，批的是这一条，不是该 bin 所有形态。
+- **危险类别不跳**（用户拍板「不跳」）：may_write/不可逆/联网/自由参数四类在会话侧照常生效（当场亲手批、只活一场对话、日志留痕）；suggest 侧维持四类永久跳过——便签信当下，suggest 守长期。
+- **存储**：serve 内存态（与热重载解耦）+ 降级态文件 `session-cache.jsonl`；24h TTL + 容量上限；永不写入配置文件；放行照记裁决日志（reason 标注）。
+- **采集共用面**：与 suggest 共用 PostToolUse → executions.jsonl；serve 内存对账（post op）优先，降级态文件对账。
+- 默认开；`CRUSH_TETHER_SESSION_ALLOW=off` 关闭。
+
+**依据**：执行即批准的代理信号成立（confirm 交互形态强制人工弹窗 + 原生记忆被 hook 覆盖失效）；无头 confirm=拒绝（三 agent 定性）→ 无头流量天然不生长便签；触发原因粒度天然覆盖参数变化且与日志溯源同源。
+
+### 被否决的替代方案
+
+> [!CAUTION] 【已否决】 完整命令粒度记便签
+> 原因：参数一变即失效（`git push origin a` 批了 `origin b` 还要问），且与日志溯源结构脱节——用户拍板改为触发原因粒度。
+>
+> 【已否决】 会话侧同样跳过危险类别
+> 原因：用户否决——当场亲手批准 + 单会话时效 + 日志留痕，信任当下判断；deny 红线已兜底。
+>
+> 【已否决】 suggest `--apply` 自动写入
+> 原因：M8.5 维持否决——工具自动改自己的权限破坏审计面；粘贴进 git 承载的规则文件才有 diff/回滚。
+
+**影响**：`SessionCache`（serve_main 局部态）；serve 协议 `RequestLine` 增 `session_id`/`tool_use_id` 与 `post` op；`hook_post`（仅直连）；降级态 `session-cache.jsonl`；decisions.jsonl 增 `session_id`/`tool_use_id`；`executions.jsonl` 采集（`CRUSH_TETHER_LEARN`）；`tests/session_allow.rs`、`tests/executions.rs`。
+
+---
+
+## D-11 脚本声明式规则函数（rule 注册器）
+
+| 状态 | 日期 | 规范位置 |
+|---|---|---|
+| 已决策（含实现落地 M8.6） | 2026-09-12 | design.md「声明式规则函数（rule 注册器，定稿）」 |
+
+**背景**：脚本层单 `check(ctx)` 入口——规则顺序 = 代码书写顺序（隐式）、规则无名（日志 `script.rule` 恒 null，会话放行缺可追溯匹配键）、增删分支靠作者维护嵌套结构。用户 2026-09-12 提出：参考 Python 装饰器，显式声明规则名与优先级、由框架组装；且拍板「check 按当前设计，声明式是封装层」。
+
+**决策**：
+
+- **`rule(名字, 优先级, 函数)` 引擎注入注册器**（与 `allow("bin")` 同为引擎注册受控通道；Rhai/Lua 同构）。加载期收集（Rhai 扩展 = 加载期执行顶层语句、限流照盖；Lua 顶层执行本为现状）→ 优先级**升序稳定排序**（小值先执行、同值保注册序 = 定义顺序，用户拍板）→ 运行时逐规则调用、表态短路。
+- **双形态长期并存**：无注册 → 照走 `check`（行为零变化）；表达力等价，改善的是组织方式。
+- **`confirm_as("子名")`**：数据驱动分支子名上报，溯源 `规则名:子名`（批 `-d` 不放行 `-D`）。
+- 注册边界校验拒载：重复名/空名/负优先级/超上限（128）/非函数实参。
+
+**依据**：装饰器本质 = 元数据绑定 + 框架组装，注册器是 Rhai/Lua 的地道等价物；Rhai AST/全局表「枚举 + 按名调用」原语两侧已在（仅硬编码 check 的泛化）；规则名同时服务日志溯源、explain、会话便签匹配。
+
+### 被否决的替代方案
+
+> [!CAUTION] 【已否决】 集中式 RULES 元数据表（名字集中一张表、函数留在顶层）
+> 原因：用户认为不够装饰器式——元数据应贴着函数（注册调用即元数据绑定），名字散落两处可维护性差。
+>
+> 【已否决】 函数名嵌优先级（`rule_10_find_mutator`）
+> 原因：重排要改名，名字丑，与「显式声明」背道而驰。
+>
+> 【已否决】 doc-comment 注解（Rhai `metadata` feature 读 `/// @rule`）
+> 原因：Lua 无对应物（双语言形态分叉）、注解字符串 DIY 解析、feature 门控绑定。
+
+**影响**：`src/script/mod.rs`（注册器/加载期顶层执行/循环短路/`ConfirmAs`/`ChainOutcome`）；`src/script/lua.rs` 同构；`DecisionTrace.script_rule` 与 decisions.jsonl `script.rule` 激活；默认包改写四具名规则；`tests/script_engine.rs`/`script_lua.rs` 新用例。
 
 ---
 

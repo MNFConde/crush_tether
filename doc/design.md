@@ -614,6 +614,48 @@ wraps = "*"                       # 联系：包装壳（v1 仅登记）
   - **决策值 = 类型化四变体 + 只读模块常量 `decision::`**（2026-09-06 M6.1 枚举化落地）：`ALLOW` / `CONFIRM` / `DENY` / `PASS` 四值——无意见也是一种决定，`PASS` 语义为「不表态、交还查表基线」（Rhai 映射同类型常量，Lua 引擎映射 nil）。常量为封闭枚举值，脚本无法拼出第四种决策值，非法值在边界（解析/返回）即报错；限定名只读，变量遮蔽污染不了词汇表。引擎同时接受等价裸字符串，在返回边界统一解析（双保险）；裸 allow 值（常量或字符串）一律违约。
   - **ctx 可选字段缺省 = 空字符串**：`ctx.sub` 无子命令时为 `""`，谓词写 `ctx.sub != ""`——不向脚本暴露解释器内部的 unit/nil 语义；「无意见」的契约表述随之引擎无关化。
   - **ctx 彻底封装（2026-09-06 M6.1 落地）**：传给脚本的是自定义类型（不暴露裸 map/unit），字段经只读 getter 暴露——脚本侧语法保持 `ctx.bin` 属性形式（rhai 的属性访问本质即方法调用糖；Lua 侧 userdata 同形），默认模板与既有脚本零改动。
+  - **带名返回扩展（2026-09-12 M8.6 落地）**：`rule(名字, 优先级, 函数)` 注册器与 `confirm_as("子名")` 子名通道加入脚本词汇（形态见[声明式规则函数（rule 注册器）](#声明式规则函数rule-注册器定稿)）；`confirm_as` 固定映射 confirm，溯源名拼为 `规则名:子名`（decisions.jsonl `script.rule`）。
+
+### 声明式规则函数（rule 注册器，定稿）
+
+> 状态：**设计 + 实现落地（2026-09-12，M8.6，用户批准批次）**。动机 = 书写显式化（规则名/优先级显式声明，替代 if-else 链书写纪律——判断顺序不再是隐式代码位置）+ 规则可追溯（会话放行的匹配键与 `script.rule` 溯源的前提）。装饰器本质（元数据绑定 + 框架组装）在两语言中以**引擎注入的注册器**等价实现（Rhai/Lua 无装饰器语法；与 `allow("bin")` 同为引擎注册的受控通道）。
+
+- **形态（双语言同构）**：
+
+```rhai
+// rules.rhai
+rule("pipe_sink", 10, |ctx| {
+    if ctx.pipe_to_shell { return decision::DENY; }
+    decision::PASS
+});
+```
+
+```lua
+-- rules.lua
+rule("pipe_sink", 10, function(ctx)
+    if ctx.pipe_to_shell then return decision.DENY end
+    return decision.PASS
+end)
+```
+
+- **组装语义**：加载期收集注册（Rhai 侧扩展 = 加载期执行顶层语句——一次性、沙箱限流照盖；Lua 侧 chunk 顶层执行本为现状）→ 按优先级**升序稳定排序**（数值小先执行；同值保注册序 = 定义顺序，用户拍板「按照优先级和定义顺序进行组装」）→ 运行时逐规则调用，`PASS`（不表态）交下一个、表态（confirm/deny/激活）即短路。概念上 = 引擎替你组装的大 if-else；执行地基（check 调用、返回解析、fail-safe）零变化。
+- **双形态长期并存**（用户拍板「check 按当前设计，声明式是封装层」）：文件内无 `rule()` 注册 → 照走 `check(ctx)`（行为与 M8.6 之前完全一致）；有注册 → 表驱动（`check` 若存在但未注册则不执行）。表达力两者等价——改善的是组织方式（顺序显式/规则可追溯/加载期对账/增删局部化），不是能力。
+- **注册边界校验**（拒载整个脚本，与 script_allow 对账同类）：重复名、空名、负优先级、超上限（128）、第三实参非函数。
+- **`confirm_as("子名")`**：规则函数内数据驱动分支的子名上报（如两态判定按知识库 `write_tokens` 逐 token 命中），溯源名 `规则名:子名`——批 `-d` 不放行 `-D` 的粒度基础。旧 check 形态亦可调用（溯源 `check:子名`）；裸决策旧形态溯源名 = null。
+- **安全语义不变清单**：`allow("bin")` 声明对账五件套照常在规则函数内可用；deny 终审照旧；限流照盖（Rhai 侧声明式下预算按规则数放大——每次调用独立 global，仍上界有界；Lua 侧预算跨规则共享，更严侧）；`allow` 契约违约路径不变。
+- **默认包改写**：`rules.rhai`/`rules.lua` 四具名规则（`pipe_sink`=10 / `find_mutator`=20 / `two_state`=30 / `write_redirect`=40——deny 类先跑），two_state 内部 `confirm_as(token)` 上报子名。
+
+### 会话内临时放行（session allow，定稿）
+
+> 状态：**设计 + 实现落地（2026-09-12，M8.6，用户批准批次；D-10）**。动机：hook ask 无状态——用户反复弹窗批准同一条命令，门卫记不住；AI 工具原生「以后都放行」又被 hook 覆盖失效（zcode 实测）。解法 = **单会话作用域的临时放行**（优先级排序：会话临时放行 > 正式配置的裁决地位 > suggest）；便签只把 confirm 升级为 allow，**deny 终审与 allow 不受影响**。
+
+- **触发原因粒度（用户拍板，非整命令）**：confirm 时提取触发原因集合——
+  - 查表规则条目命中 → `entry` 键（`layer/entry/token` 唯一标识；批的是「这条规则触发的询问」，同规则触发的后续询问免问，参数变化天然覆盖）；
+  - 声明式脚本规则 → `script` 键（注册名，含 `:子名`）；
+  - **无稳定溯源键 → 退回完整命令粒度**（`whole` 键）：default 兜底（批的是这一条具体命令，不是「该 bin 的所有形态」）、无名脚本、激活降级、解析失败。放行判据 = 新命令的触发原因**全部**在便签上（多个原因记多个、缺一照旧弹窗）。
+- **生效因果**：PreToolUse 判 confirm（主键 session_id+tool_use_id 齐）→ 记 pending → 用户弹窗批准、命令真实执行 → PostToolUse 到达 → pending 转正为便签 → 同会话同因再问即放行（reason 标注 `session allow`，**日志照记最终裁决**——审计可见，非黑箱）。无头形态 confirm=拒绝（三 agent 定性）→ 无头流量天然不生长便签。
+- **存储与生命周期**：serve 内存态挂 serve_main 局部（与热重载解耦——快照整体替换不波及便签）；降级态（serve 不可达）文件形态 `.crush-tether/session-cache.jsonl`（pending/sticker 行，惰性过期清理）。会话结束失效 + 24h TTL 兜底 + 全局 4096 条上限（超限拒新，安全侧）；**永不写入配置文件**。
+- **开关**：默认开；`CRUSH_TETHER_SESSION_ALLOW=off` 关闭（每条 confirm 照常弹窗）。与 `CRUSH_TETHER_LEARN`（采集）、`CRUSH_TETHER_LOG`（审计日志）三开关互相独立。
 
 ### 脚本条件放行（script_allow，定稿）
 
@@ -682,23 +724,23 @@ JSONL 一行一条裁决，字段覆盖：命令原文、结果、触发层级�
  "script":{"file":null,"rule":null}}
 ```
 
-- `source.layer` ∈ global/user/project/explicit/script/default；脚本激活/改判时 layer=script 并填 `script.file`（区分项目层与用户层脚本文件，文件名随 `--engine` 取 `rules.rhai`/`rules.lua`；`script.rule` v1 恒 null——脚本无命名规则概念，字段为后续扩展保留）。可达值：user/project/explicit/script/default/global——【2026-09-12 更新：P8/M8.1 全局层发现落地，`global` 正式可达（explain 实证 `global.default` 命中）】。
+- `source.layer` ∈ global/user/project/explicit/script/default；脚本激活/改判时 layer=script 并填 `script.file`（区分项目层与用户层脚本文件，文件名随 `--engine` 取 `rules.rhai`/`rules.lua`；`script.rule`【2026-09-12 M8.6 激活】：随声明式规则函数填注册名（`confirm_as` 拼 `规则名:子名`），旧 check 裸决策仍 null）。可达值：user/project/explicit/script/default/global——【2026-09-12 更新：P8/M8.1 全局层发现落地，`global` 正式可达（explain 实证 `global.default` 命中）】。M8.6 起新增 `session_id`/`tool_use_id` 两字段（会话放行与 suggest 的关联主键；载荷未带时 null）。会话放行改判的请求照记最终 allow 裁决，reason 标注 `session allow: …`（审计可见）。
 - `kb`：本次裁决加载的知识库 bucket 列表；`[]` = 知识库已删光——**当前配置未经任何内置规则校验、别名/flag 归一未生效**，日志自证可见。`normalized` 记录归一链（如 `"npm exec → npx"`），未归一为 `null`。
 - serve 加载/**热重载成功**时另记一条非裁决事件行（`type:"load"`，含 kb 状态与 lint 告警），冷热路径都留痕；热重载失败不留痕（快照未换，stderr 告警）。
 - serve 模式由 serve 单点写（复用行协议已有字段），hook 降级路径与 check/benchmark 自写一行（mode 字段区分 hook 降级与独立 check）；人读视图由后续 `crush-tether log` 子命令渲染 JSONL（人看视图、程序读原文）。默认开/关在 P4 落地 serve 时定。
 - **实现注记（2026-09-06，M4.3 落地，[D-07](decisions.md#d-07-裁决日志默认开与落盘形态)）**：默认开（`CRUSH_TETHER_LOG=0|off|false` 关）；落盘 `<project>/.crush-tether/decisions.jsonl` 追加写、写入失败静默；`ts` 为 UTC RFC3339（零依赖，本地时区由人读视图渲染）；热重载信号在 serve 主线程请求间隙消费（改规则后的第一个请求触发重载并留 load 事件）。
 
-### 权限学习（suggest）设计定稿（P8/M8.5，实现待用户明确授权）
+### 权限建议（suggest）设计定稿 + 实现落地（P8/M8.5 定稿，2026-09-12 M8.6 定位调整后实现）
 
-> 动机（2026-09-06/07 登记 + 实测补强）：hook ask 无状态 + hook 评估覆盖原生权限档位——zcode 实测原生「以后都放行」对本门 confirm 类命令结构性失效，用户每条 confirm 命令都被重新询问。正解 = 从裁决日志与执行记录交叉推断「用户反复人工批准且执行成功的命令」，离线生成规则建议（`suggest`），人工确认后写入项目规则，把重复确认收敛为一次性白名单扩充。本节为**设计定稿**；实现不在 P8 授权范围（硬门禁：需用户另行明确授权）。
+> 动机（2026-09-06/07 登记 + 实测补强）：hook ask 无状态 + hook 评估覆盖原生权限档位——zcode 实测原生「以后都放行」对本门 confirm 类命令结构性失效，用户每条 confirm 命令都被重新询问。**2026-09-12 定位调整（用户拍板，D-10）**：主功能 = [会话内临时放行](#会话内临时放行session-allow定稿)（当场生效的单会话便签），suggest 降级为**用户打磨自己配置文件的手段**（离线、跨会话、零写入）——一套采集、两个消费者：便签消费当场单会话记录，suggest 消费跨会话统计；跨会话反复命中是工作习惯的更强证据。
 
-- **采集（运行时，唯一新增的运行时面）**：`hook` 入口按事件分派——`PreToolUse` 走既有管线；`PostToolUse` 走执行记录（只落盘、零裁决输出、恒 exit 0——PostToolUse 无阻断语义，采集失败不影响 agent）。落盘**独立文件** `.crush-tether/executions.jsonl`（D-09 同目录；一行一执行：`ts`/`agent`/`session_id`/`tool_use_id`/归一化命令/成败）。独立于 decisions.jsonl 的理由：裁决日志是安全审计面（D-07），学习信号是派生数据——分离后「关日志」与「关学习」开关解耦（`CRUSH_TETHER_LEARN=off` 关采集，默认开，与 D-07 同向），executions 可独立清理滚动不触碰审计连续性。
-- **关联（suggest 时离线）**：主键 `session_id + tool_use_id`（PreToolUse/PostToolUse 载荷均携带）；兜底 = 归一化命令串 + 时间窗。**实现期探针核对**：claude/zcode PostToolUse 载荷是否含 `tool_use_id` 与 `tool_input.command`（M5.3 仅核过「含执行结果」，字段全集未记）；decisions.jsonl 现行是否携带 `tool_use_id`（M4.3 字段全集核对），缺则裁决侧补记。
-- **候选生成（交叉推断，保守三条件）**：裁决=confirm（**deny 永不学习**）∩ 执行成功 ∩ 窗口内重复 ≥ N（默认 3，`--threshold` 可调）。执行即批准的代理信号成立性论证：confirm 档在交互形态强制人工弹窗（hook 评估先于原生权限并可覆盖 yolo——三 agent 实测），原生「以后都允许」记忆被 hook ask 覆盖失效（zcode 实测）→ 每次执行前都经真人工批准；无头形态 confirm=拒绝（2026-09-12 场景批三 agent 定性）→ 无头流量天然不构成候选，误学面收敛。
-- **收窄与跳过（防过宽放行）**：候选收窄到 `bin + sub` 最小作用域（`npm install` → `[local] allow.sub`）；**kb `may_write`/`irreversible`/网络类 bin 永久跳过**（`curl`/`wget`/`rm`/`pip` 等——即便反复批准也不建议入 allow，输出「跳过清单」附原因）；含自由参数（URL/路径/包名）且无安全 sub 可收窄的形态同跳过。
-- **suggest 命令形态（零写入）**：`crush-tether suggest [--threshold N] [--window days] [--format toml|table]`——读两份 JSONL 交叉，stdout 输出建议块（合法 rules.toml 片段）+ 摘要表 + 跳过清单；**v1 零自动写入**，人工审阅后自行粘贴进项目 `rules.toml`（git diff 即回滚面与审计面）；`--apply` 自动写入登记为后续增强（须再过一轮设计）。查表无「学习条目」特例——写入即普通规则，可审计性由 suggest 输出留痕（LOG）+ git 承载。
-- **降级矩阵（能力探测 + 静默关闭，绝不报错）**：claude = 全量可用（PostToolUse 含完整 tool_response）；zcode = 可用·降级（PostToolUse 仅执行结果，成败可判、输出内容不可分析）；crush = 不可用（无 PostToolUse 事件，M7.3 实测）——采集端探测 = 注册后 N 天零记录即 stderr 提示一次，suggest 端 = 无 executions 文件时输出「当前 agent 无学习信号源」说明后 exit 0。
-- **与零内置策略的关系**：学习不引入任何内置规则——建议全部派生自用户自己的裁决/执行历史，且 v1 不自动落盘；引擎查表、脚本、定稿点三性质（定稿点唯一/逃逸检查/deny 终审）对学习写入的条目一视同仁。
+- **实现形态（M8.6 落地）**：`crush-tether suggest [--threshold N] [--window days] [--format toml|table]`——读两份 JSONL 交叉，stdout 输出建议块（合法 rules.toml 片段）+ 摘要表 + 跳过清单；**v1 零自动写入**，人工审阅后自行粘贴进项目 `rules.toml`（git diff 即回滚面与审计面）；`--apply` 自动写入登记为后续增强（须再过一轮设计）。查表无「学习条目」特例——写入即普通规则，可审计性由 suggest 输出留痕（LOG）+ git 承载。
+- **采集（与 session allow 共用）**：`hook` 入口按事件分派——`PreToolUse` 走既有管线；`PostToolUse` 走执行记录（只落盘、零裁决输出、恒 exit 0）。落盘**独立文件** `.crush-tether/executions.jsonl`（一行一执行：`ts`/`agent`/`session_id`/`tool_use_id`/命令/成败）。独立于 decisions.jsonl 的理由：裁决日志是安全审计面（D-07），学习信号是派生数据——分离后「关日志」与「关学习」开关解耦（`CRUSH_TETHER_LEARN=off` 关采集，默认开），executions 可独立清理滚动不触碰审计连续性。
+- **关联**：主键 `session_id + tool_use_id`（decisions.jsonl M8.6 起补记两字段）；兜底 = 命令原文相等 + 时间窗（execution 晚于 decision 且 ≤10min）。
+- **候选生成（交叉推断，保守三条件）**：裁决=confirm（**deny 永不学习**）∩ 执行成功（`success==true`，判不出 null 不算）∩ 窗口内同触发原因重复 ≥ N（默认 3，`--threshold` 可调）。执行即批准的代理信号论证：confirm 档交互形态强制人工弹窗 + 原生「以后都允许」被 hook ask 覆盖失效（zcode 实测）→ 每次执行前都经真人工批准；无头形态 confirm=拒绝（2026-09-12 场景批三 agent 定性）→ 无头流量天然不构成候选。
+- **收窄与跳过（防过宽放行）**：entry cause 反推 `allow.sub` / `allow.flag` / bin 级条目；**四类永久跳过**（即便反复批准也不建议）：知识库 `may_write`、不可逆（kb `irreversible` + rm 等硬清单）、网络类 bin（curl/wget/pip 等）、含自由参数且无安全 sub 可收窄的形态——输出「跳过清单」附原因。与 session allow 的分工：**便签信当下**（当场亲手批的，四类照常生效，唯一红线是 deny），**suggest 守长期**（替用户做长期决定，四类永久跳过）。
+- **降级矩阵（能力探测 + 静默关闭，绝不报错）**：claude = 全量可用（PostToolUse 含完整 tool_response）；zcode = 可用·降级（PostToolUse 仅执行结果，成败可判、输出内容不可分析）；crush = 不可用（无 PostToolUse 事件，M7.3 实测）——suggest 端 = 无 executions 文件时输出「无执行记录」说明后 exit 0。
+- **与零内置策略的关系**：学习不引入任何内置规则——建议全部派生自用户自己的裁决/执行历史，且零自动落盘；引擎查表、脚本、定稿点三性质（定稿点唯一/逃逸检查/deny 终审）对学习写入的条目一视同仁。
 
 ### 规则测试工具（M7.1，定稿）
 
@@ -741,6 +783,9 @@ allow.flag = { remove = ["-h"] }                 # 继承并移除（flag 也能
 ## 更正登记（对既有定稿）
 
 > 以下为对本文档已定稿措辞的更正（草案阶段调整，非推翻方向），原定稿表述处已加更正指针，不静默覆盖：
+
+25. 「`script.rule` v1 恒 null——脚本无命名规则概念」（日志节注记）→ **2026-09-12 更正**：「无命名规则概念」表述过粗（用户纠正）——规则脚本结构上每个分支即一条规则（默认包四分支即四条），v1 缺的只是**命名通道**（决策返回值为光秃枚举，引擎收不到分支名）。随 M8.6 声明式规则函数（`rule()` 注册器 + `confirm_as`）激活该保留字段。
+24. 「脚本单 `check()` 入口」→ **2026-09-12 M8.6 扩展为双形态并存**（设计演进，非推翻）：`rule(名字, 优先级, 函数)` 声明式注册 + 旧 `check` 形态，见[声明式规则函数](#声明式规则函数rule-注册器定稿)；表达力等价，顺序显式化 + 规则可追溯。同期：权限学习节定位调整（suggest 降为配置打磨手段，主功能 = 会话内临时放行），见 D-10。
 
 9. 「配置格式与脚本边界（草案 v1）」于 **2026-09-06 升格定稿**：P2 六项里程碑（M2.1 解析模型 / M2.2 字段级继承合并 / M2.3 双表三桶查表 / M2.4 知识库归一 / M2.5 双层 lint / M2.6 默认包生成）+ M2.7 样例仓库端到端验收全绿；默认包模板与本文档示例块逐行一致（测试钉死）。第 1–8 条更正随升格固化入正文。遗留：89 用例「引擎 + 默认配置 fixture」迁移在 M3.3；默认 `rules.rhai` 四类谓词在 M3.2 并入生成包。
 10. 「脚本 allow 契约：允许显式枚举 allow」（原「新增待定稿」方向）→ **2026-09-06 定稿为「脚本 v1 无放行权」**：返回 `allow` 一律契约违约（fail-safe confirm）。理由：图灵完备脚本上「禁无条件兜底」无法机械校验，结构性禁止给出可保证的安全性质；`[global]` 整命令放行特例由 TOML 承载。带条件的脚本 allow 登记为后续扩展，须先设计机械校验（见[脚本层职责边界](#脚本层职责边界定稿)）。
