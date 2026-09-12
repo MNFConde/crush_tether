@@ -40,7 +40,7 @@ fn hot_reload_picks_up_rule_changes_without_restart() {
     let proj = TempDir::new("m42-reload");
     // P8/M8.1：配置创建唯一路径 = init（自动生成已移除）。
     run_init(proj.path(), &[], &[]);
-    let _serve = spawn_serve(proj.path(), "30", None);
+    let _serve = spawn_serve(proj.path(), "30", None, &[]);
 
     // 初始：默认包生成，ls → allow。
     let (out, code) = hook(proj.path(), "ls");
@@ -79,7 +79,7 @@ fn hot_reload_waits_for_write_quiescence() {
     let proj = TempDir::new("m42-debounce");
     // P8/M8.1：配置创建唯一路径 = init（自动生成已移除）。
     run_init(proj.path(), &[], &[]);
-    let _serve = spawn_serve(proj.path(), "30", None);
+    let _serve = spawn_serve(proj.path(), "30", None, &[]);
     // 等 serve 完成引导生成（同步点）。
     let (out, _) = hook(proj.path(), "ls");
     assert_eq!(out.trim(), "{\"decision\":\"allow\"}");

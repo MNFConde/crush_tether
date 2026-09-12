@@ -71,12 +71,13 @@ pub fn endpoint_name(project: &Path, engine: &str, config: Option<&str>) -> Stri
 
 // ── 协议 DTO ─────────────────────────────────────────────────────────────
 
-/// 请求行：`{id, op:"check", command, agent}` / `{id, op:"ping"}`。
+/// 请求行：`{id, op:"check", command, agent}` / `{id, op:"ping"}` /
+/// `{id, op:"post", session_id, tool_use_id}`（M8.6 执行完成对账）。
 #[derive(Debug, Serialize, Deserialize)]
 pub struct RequestLine {
     /// 请求序号（v1 一连接一请求恒 1）。
     pub id: u64,
-    /// `"check"`（出裁决）或 `"ping"`（存活探测）。
+    /// `"check"`（出裁决）/ `"ping"`（存活探测）/ `"post"`（执行完成对账）。
     pub op: String,
     /// 待裁决命令正文。
     #[serde(default)]
@@ -84,6 +85,12 @@ pub struct RequestLine {
     /// 调用方 agent 名（日志溯源）。
     #[serde(default)]
     pub agent: String,
+    /// 会话 ID（M8.6 会话放行关联主键；None = 载荷未带 → 不参与便签）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
+    /// 工具调用 ID（关联主键）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_use_id: Option<String>,
 }
 
 /// 响应行：`verdict = None` 表示无裁决（ping 应答）。
@@ -318,31 +325,31 @@ impl RuleSet {
         self.decide_trace(command, project).0
     }
 
-    /// 裁决 + 溯源（日志 source/normalized/script 字段）。
-    ///
-    /// 与 [`Self::explain`] 共享 [`Self::classify_single`]；组合语义与
-    /// `engine::decide_with` 一致（任一 deny 短路返回该裁决）。
-    pub fn decide_trace(&self, command: &str, project: &Path) -> (Verdict, DecisionTrace) {
+    /// 逐条子命令裁决 + trace（会话放行的 cause 提取用；管线语义与
+    /// [`Self::decide_trace`] 完全一致——任一 deny 短路）。
+    pub fn decide_components(
+        &self,
+        command: &str,
+        project: &Path,
+    ) -> (Verdict, Vec<(Decision, DecisionTrace)>) {
         let commands = match crate::cmd_parse::flatten_commands(command) {
             Ok(c) => c,
             Err(e) => {
-                return (
-                    crate::model::unparseable(e.to_string()),
-                    DecisionTrace::default(),
-                );
+                return (crate::model::unparseable(e.to_string()), Vec::new());
             }
         };
         if commands.is_empty() {
-            return (Verdict::confirm("empty command"), DecisionTrace::default());
+            return (Verdict::confirm("empty command"), Vec::new());
         }
         let pipe = crate::engine::pipe_to_shell(command);
-        let mut merged = DecisionTrace::default();
+        let mut components = Vec::new();
         let mut saw_confirm = false;
         let mut short_circuit: Option<Verdict> = None;
         for c in &commands {
             let (v, t) = self.classify_single(c, project, pipe);
-            merge_trace(&mut merged, t);
-            match v.decision {
+            let d = v.decision;
+            components.push((d, t));
+            match d {
                 Decision::Deny => {
                     short_circuit = Some(v);
                     break;
@@ -356,6 +363,16 @@ impl RuleSet {
             None if saw_confirm => Verdict::confirm("component requires confirmation"),
             None => Verdict::allow(),
         };
+        (verdict, components)
+    }
+
+    /// 裁决 + 溯源（日志 source/normalized/script 字段）。
+    ///
+    /// 与 [`Self::explain`] 共享 [`Self::classify_single`]；组合语义与
+    /// `engine::decide_with` 一致（任一 deny 短路返回该裁决）。
+    pub fn decide_trace(&self, command: &str, project: &Path) -> (Verdict, DecisionTrace) {
+        let (verdict, components) = self.decide_components(command, project);
+        let merged = merge_traces(&components);
         (verdict, merged)
     }
 
@@ -654,6 +671,391 @@ pub fn log_execution(project: &Path, rec: ExecutionRecord<'_>) {
     append_jsonl(project, "executions.jsonl", &v);
 }
 
+// ── 会话内临时放行（M8.6 session allow）────────────────────────────────
+
+/// 会话放行开关（默认开；`CRUSH_TETHER_SESSION_ALLOW=0|off|false` 关闭
+/// ——每条 confirm 照常弹窗，便签不生效）。
+pub fn session_allow_enabled() -> bool {
+    match std::env::var("CRUSH_TETHER_SESSION_ALLOW") {
+        Ok(v) => !matches!(v.as_str(), "0" | "off" | "false"),
+        Err(_) => true,
+    }
+}
+
+/// confirm 的触发原因（会话便签的匹配键；D-10 触发原因粒度）：
+/// - `entry`：查表规则条目命中（layer/entry/token 唯一标识——批了这条
+///   规则触发的询问，同规则触发的后续询问免问）；
+/// - `script`：声明式脚本规则名（含 `:子名`）；
+/// - `whole`：无稳定溯源键（default 兜底/无名脚本/激活降级/解析失败）
+///   → 退回完整命令粒度（防「会话全放行」漏洞）。
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct Cause {
+    /// 原因类别（entry/script/whole）。
+    pub kind: &'static str,
+    /// 类别内唯一键。
+    pub key: String,
+}
+
+/// 从逐条子命令裁决中提取 confirm 触发原因集合（只收 Confirm 子命令；
+/// allow/deny 子命令无需便签——deny 更不可被便签救）。
+pub fn causes_of_components(components: &[(Decision, DecisionTrace)], command: &str) -> Vec<Cause> {
+    let mut out = Vec::new();
+    for (d, t) in components {
+        if *d != Decision::Confirm {
+            continue;
+        }
+        if let Some(r) = &t.script_rule {
+            out.push(Cause {
+                kind: "script",
+                key: r.clone(),
+            });
+        } else if let Some(src) = &t.source {
+            if src.layer == "script" {
+                out.push(Cause {
+                    kind: "whole",
+                    key: command.to_string(),
+                });
+            } else {
+                out.push(Cause {
+                    kind: "entry",
+                    key: format!("{}\u{1f}{}\u{1f}{}", src.layer, src.entry, src.token),
+                });
+            }
+        } else {
+            out.push(Cause {
+                kind: "whole",
+                key: command.to_string(),
+            });
+        }
+    }
+    out
+}
+
+/// 便签过期时长（会话级临时数据的兜底清理线；会话通常远短于此）。
+const STICKER_TTL_SECS: u64 = 24 * 3_600;
+/// 便签条目全局上限（防异常 agent 会话刷爆内存；超限拒新——安全侧）。
+const MAX_STICKERS: usize = 4_096;
+
+/// 会话便签缓存（serve 内存态；挂在 serve_main 局部——与热重载解耦，
+/// 快照整体替换不波及便签）。
+#[derive(Default)]
+pub struct SessionCache {
+    /// 待对账表：(session_id, tool_use_id) → 该次 confirm 的原因集合。
+    pending: std::collections::HashMap<(String, String), Vec<Cause>>,
+    /// 便签表：session_id → (原因, 落签时间)。
+    stickers: std::collections::HashMap<String, Vec<(Cause, u64)>>,
+}
+
+fn now_secs() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
+impl SessionCache {
+    /// 空缓存（serve 冷启动起点）。
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// 惰性清理：过期便签丢弃、全局超限拒新由 stick 侧检查。
+    fn sweep(&mut self) {
+        let now = now_secs();
+        self.stickers.retain(|_, v| {
+            v.retain(|(_, ts)| now.saturating_sub(*ts) < STICKER_TTL_SECS);
+            !v.is_empty()
+        });
+    }
+
+    /// 本会话便签是否覆盖全部触发原因（confirm→allow 的唯一判据）。
+    pub fn covers(&mut self, session: &str, causes: &[Cause]) -> bool {
+        self.sweep();
+        if causes.is_empty() {
+            return false;
+        }
+        let Some(stickers) = self.stickers.get(session) else {
+            return false;
+        };
+        causes.iter().all(|c| stickers.iter().any(|(s, _)| s == c))
+    }
+
+    /// 记录待对账 confirm（等同会话 PostToolUse 到达转正为便签）。
+    pub fn record_pending(&mut self, session: &str, tool_use: &str, causes: Vec<Cause>) {
+        self.pending
+            .insert((session.to_string(), tool_use.to_string()), causes);
+    }
+
+    /// PostToolUse 对账：pending 转正为便签。返回是否命中 pending。
+    pub fn confirm_pending(&mut self, session: &str, tool_use: &str) -> bool {
+        let Some(causes) = self
+            .pending
+            .remove(&(session.to_string(), tool_use.to_string()))
+        else {
+            return false;
+        };
+        self.stick(session, causes);
+        true
+    }
+
+    fn stick(&mut self, session: &str, causes: Vec<Cause>) {
+        self.sweep();
+        let existing: usize = self.stickers.values().map(Vec::len).sum();
+        if existing >= MAX_STICKERS {
+            return; // 超限拒新（安全侧：旧便签不受影响）。
+        }
+        let now = now_secs();
+        let entry = self.stickers.entry(session.to_string()).or_default();
+        for c in causes {
+            if !entry.iter().any(|(s, _)| s == &c) {
+                entry.push((c, now));
+            }
+        }
+    }
+}
+
+/// serve check 路径的会话放行改判：confirm + 开关开 + 主键齐 → 便签全
+/// 命中改 allow（reason 标注，日志照记）；未命中 → 记 pending 等对账。
+fn apply_session_allow(
+    v: Verdict,
+    components: &[(Decision, DecisionTrace)],
+    req: &RequestLine,
+    cache: &mut SessionCache,
+) -> Verdict {
+    if v.decision != Decision::Confirm || !session_allow_enabled() {
+        return v;
+    }
+    let (Some(s), Some(tu)) = (req.session_id.as_deref(), req.tool_use_id.as_deref()) else {
+        return v; // 主键不齐（载荷未带）→ 无法对账，照旧弹窗。
+    };
+    let causes = causes_of_components(components, &req.command);
+    if causes.is_empty() {
+        return v;
+    }
+    if cache.covers(s, &causes) {
+        Verdict {
+            decision: Decision::Allow,
+            reason: Some(format!(
+                "session allow: {}/{} cause(s) pre-approved earlier this session",
+                causes.len(),
+                causes.len()
+            )),
+        }
+    } else {
+        cache.record_pending(s, tu, causes);
+        v
+    }
+}
+
+// ── 会话缓存文件（降级态：serve 不可达时的文件形态便签）────────────────
+
+/// 降级态便签文件（`.crush-tether/session-cache.jsonl`）。行形态：
+/// `{"type":"pending","session_id":…,"tool_use_id":…,"causes":[…],"ts":…}` /
+/// `{"type":"sticker","session_id":…,"kind":…,"key":…,"ts":…}`。
+/// 读取时惰性过滤过期行；写回时顺带清理。
+fn session_cache_path(project: &Path) -> PathBuf {
+    project.join(".crush-tether").join("session-cache.jsonl")
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct CacheRow {
+    #[serde(rename = "type")]
+    typ: String,
+    session_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    tool_use_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    kind: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    key: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    causes: Vec<CauseRow>,
+    ts: u64,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+struct CauseRow {
+    kind: String,
+    key: String,
+}
+
+impl From<&Cause> for CauseRow {
+    fn from(c: &Cause) -> Self {
+        CauseRow {
+            kind: c.kind.to_string(),
+            key: c.key.clone(),
+        }
+    }
+}
+
+impl From<&CauseRow> for Cause {
+    fn from(c: &CauseRow) -> Self {
+        let kind = match c.kind.as_str() {
+            "script" => "script",
+            "whole" => "whole",
+            _ => "entry",
+        };
+        Cause {
+            kind,
+            key: c.key.clone(),
+        }
+    }
+}
+
+/// 读全部行并过滤过期（返回 (行, 是否有丢弃)——有丢弃时调用方写回清理）。
+fn read_cache_rows(project: &Path) -> (Vec<CacheRow>, bool) {
+    let Ok(s) = std::fs::read_to_string(session_cache_path(project)) else {
+        return (Vec::new(), false);
+    };
+    let now = now_secs();
+    let mut rows = Vec::new();
+    let mut dropped = false;
+    for line in s.lines() {
+        match serde_json::from_str::<CacheRow>(line) {
+            Ok(r) => {
+                if now.saturating_sub(r.ts) < STICKER_TTL_SECS {
+                    rows.push(r);
+                } else {
+                    dropped = true;
+                }
+            }
+            Err(_) => dropped = true, // 损坏行顺手清除。
+        }
+    }
+    (rows, dropped)
+}
+
+fn write_cache_rows(project: &Path, rows: &[CacheRow]) {
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(true)
+        .open(session_cache_path(project))
+    {
+        use std::io::Write as _;
+        for r in rows {
+            if let Ok(line) = serde_json::to_string(r) {
+                let _ = writeln!(f, "{line}");
+            }
+        }
+    }
+}
+
+/// 降级态便签覆盖判定（只读）。
+pub fn file_session_covers(project: &Path, session: &str, causes: &[Cause]) -> bool {
+    if causes.is_empty() {
+        return false;
+    }
+    let (rows, _) = read_cache_rows(project);
+    causes.iter().all(|c| {
+        rows.iter().any(|r| {
+            r.typ == "sticker"
+                && r.session_id == session
+                && r.kind.as_deref() == Some(c.kind)
+                && r.key.as_deref() == Some(&c.key)
+        })
+    })
+}
+
+/// 降级态记 pending（追加写）。
+pub fn file_record_pending(project: &Path, session: &str, tool_use: &str, causes: &[Cause]) {
+    let row = CacheRow {
+        typ: "pending".into(),
+        session_id: session.to_string(),
+        tool_use_id: Some(tool_use.to_string()),
+        kind: None,
+        key: None,
+        causes: causes.iter().map(CauseRow::from).collect(),
+        ts: now_secs(),
+    };
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(session_cache_path(project))
+    {
+        use std::io::Write as _;
+        if let Ok(line) = serde_json::to_string(&row) {
+            let _ = writeln!(f, "{line}");
+        }
+    }
+}
+
+/// 降级态 PostToolUse 对账：pending → sticker（顺带清理过期/损坏行）。
+pub fn file_confirm_pending(project: &Path, session: &str, tool_use: &str) -> bool {
+    let (mut rows, _) = read_cache_rows(project);
+    let now = now_secs();
+    let mut stuck = Vec::new();
+    rows.retain(|r| {
+        if r.typ == "pending"
+            && r.session_id == session
+            && r.tool_use_id.as_deref() == Some(tool_use)
+        {
+            for c in &r.causes {
+                stuck.push(CacheRow {
+                    typ: "sticker".into(),
+                    session_id: session.to_string(),
+                    tool_use_id: None,
+                    kind: Some(c.kind.to_string()),
+                    key: Some(c.key.clone()),
+                    causes: Vec::new(),
+                    ts: now,
+                });
+            }
+            return false;
+        }
+        true
+    });
+    if stuck.is_empty() {
+        return false;
+    }
+    rows.extend(stuck);
+    write_cache_rows(project, &rows);
+    true
+}
+
+/// 降级路径（hook 本进程 check）的会话放行改判：文件便签全命中 → allow；
+/// 未命中且主键齐 → 文件记 pending。
+pub fn maybe_file_session_allow(
+    v: Verdict,
+    components: &[(Decision, DecisionTrace)],
+    command: &str,
+    session: Option<&str>,
+    tool_use: Option<&str>,
+    project: &Path,
+) -> Verdict {
+    if v.decision != Decision::Confirm || !session_allow_enabled() {
+        return v;
+    }
+    let (Some(s), Some(tu)) = (session, tool_use) else {
+        return v;
+    };
+    let causes = causes_of_components(components, command);
+    if causes.is_empty() {
+        return v;
+    }
+    if file_session_covers(project, s, &causes) {
+        Verdict {
+            decision: Decision::Allow,
+            reason: Some(format!(
+                "session allow: {} cause(s) pre-approved earlier this session",
+                causes.len()
+            )),
+        }
+    } else {
+        file_record_pending(project, s, tu, &causes);
+        v
+    }
+}
+
+/// 逐条 trace 合并（会话放行改判后的日志 trace 组装）。
+pub fn merge_traces(components: &[(Decision, DecisionTrace)]) -> DecisionTrace {
+    let mut merged = DecisionTrace::default();
+    for (_, t) in components {
+        merge_trace(&mut merged, t.clone());
+    }
+    merged
+}
+
 /// 裁决日志的装配上下文（调用方运行形态 + 快照可观测切片）。
 pub struct LogContext<'a> {
     /// 运行模式（check/hook/serve/benchmark）。
@@ -943,6 +1345,10 @@ pub fn serve_main(
     // 污染；0 = 尚无基线，首个请求只记录不触发重载）。
     let mut last_fp: u64 = 0;
 
+    // 会话便签缓存（M8.6）：serve 实例局部内存态——热重载整体换快照不
+    // 波及便签（会话批准的记忆跨规则修改保持）。
+    let mut session_cache = SessionCache::new();
+
     // v1 串行 accept：accept → 读 → 判 → 写。
     loop {
         use interprocess::local_socket::traits::Listener as _;
@@ -966,7 +1372,13 @@ pub fn serve_main(
                     }
                     last_fp = fp;
                 }
-                handle_connection(&stream, ruleset.as_ref(), &project, &last_activity);
+                handle_connection(
+                    &stream,
+                    ruleset.as_ref(),
+                    &project,
+                    &last_activity,
+                    &mut session_cache,
+                );
             }
             Err(_) => {
                 // 瞬时 accept 错误：短暂退避，避免错误风暴变 busy-loop。
@@ -982,6 +1394,7 @@ fn handle_connection(
     ruleset: Option<&RuleSet>,
     project: &Path,
     last_activity: &AtomicU64,
+    session_cache: &mut SessionCache,
 ) {
     let respond = |mut stream: &interprocess::local_socket::Stream,
                    resp: &ResponseLine|
@@ -1011,9 +1424,20 @@ fn handle_connection(
     };
     let verdict = match req.op.as_str() {
         "ping" => None,
+        // M8.6 执行完成对账：pending → 便签（无裁决输出）。
+        "post" => {
+            if let (Some(s), Some(tu)) = (req.session_id.as_deref(), req.tool_use_id.as_deref()) {
+                session_cache.confirm_pending(s, tu);
+            }
+            None
+        }
         "check" => match ruleset {
             Some(rs) => {
-                let (v, trace) = rs.decide_trace(&req.command, project);
+                let (v, components) = rs.decide_components(&req.command, project);
+                // 会话放行改判（M8.6）：confirm 时便签命中 → allow（日志
+                // 照记最终裁决与 reason 标注，审计可见）。
+                let v = apply_session_allow(v, &components, &req, session_cache);
+                let trace = merge_traces(&components);
                 // serve 单点写裁决日志（ADR-07）。
                 log_verdict(
                     project,
@@ -1089,16 +1513,24 @@ fn read_line_deadline(
     rx.recv_timeout(deadline).ok().flatten()
 }
 
-/// 单次请求应答（一连接一请求）。
 /// 单次请求应答（一连接一请求）。`name` 为端点名（`hook_decide` 算一次
-/// 下传——重试环里不做重复 canonicalize/hash）。
-fn ask(name: &str, agent: &str, command: &str) -> Option<Verdict> {
+/// 下传——重试环里不做重复 canonicalize/hash）。`session`/`tool_use` 为
+/// M8.6 会话放行关联主键（None = 载荷未带）。
+fn ask(
+    name: &str,
+    agent: &str,
+    command: &str,
+    session: Option<&str>,
+    tool_use: Option<&str>,
+) -> Option<Verdict> {
     let stream = connect(name).ok()?;
     let req = RequestLine {
         id: 1,
         op: "check".into(),
         command: command.to_string(),
         agent: agent.to_string(),
+        session_id: session.map(String::from),
+        tool_use_id: tool_use.map(String::from),
     };
     let mut line = serde_json::to_string(&req).ok()?;
     line.push('\n');
@@ -1124,6 +1556,8 @@ pub fn ping(project: &Path, engine: &str, config: Option<&str>) -> bool {
         op: "ping".into(),
         command: String::new(),
         agent: String::new(),
+        session_id: None,
+        tool_use_id: None,
     }) else {
         return false;
     };
@@ -1204,12 +1638,15 @@ fn spawn_serve(project: &Path, engine: &str, config: Option<&str>) {
 
 /// hook 主路径：connect-or-spawn → 仍失败返回 `None`（调用方降级本进程
 /// check，绝不无裁决放行）。`CRUSH_TETHER_DISABLE_SERVE=1` 跳过（逃生口）。
+/// `session`/`tool_use` 为 M8.6 会话放行关联主键（透传 serve 便签对账）。
 pub fn hook_decide(
     project: &Path,
     engine: &str,
     config: Option<&str>,
     agent: &str,
     command: &str,
+    session: Option<&str>,
+    tool_use: Option<&str>,
 ) -> Option<Verdict> {
     if std::env::var_os("CRUSH_TETHER_DISABLE_SERVE").is_some() {
         return None;
@@ -1217,7 +1654,7 @@ pub fn hook_decide(
     // 端点名算一次下传：重试环内不做重复 canonicalize/hash。
     let name = endpoint_name(project, engine, config);
     // 直连常驻 serve（µs 级）。
-    if let Some(v) = ask(&name, agent, command) {
+    if let Some(v) = ask(&name, agent, command, session, tool_use) {
         return Some(v);
     }
     // 冷启动惊群：spawn serve（独占 bind 裁定唯一性，输者静默退出），有界
@@ -1226,11 +1663,48 @@ pub fn hook_decide(
     let t0 = Instant::now();
     while t0.elapsed() < Duration::from_millis(200) {
         std::thread::sleep(Duration::from_millis(20));
-        if let Some(v) = ask(&name, agent, command) {
+        if let Some(v) = ask(&name, agent, command, session, tool_use) {
             return Some(v);
         }
     }
     None
+}
+
+/// PostToolUse 执行完成通知（M8.6 会话放行对账）：**仅直连**常驻 serve
+/// ——连不上返回 false，由调用方落降级态文件便签；不 spawn（post 无裁决
+/// 语义，冷启动无意义）。返回 true = serve 已收对账。
+pub fn hook_post(
+    project: &Path,
+    engine: &str,
+    config: Option<&str>,
+    session: &str,
+    tool_use: &str,
+) -> bool {
+    if std::env::var_os("CRUSH_TETHER_DISABLE_SERVE").is_some() {
+        return false;
+    }
+    let name = endpoint_name(project, engine, config);
+    let Ok(stream) = connect(&name) else {
+        return false;
+    };
+    let req = RequestLine {
+        id: 1,
+        op: "post".into(),
+        command: String::new(),
+        agent: String::new(),
+        session_id: Some(session.to_string()),
+        tool_use_id: Some(tool_use.to_string()),
+    };
+    let Ok(mut line) = serde_json::to_string(&req) else {
+        return false;
+    };
+    line.push('\n');
+    let mut stream = stream;
+    if stream.write_all(line.as_bytes()).is_err() {
+        return false;
+    }
+    // 等 serve 消费完请求（应答内容无裁决语义，仅确认处理完毕）。
+    read_line_deadline(stream, RESPONSE_DEADLINE).is_some()
 }
 
 #[cfg(test)]

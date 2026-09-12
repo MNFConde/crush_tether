@@ -182,7 +182,12 @@ impl Drop for KillOnDrop {
 /// 直接 spawn 一个 serve 子进程（测试需要驻留实例时用；hook 触发的
 /// connect-or-spawn 生命周期不可控，测热重载/惊群须自管进程）。`config`
 /// 为 `--config` 显式覆盖（与二进制内 spawn_serve 同源透传）。
-pub fn spawn_serve(project: &Path, idle_secs: &str, config: Option<&str>) -> KillOnDrop {
+pub fn spawn_serve(
+    project: &Path,
+    idle_secs: &str,
+    config: Option<&str>,
+    envs: &[(&str, &str)],
+) -> KillOnDrop {
     let mut args = vec![
         "serve".to_string(),
         "--project".to_string(),
@@ -199,6 +204,9 @@ pub fn spawn_serve(project: &Path, idle_secs: &str, config: Option<&str>) -> Kil
     KillOnDrop(
         Command::new(BIN)
             .args(&args)
+            .env_remove("CRUSH_TETHER_SESSION_ALLOW")
+            .env_remove("CRUSH_TETHER_LEARN")
+            .envs(envs.iter().copied())
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null())

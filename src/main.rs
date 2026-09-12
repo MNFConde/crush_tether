@@ -223,15 +223,23 @@ fn run_check(agent: Agent, config_arg: Option<&str>, engine: &str) -> ExitCode {
         // 读不到输入：保守 confirm（exit 0 无输出，走正常权限提示）。
         return ExitCode::from(0);
     };
-    match check_verdict(&project, config_arg, engine, &command, agent, "check") {
+    match check_verdict(
+        &project,
+        config_arg,
+        engine,
+        &command,
+        agent,
+        "check",
+        (None, None),
+    ) {
         Ok(verdict) => ExitCode::from(channel::emit(&verdict, agent)),
         Err(code) => code,
     }
 }
 
-/// hook 模式：事件分派（M8.6）——PostToolUse 走执行记录采集（只落盘、
-/// 零裁决输出、恒 exit 0），PreToolUse（缺省）走 connect-or-spawn 主路径
-/// + 降级。
+/// hook 模式：事件分派（M8.6）——PostToolUse 走执行记录采集 + 会话放行
+/// 对账（零裁决输出、恒 exit 0），PreToolUse（缺省）走 connect-or-spawn
+/// 主路径 + 降级（降级态会话便签走文件形态）。
 fn run_hook(agent: Agent, config_arg: Option<&str>, engine: &str) -> ExitCode {
     let Some(input) = channel::read_hook_input(agent) else {
         return ExitCode::from(0);
@@ -242,29 +250,48 @@ fn run_hook(agent: Agent, config_arg: Option<&str>, engine: &str) -> ExitCode {
         .map(PathBuf::from)
         .unwrap_or_else(crush_tether::config::find_project_root);
     let command = input.command;
-    // PostToolUse：执行记录采集——executions.jsonl 一行一执行（成败尽力
-    // 提取），无阻断语义，采集失败不影响 agent（恒 exit 0、零输出）。
+    let session = input.session_id.as_deref();
+    let tool_use = input.tool_use_id.as_deref();
+    // PostToolUse：执行记录采集（executions.jsonl 一行一执行；成败尽力
+    // 提取）+ 会话放行对账（serve 直连优先，降级态转文件便签）。无阻断
+    // 语义，采集失败不影响 agent（恒 exit 0、零输出）。
     if input.event.as_deref() == Some("PostToolUse") {
         if service::learn_enabled() {
             service::log_execution(
                 &project,
                 service::ExecutionRecord {
                     agent: agent.slug(),
-                    session_id: input.session_id.as_deref(),
-                    tool_use_id: input.tool_use_id.as_deref(),
+                    session_id: session,
+                    tool_use_id: tool_use,
                     command: &command,
                     success: input.tool_success,
                 },
             );
         }
+        if let (Some(s), Some(tu)) = (session, tool_use)
+            && !service::hook_post(&project, engine, config_arg, s, tu)
+        {
+            service::file_confirm_pending(&project, s, tu);
+        }
         return ExitCode::from(0);
     }
-    if let Some(v) = service::hook_decide(&project, engine, config_arg, agent.slug(), &command) {
+    if let Some(v) = service::hook_decide(
+        &project,
+        engine,
+        config_arg,
+        agent.slug(),
+        &command,
+        session,
+        tool_use,
+    ) {
         return ExitCode::from(channel::emit(&v, agent));
     }
-    // 降级路径：本进程 check（仍然全量管线，绝不无裁决放行）。日志 mode
-    // 记 "hook"：审计可区分「serve 降级」与「独立 check」。
-    match check_verdict(&project, config_arg, engine, &command, agent, "hook") {
+    // 降级路径：本进程 check（仍然全量管线，绝不无裁决放行）+ 文件形态
+    // 会话放行（serve 不可达时的便签查询/记录）。日志 mode 记 "hook"：
+    // 审计可区分「serve 降级」与「独立 check」。
+    match check_verdict(
+        &project, config_arg, engine, &command, agent, "hook", (session, tool_use),
+    ) {
         Ok(verdict) => ExitCode::from(channel::emit(&verdict, agent)),
         Err(code) => code,
     }
@@ -276,8 +303,25 @@ fn run_benchmark(agent: Agent, config_arg: Option<&str>, engine: &str) -> ExitCo
     let Some((command, project)) = read_project(agent) else {
         return ExitCode::from(0);
     };
-    let local = check_verdict(&project, config_arg, engine, &command, agent, "benchmark").ok();
-    let via_serve = service::hook_decide(&project, engine, config_arg, agent.slug(), &command);
+    let local = check_verdict(
+        &project,
+        config_arg,
+        engine,
+        &command,
+        agent,
+        "benchmark",
+        (None, None),
+    )
+    .ok();
+    let via_serve = service::hook_decide(
+        &project,
+        engine,
+        config_arg,
+        agent.slug(),
+        &command,
+        None,
+        None,
+    );
     let local_d = local.as_ref().map(|v| v.decision.to_string());
     let serve_d = via_serve.as_ref().map(|v| v.decision.to_string());
     let match_ = match (&local_d, &serve_d) {
@@ -310,10 +354,23 @@ fn check_verdict(
     command: &str,
     agent: Agent,
     mode: &str,
+    session_keys: (Option<&str>, Option<&str>),
 ) -> Result<Verdict, ExitCode> {
+    let (session, tool_use) = session_keys;
     match RuleSet::load(project, config_arg, engine) {
         Ok(rs) => {
-            let (verdict, trace) = rs.decide_trace(command, project);
+            let (verdict, components) = rs.decide_components(command, project);
+            // 会话放行（M8.6，降级态文件形态）：只作用于 confirm；非 confirm
+            // 原样返回。serve 主路径的改判在 serve 内（apply_session_allow）。
+            let verdict = service::maybe_file_session_allow(
+                verdict,
+                &components,
+                command,
+                session,
+                tool_use,
+                project,
+            );
+            let trace = service::merge_traces(&components);
             service::log_verdict(
                 project,
                 command,

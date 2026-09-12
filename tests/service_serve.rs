@@ -25,9 +25,9 @@ fn thundering_herd_converges_to_single_instance() {
     // 不变量：并发冷启动后「恰好一个存活」，其余静默退出 0——赢家由独占
     // bind 竞争决定，测试不预设是哪一个。
     let mut herd = [
-        spawn_serve(proj.path(), "10", None),
-        spawn_serve(proj.path(), "10", None),
-        spawn_serve(proj.path(), "10", None),
+        spawn_serve(proj.path(), "10", None, &[]),
+        spawn_serve(proj.path(), "10", None, &[]),
+        spawn_serve(proj.path(), "10", None, &[]),
     ];
 
     // 恰好两个退出（输者应有界退出）。
@@ -63,7 +63,7 @@ fn thundering_herd_converges_to_single_instance() {
 #[test]
 fn serve_exits_after_idle_grace() {
     let proj = TempDir::new("m41-idle");
-    let mut c = spawn_serve(proj.path(), "1", None);
+    let mut c = spawn_serve(proj.path(), "1", None, &[]);
     let deadline = Instant::now() + Duration::from_secs(8);
     let mut exited = None;
     while Instant::now() < deadline {
@@ -167,7 +167,7 @@ fn serve_path_honors_explicit_config() {
         "version = 1\ndefault = \"confirm\"\n[local]\ndeny = [\"ls\"]\n",
     )
     .expect("write override rules");
-    let _serve = spawn_serve(proj.path(), "30", Some(ext.to_string_lossy().as_ref()));
+    let _serve = spawn_serve(proj.path(), "30", Some(ext.to_string_lossy().as_ref()), &[]);
 
     let r = run_mode_env(
         proj.path(),
