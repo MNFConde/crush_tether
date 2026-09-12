@@ -2,6 +2,12 @@
 
 This file records substantive progress in reverse-chronological order — newest entry at the top, right below this line. Keep each entry short — summary and pointer only; conclusions settle into `cairn/<topic>.md`.
 
+## 2026-09-12 Ⅶ · CI 首跑红灯归因与修复（M8.1–M8.6 批量推送暴露）
+
+- **事件**：M8.6 收官推送（含积压的 M8.1–M8.4 共 11 提交）触发两 workflow 首跑，CI 2 job + agent-matrix 5 job 全红；归因四类（详见 [agent-hook-testing.md](agent-hook-testing.md)「CI 首跑红灯归因」节）：①M8.1 拆自动生成 → alias 链老测试与 zcode 冒烟断言的隐形拐杖断裂（测试本身另有 env_remove 抵消 env 的假绿缺陷）；②workflow heredoc PostToolUse 块重复插入+丢逗号 → JSON 非法（claude 报 Not logged in / crush 拒载配置）；③crush windows 的 wrapper 守卫检查排在引擎安装前；④cargo test fail-fast 掩盖失败清单。
+- **修复**（b8e11d8 + f2af76a）：测试 env 构造修正；heredoc 去重补逗号 + 生成物 json.tool 校验；引擎安装挪前；五冒烟 job 增 init 步骤；CI test 加 `--no-fail-fast`。冒烟前置三件套固化于 doc/test-and-ci.md §3 维护口径；干净 worktree 全量 test（21 二进制）预演 CI 条件全绿后推送。
+- **教训要点**：改「缺省兜底」类运行时行为须扫「谁在无配置环境依赖旧兜底」；本地全绿对 CI 无证明力，干净 worktree 是廉价预演。
+
 ## 2026-09-12 Ⅵ · M8.6 会话临时放行 + 脚本声明式规则 + suggest 实现（用户批准计划，硬门禁解除）
 
 - **两轮讨论拍板（用户）**：①会话临时放行为主（优先级 > suggest），便签粒度 = **触发原因**（定位到触发询问的规则条目、多个全记全中才放行），危险类别**不跳**（便签信当下/suggest 守长期）；②脚本声明式 = `rule(名字, 优先级, 函数)` 引擎注入注册器（装饰器等价物），数值优先级小值先 + 同值保注册序，check 双形态长期并存；③纠正「脚本无命名规则概念」——结构上每分支即规则，缺的只是命名通道（更正登记 25）。

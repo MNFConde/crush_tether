@@ -1,7 +1,7 @@
 ---
 type: project_topic
 status: active
-summary: M7.3 agent hook 兼容性测试的方法论与过程沉淀：判定准则（hook 执行以探针 dump 物理副作用为准，日志计数与 tool result 回执不可尽信）、mock 四坑（schema 必填字段/工具名环境差异/OpenAI SSE/SSE input 对象校验）、灰度可官方 env 钉死（DISABLE_GROWTHBOOK）、crush run 悬案插桩排查全记录（三假设判据/五处插桩/证据代码位置）、四次更正史链条（含 zcode headless 形态与插件轨/config 轨信任门分化定性）、无头场景组定性（fail-open 按 agent 形态分化 + zcode spawn 精简 env）；M8.6 补：本机用户全局配置是 headless 探针的干扰源（探针核对移 CI 自动化）、PostToolUse 载荷自动抓包模式。确定性结论的现役事实在 doc/agent-compat-matrix.md，测试方法与挂账在 doc/test-and-ci.md。
+summary: M7.3 agent hook 兼容性测试的方法论与过程沉淀：判定准则（hook 执行以探针 dump 物理副作用为准，日志计数与 tool result 回执不可尽信）、mock 四坑（schema 必填字段/工具名环境差异/OpenAI SSE/SSE input 对象校验）、灰度可官方 env 钉死（DISABLE_GROWTHBOOK）、crush run 悬案插桩排查全记录（三假设判据/五处插桩/证据代码位置）、四次更正史链条（含 zcode headless 形态与插件轨/config 轨信任门分化定性）、无头场景组定性（fail-open 按 agent 形态分化 + zcode spawn 精简 env）；M8.6 补：本机用户全局配置是 headless 探针的干扰源（探针核对移 CI 自动化）、PostToolUse 载荷自动抓包模式；M8.x 批量推送后 CI 首跑红灯归因（行为变更拆测试拐杖/env_remove 抵消 env 的假绿测试/heredoc 生成物校验/fail-fast 掩盖）。确定性结论的现役事实在 doc/agent-compat-matrix.md，测试方法与挂账在 doc/test-and-ci.md。
 tags: [crush_tether, hook, testing, mock, claude-code, crush, zcode, headless, methodology]
 contains: [lesson, decision, pattern]
 created: 2026-09-09
@@ -55,6 +55,13 @@ authoring_mode: ai_generated
 - **pattern：探针核对固化为 CI 持续产物**——「实现期探针核对字段全集」这类一次性核对，直接在 CI 场景/冒烟 settings 给探针挂上目标事件（PostToolUse），next push 首跑自动抓真实载荷到 dump.jsonl：干净环境（无用户配置噪声）+ 每次跑都复验 + 三 agent 同批覆盖。代价是 agent-matrix 的 settings JSON 模板翻倍（claude/crush × ubuntu/windows 文本变体各自维护——python/python3、${ws}/$ws/PWD 差异，改模板要四处对齐）。
 - **坑：hook_probe.py post 角色本就 dump stdin**（dump 对非 fail 角色通用，读代码时被 `if role == "post": return 0` 的提前 return 误导为「不 dump」）——「探针不抓包」的结论先看 dump 调用是否在分派之前，再看角色分支。
 - **坑：Windows claude 的 bash 类工具名是 `PowerShell`**——hook matcher 必须写 `Bash|PowerShell`（mock 的 pick_tool_name 已自适应工具名，但 hook 的 matcher 是我们写的，漏 PowerShell = PostToolUse 永不触发且无报错）。
+
+## 2026-09-12 CI 首跑红灯归因（M8.1–M8.6 十一提交批量推送后）
+
+- **母题：行为变更拆掉测试的隐形拐杖**——M8.1 拆除「三层皆缺自动生成默认包」后 CI 首跑红了三处：alias 链老测试、zcode 冒烟正向断言。拐杖有两条：CI 上靠自动生成拿到 allow；本地靠 cwd 上溯摸到**开发者自有配置**（仓库根 `.crush-tether/` 被 gitignore = 本地永远有、CI 永远没有）。结论：**改运行时行为（尤其「缺省兜底」类）必须扫一遍「谁在无配置环境下依赖旧兜底」**；本地全绿对 CI 无证明力，干净 worktree（不含 gitignore 件）全量 test 是廉价预演。
+- **假绿测试样本（alias 链测试带病绿灯三周）**：`Command::env(k,v)` 之后链式 `env_remove(k)`——std 同键后调用生效，环境变量当场被抹，测试从未测过它名字声称的事，靠上述双拐杖长期绿灯。机理：env 构造顺序错误不报错、只静默降级到 fallback 路径，恰好 fallback 在两个环境都有副作用。
+- **CI 资产编辑坑×2**：①给既有 heredoc 加块时**重复插入**（同一 PostToolUse 块 M8.2/M8.4 已加过）+ 丢逗号 → JSON 非法，症状隔层：claude 无视整份 settings（连 env 认证一起丢 → `Not logged in`）、crush 直接拒载配置——**生成物必须 json.tool 校验一步**（已固化进 workflow）；②新步骤插在依赖就绪之前（wrapper 守卫检查先于引擎安装，而 wrapper 设计即缺席响亮失败）——新增 step 先画依赖线再定位。
+- **fail-fast 掩盖**：`cargo test` 默认首个失败二进制即停，本次 contract_adapters 之后的测试全部没跑，无法排除更多同类失败——CI test 步骤已改 `--no-fail-fast`；本地用干净 worktree 全量复跑补齐证据（21 二进制全绿）。
 
 ## mock 四坑（固化于 script/mock_llm.py，改前必读）
 

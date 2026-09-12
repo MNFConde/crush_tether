@@ -89,6 +89,7 @@ mock LLM 后端驱动 agent 完成一轮固定 tool_use(命令可配,`--cmd`),�
 - **零 secrets**:全 mock 驱动,任何 runner/fork 原生可跑,排查时排除凭证因素
 - **时长预算**:串联化+场景组后 claude/crush job 约 +3 分钟;zcode job(7z 解包 + cargo install + 五次 headless)逼近 25 分钟 timeout,超限先拆分或上调
 - **扩展指引**:新增场景 = `ci_scenario.sh` 加分支(信封+断言)+ workflow 循环串加一个词,零注册改动;新增 agent = 复制最接近的 job 模板改注册面与 headless 命令;zcode 场景/冒烟的双装配切换在 zcode-windows job 的场景 step 内完成(CI 环境一次性,无需复原)
+- **冒烟前置三件套**(2026-09-12 首跑红灯沉淀,缺一即假信号):①引擎安装先于 wrapper 守卫检查(wrapper 设计即缺席响亮失败);②headless run 前显式 `crush-tether init`——M8.1 起三层皆缺不自动生成,checkout 无配置兜底 confirm,正向断言拿不到 allow;③heredoc 生成的 settings/crush.json 过 `python -m json.tool` 校验(重复插入/丢逗号曾致 claude 无视 settings、crush 拒载配置);CI test 步骤用 `--no-fail-fast`,别让首个失败掩盖其余测试二进制
 
 ## 4. 测试事项分类法
 
