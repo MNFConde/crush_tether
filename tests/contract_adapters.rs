@@ -159,17 +159,23 @@ fn claudecode_permission_basis_prefers_stdin_cwd() {
 #[test]
 fn zcode_project_dir_alias_chain() {
     // M5.3 防御性适配：ZCODE_PROJECT_DIR 优先，CLAUDE_PROJECT_DIR 回退。
+    // env 设置必须在 env_remove 之后：std Command 同键后调用生效，反序会把
+    // 刚设的变量抹掉（2026-09-12 CI 暴露，此测试曾长期依赖默认包生成假绿）。
     let proj = project_with_rules("m53-zcode");
     for env_key in ["ZCODE_PROJECT_DIR", "CLAUDE_PROJECT_DIR"] {
+        let other = if env_key == "ZCODE_PROJECT_DIR" {
+            "CLAUDE_PROJECT_DIR"
+        } else {
+            "ZCODE_PROJECT_DIR"
+        };
         let mut child = Command::new(BIN)
             .args(["check", "--agent", "zcode"])
-            .env(env_key, proj.path())
             .env("USERPROFILE", proj.path())
             .env("HOME", proj.path())
             .env_remove("CRUSH_PROJECT_DIR")
-            .env_remove("CLAUDE_PROJECT_DIR")
-            .env_remove("ZCODE_PROJECT_DIR")
+            .env_remove(other)
             .env_remove("CRUSH_TETHER_CONFIG")
+            .env(env_key, proj.path())
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
