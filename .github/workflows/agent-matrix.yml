@@ -130,6 +130,12 @@ jobs:
                   "hooks": [{ "type": "command",
                     "command": "python3 $PWD/script/hook_probe.py bash --agent claudecode --source ci --probe-dir $PWD/.hook-probe",
                     "timeout": 30 }] }
+              ]
+              "PostToolUse": [
+                { "matcher": "Bash|PowerShell",
+                  "hooks": [{ "type": "command",
+                    "command": "python3 $PWD/script/hook_probe.py post --agent claudecode --source ci --probe-dir $PWD/.hook-probe",
+                    "timeout": 30 }] }
               ],
               "PostToolUse": [
                 { "matcher": "Bash|PowerShell",
@@ -178,6 +184,12 @@ jobs:
                 { "matcher": "Bash|PowerShell",
                   "hooks": [{ "type": "command",
                     "command": "python3 $ws/script/hook_probe.py perm --agent claudecode --source ci --probe-dir $ws/.hook-probe",
+                    "timeout": 30 }] }
+              ],
+              "PostToolUse": [
+                { "matcher": "Bash|PowerShell",
+                  "hooks": [{ "type": "command",
+                    "command": "python3 $ws/script/hook_probe.py post --agent claudecode --source ci --probe-dir $ws/.hook-probe",
                     "timeout": 30 }] }
               ]
             }
@@ -264,6 +276,11 @@ jobs:
                   "command": "python3 $PWD/script/hook_probe.py bash --agent crush --source ci --probe-dir $PWD/.hook-probe",
                   "timeout": 30 }
               ]
+              "PostToolUse": [
+                { "name": "hook-probe-post",
+                  "command": "python3 $PWD/script/hook_probe.py post --agent crush --source ci --probe-dir $PWD/.hook-probe",
+                  "timeout": 30 }
+              ]
             }
           }
           EOF
@@ -304,6 +321,11 @@ jobs:
               "PreToolUse": [
                 { "name": "hook-probe",
                   "command": "python3 $ws/script/hook_probe.py perm --agent crush --source ci --probe-dir $ws/.hook-probe",
+                  "timeout": 30 }
+              ],
+              "PostToolUse": [
+                { "name": "hook-probe-post",
+                  "command": "python3 $ws/script/hook_probe.py post --agent crush --source ci --probe-dir $ws/.hook-probe",
                   "timeout": 30 }
               ]
             }
@@ -382,6 +404,12 @@ jobs:
                   "hooks": [{ "type": "command",
                     "command": "python ${ws}/script/hook_probe.py bash --agent claudecode --source ci --probe-dir ${ws}/.hook-probe",
                     "timeout": 30 }] }
+              ]
+              "PostToolUse": [
+                { "matcher": "Bash|PowerShell",
+                  "hooks": [{ "type": "command",
+                    "command": "python ${ws}/script/hook_probe.py post --agent claudecode --source ci --probe-dir ${ws}/.hook-probe",
+                    "timeout": 30 }] }
               ],
               "PostToolUse": [
                 { "matcher": "Bash|PowerShell",
@@ -430,6 +458,12 @@ jobs:
                 { "matcher": "Bash|PowerShell",
                   "hooks": [{ "type": "command",
                     "command": "python $ws/script/hook_probe.py perm --agent claudecode --source ci --probe-dir $ws/.hook-probe",
+                    "timeout": 30 }] }
+              ],
+              "PostToolUse": [
+                { "matcher": "Bash|PowerShell",
+                  "hooks": [{ "type": "command",
+                    "command": "python $ws/script/hook_probe.py post --agent claudecode --source ci --probe-dir $ws/.hook-probe",
                     "timeout": 30 }] }
               ]
             }
@@ -538,6 +572,11 @@ jobs:
                   "command": "python ${ws}/script/hook_probe.py bash --agent crush --source ci --probe-dir ${ws}/.hook-probe",
                   "timeout": 30 }
               ]
+              "PostToolUse": [
+                { "name": "hook-probe-post",
+                  "command": "python ${ws}/script/hook_probe.py post --agent crush --source ci --probe-dir ${ws}/.hook-probe",
+                  "timeout": 30 }
+              ]
             }
           }
           EOF
@@ -578,6 +617,11 @@ jobs:
               "PreToolUse": [
                 { "name": "hook-probe",
                   "command": "python $ws/script/hook_probe.py perm --agent crush --source ci --probe-dir $ws/.hook-probe",
+                  "timeout": 30 }
+              ],
+              "PostToolUse": [
+                { "name": "hook-probe-post",
+                  "command": "python $ws/script/hook_probe.py post --agent crush --source ci --probe-dir $ws/.hook-probe",
                   "timeout": 30 }
               ]
             }

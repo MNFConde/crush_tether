@@ -125,7 +125,7 @@ mock LLM 后端驱动 agent 完成一轮固定 tool_use(命令可配,`--cmd`),�
 | zcode ubuntu job | agent 行为 | 串联冒烟 | workflow | Linux 版内测中,公测后补(发行渠道落地即可平移 windows job 配方);同批换接 wrapper .sh(hooks.json 现指 .cmd,M8.2) |
 | wrapper 本机 zcode 0.2.0 实弹 | agent 行为 | 插件重装+headless | [矩阵 §1.2](agent-compat-matrix.md) | 0.2.0 wrapper 已落地(M8.2,CI 三 job 覆盖),本机 cache 拷贝须重装生效,现网 0.1.0 行为不变;随用户下次插件重装一并验 |
 | zcode cron latest 哨兵的首个自动触发尚待观察 | 协议 | 串联冒烟 | [矩阵 §1.1/§2](agent-compat-matrix.md) | 每周一 UTC |
-| zcode PostToolUse 载荷探针核对（tool_use_id/session_id/tool_input.command 字段全集） | 采集面 | 探针实验 | [test-and-ci.md §1](#1-测试方法) + executions 采集 | M8.6 采集为容差提取（缺失=null 不报错）；claude 本机可核，zcode 挂账（App 运行中不动 live 配置）——随 CI 或 App 关闭后补；crush 无 PostToolUse（M7.3 定性） |
+| zcode PostToolUse 载荷探针核对（tool_use_id/session_id/tool_input.command 字段全集） | 采集面 | 探针实验 | [test-and-ci.md §1](#1-测试方法) + executions 采集 | M8.6 采集为容差提取（缺失=null 不报错）；claude/crush 已在 agent-matrix 四 job 场景+冒烟 settings 挂 PostToolUse 探针（dump.jsonl 自动抓包，next push 首跑核对）；zcode 挂账（需插件 hooks.json 增 PostToolUse，涉及插件版本，随下次插件更新）；crush 无 PostToolUse（M7.3 定性，其探针恒空 = 反向验证降级矩阵） |
 | 会话放行交互实弹验证（弹窗批准 → 同会话免问 → 关对话失效） | agent 行为 | 人工交互 | M8.6 会话放行 | 无头 confirm=拒绝（已定性）→ 无头流量不生长便签，CI 场景组不可测；随用户下次交互会话验证（serve 日志 reason 应现 session allow 标注） |
 
 ## 6. 探针与工具设计
