@@ -229,11 +229,36 @@ fn run_check(agent: Agent, config_arg: Option<&str>, engine: &str) -> ExitCode {
     }
 }
 
-/// hook 模式：connect-or-spawn 主路径 + 降级。
+/// hook 模式：事件分派（M8.6）——PostToolUse 走执行记录采集（只落盘、
+/// 零裁决输出、恒 exit 0），PreToolUse（缺省）走 connect-or-spawn 主路径
+/// + 降级。
 fn run_hook(agent: Agent, config_arg: Option<&str>, engine: &str) -> ExitCode {
-    let Some((command, project)) = read_project(agent) else {
+    let Some(input) = channel::read_hook_input(agent) else {
         return ExitCode::from(0);
     };
+    let project = input
+        .project_dir
+        .as_deref()
+        .map(PathBuf::from)
+        .unwrap_or_else(crush_tether::config::find_project_root);
+    let command = input.command;
+    // PostToolUse：执行记录采集——executions.jsonl 一行一执行（成败尽力
+    // 提取），无阻断语义，采集失败不影响 agent（恒 exit 0、零输出）。
+    if input.event.as_deref() == Some("PostToolUse") {
+        if service::learn_enabled() {
+            service::log_execution(
+                &project,
+                service::ExecutionRecord {
+                    agent: agent.slug(),
+                    session_id: input.session_id.as_deref(),
+                    tool_use_id: input.tool_use_id.as_deref(),
+                    command: &command,
+                    success: input.tool_success,
+                },
+            );
+        }
+        return ExitCode::from(0);
+    }
     if let Some(v) = service::hook_decide(&project, engine, config_arg, agent.slug(), &command) {
         return ExitCode::from(channel::emit(&v, agent));
     }

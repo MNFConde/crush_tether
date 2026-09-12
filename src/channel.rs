@@ -64,6 +64,17 @@ pub struct HookInput {
     pub command: String,
     /// 项目目录（agent 注入；None = 调用方按项目根解析兜底）。
     pub project_dir: Option<String>,
+    /// 事件名（M8.6 执行记录采集：`hook_event_name` / `event` 容差提取；
+    /// PreToolUse 分派裁决、PostToolUse 分派执行记录）。None = 载荷未带
+    /// （按 PreToolUse 处理，兼容 env 兜底路径）。
+    pub event: Option<String>,
+    /// 会话 ID（M8.6 权限学习的关联主键之一；None = 载荷未带）。
+    pub session_id: Option<String>,
+    /// 工具调用 ID（M8.6 关联主键之一；None = 载荷未带）。
+    pub tool_use_id: Option<String>,
+    /// 执行成败（M8.6：PostToolUse `tool_response` 尽力提取——`isError`/
+    /// `is_error`/`success` 布尔键；判不出 = None，成败不可判不构成错误）。
+    pub tool_success: Option<bool>,
 }
 
 /// 读 hook 输入（stdin JSON / env）；读不到命令 → `None`（调用方保守
@@ -110,9 +121,38 @@ pub fn read_hook_input(agent: Agent) -> Option<HookInput> {
         Agent::Zcode => from_env().or_else(from_stdin),
     };
 
+    // M8.6 执行记录采集字段：容差链尽力提取（键名因 agent 而异，实测以
+    // 探针核对为准）；缺失一律 None，不构成错误。
+    let str_field = |keys: &[&str]| -> Option<String> {
+        keys.iter().find_map(|k| {
+            json.as_ref()
+                .and_then(|j| j.get(*k))
+                .and_then(Value::as_str)
+                .map(String::from)
+                .filter(|s| !s.is_empty())
+        })
+    };
+    let event = str_field(&["hook_event_name", "event"]);
+    let session_id = str_field(&["session_id", "sessionId"]);
+    let tool_use_id = str_field(&["tool_use_id", "toolUseId"]);
+    let tool_success = json.as_ref().and_then(|j| {
+        let r = j.get("tool_response")?;
+        ["isError", "is_error", "success"].iter().find_map(|k| {
+            r.get(*k).and_then(Value::as_bool).map(|b| match *k {
+                "success" => b,
+                // isError / is_error：true = 失败。
+                _ => !b,
+            })
+        })
+    });
+
     Some(HookInput {
         command,
         project_dir,
+        event,
+        session_id,
+        tool_use_id,
+        tool_success,
     })
 }
 

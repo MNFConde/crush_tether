@@ -112,6 +112,37 @@ pub fn run_check(project: &Path, command: &str) -> CheckRun {
     run_check_with(project, &[], command)
 }
 
+/// 自定义 hook 载荷驱动（M8.6）：`payload` 原样作为 stdin JSON 送入
+/// `hook --agent crush`（PostToolUse 形态、session/tool_use_id 等字段的
+/// 测试用）。环境隔离同 [`run_mode_env`]。
+pub fn run_hook_payload(project: &Path, payload: &str, envs: &[(&str, &str)]) -> CheckRun {
+    let mut child = Command::new(BIN)
+        .args(["hook", "--agent", "crush"])
+        .env("CRUSH_PROJECT_DIR", project)
+        .env("USERPROFILE", project)
+        .env("HOME", project)
+        .env_remove("CRUSH_TETHER_CONFIG")
+        .env_remove("CRUSH_TETHER_GLOBAL_DIR")
+        .envs(envs.iter().copied())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn crush-tether hook");
+    child
+        .stdin
+        .take()
+        .expect("stdin piped")
+        .write_all(payload.as_bytes())
+        .expect("write hook payload");
+    let out = child.wait_with_output().expect("wait process");
+    CheckRun {
+        stdout: String::from_utf8_lossy(&out.stdout).into_owned(),
+        stderr: String::from_utf8_lossy(&out.stderr).into_owned(),
+        code: out.status.code().unwrap_or(-1),
+    }
+}
+
 /// init 子进程驱动（P8/M8.1）：不消费 hook JSON；环境隔离同
 /// [`run_mode_env`]（`CRUSH_TETHER_GLOBAL_DIR` 一并清空，`envs` 可覆盖）。
 /// `extra_args` 附加 CLI 参数（如 `["--user"]`、`["--engine", "lua"]`）。

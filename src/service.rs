@@ -592,12 +592,9 @@ fn rfc3339_utc() -> String {
     format!("{year:04}-{month:02}-{dom:02}T{hh:02}:{mm:02}:{ss:02}Z")
 }
 
-/// 追加一行 JSONL（写入失败静默：日志永不影响裁决路径）。
-fn log_jsonl(project: &Path, value: &serde_json::Value) {
-    if !log_enabled() {
-        return;
-    }
-    let path = project.join(".crush-tether").join("decisions.jsonl");
+/// 追加一行 JSONL 到指定文件（写入失败静默：日志永不影响裁决路径）。
+fn append_jsonl(project: &Path, file: &str, value: &serde_json::Value) {
+    let path = project.join(".crush-tether").join(file);
     if let Ok(mut f) = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
@@ -608,6 +605,53 @@ fn log_jsonl(project: &Path, value: &serde_json::Value) {
         line.push('\n');
         let _ = f.write_all(line.as_bytes());
     }
+}
+
+/// 裁决日志落盘（受 log_enabled 门控）。
+fn log_jsonl(project: &Path, value: &serde_json::Value) {
+    if !log_enabled() {
+        return;
+    }
+    append_jsonl(project, "decisions.jsonl", value);
+}
+
+// ── 执行记录采集（M8.6 权限学习信号面）─────────────────────────────────
+
+/// 采集开关（默认开；`CRUSH_TETHER_LEARN=0|off|false` 关闭）。与裁决日志
+/// 开关（`CRUSH_TETHER_LOG`）解耦：审计面与派生数据分离（D-10）。
+pub fn learn_enabled() -> bool {
+    match std::env::var("CRUSH_TETHER_LEARN") {
+        Ok(v) => !matches!(v.as_str(), "0" | "off" | "false"),
+        Err(_) => true,
+    }
+}
+
+/// 执行记录（PostToolUse 采集；一行一执行）。
+pub struct ExecutionRecord<'a> {
+    /// agent 名（`Agent::slug()`）。
+    pub agent: &'a str,
+    /// 会话 ID（权限学习关联主键之一；载荷未带 = None）。
+    pub session_id: Option<&'a str>,
+    /// 工具调用 ID（关联主键之一）。
+    pub tool_use_id: Option<&'a str>,
+    /// 命令正文（原始词元；归一化在 suggest 消费侧做）。
+    pub command: &'a str,
+    /// 执行成败（`tool_response` 尽力提取；判不出 = None）。
+    pub success: Option<bool>,
+}
+
+/// 执行记录落盘（`executions.jsonl`，独立于 decisions.jsonl——审计面与
+/// 派生数据分离，可独立清理滚动不触碰审计连续性）。写入失败静默。
+pub fn log_execution(project: &Path, rec: ExecutionRecord<'_>) {
+    let v = serde_json::json!({
+        "ts": rfc3339_utc(),
+        "agent": rec.agent,
+        "session_id": rec.session_id,
+        "tool_use_id": rec.tool_use_id,
+        "command": rec.command,
+        "success": rec.success,
+    });
+    append_jsonl(project, "executions.jsonl", &v);
 }
 
 /// 裁决日志的装配上下文（调用方运行形态 + 快照可观测切片）。
