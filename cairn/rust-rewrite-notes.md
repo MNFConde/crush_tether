@@ -1,11 +1,11 @@
 ---
 type: project_topic
 status: active
-summary: guard.py → Rust 重写的实现要点与踩坑：tree-sitter-bash AST 结构差异、路径归一化、管道 sink 判定策略；脚本引擎接入（rhai/mlua）的沙箱与 API 坑。
+summary: guard.py → Rust 重写的实现要点与踩坑：tree-sitter-bash AST 结构差异、路径归一化、管道 sink 判定策略；脚本引擎接入（rhai/mlua）的沙箱与 API 坑；声明式规则函数（M8.6）的 FnPtr 原语与序列化坑。
 tags: [crush_tether, rust, tree-sitter, migration, rhai, mlua]
 contains: [lesson, decision]
 created: 2026-09-04
-updated: 2026-09-11
+updated: 2026-09-12
 related: [doc/design.md, tests/guard_regression.rs]
 authoring_mode: ai_generated
 ---
@@ -41,6 +41,14 @@ authoring_mode: ai_generated
 
 - **教训：`crush-tether check "cmd"` 的裸参数被静默忽略**——check 模式从 stdin 读 agent 载荷（hook 同构），命令行参数不是裁决输入，任何裸命令都 exit 0 无输出（=保守 confirm），极易误读为「引擎裁决通过」。命令行侧的裁决查询口是 `check --batch`（stdin 一行一命令出裁决表）。
 - **坑：`uv run --directory <dir> python` 会把进程 cwd 切到 `<dir>`**——脚本内相对路径（如 `plugin/…`）以仓库根为预期时全部指错，且不报错（FileNotFoundError 才暴露）。跨目录驱动脚本时路径一律绝对化，勿信调用方 cwd。
+
+## 声明式规则函数接入（M8.6，2026-09-12）
+
+- **教训：rhai 1.26 匿名函数的落地原语是 `FnPtr`**——脚本把 `|ctx| {…}` 传进引擎注册函数（`register_fn("rule", |name: &str, p: i64, f: rhai::FnPtr| …)`，`FnPtr` 走 blanket `Variant` 自动成立），`FnPtr` 可 Clone 存储，evaluate 时 `f.call::<Dynamic>(&engine, &ast, (ctx,))` 用实例字段借用调用。rhai 无装饰器语法，「元数据绑定 + 框架组装」的最短路径就是注册器收 FnPtr。
+- **教训：rhai 限流预算按调用次重置**——`call_fn`/`FnPtr::call` 每次新建 global runtime state，`max_operations` 计数归零。声明式规则链 N 次调用 = N×预算（每次自身有界，最坏 128×100k 仍有上界）；Lua 侧 `set_global_hook` 预算跨规则共享（更严侧）——双引擎限流语义不逐位对齐，设计文档已注明。
+- **教训：mlua chunk 顶层执行错误属加载期拒载（`Rejected`）非编译错误**——语法错误在 `into_function` 阶段已暴露，`chunk.call(())` 的失败全是执行期语义（如 rule() 注册边界报错），映射错类别会让「拒载」断言族静默失真。
+- **教训：serde 反序列化 `Option<&'static str>` 字段不可能**——`&str` 反序列化借用输入，凑不出 'static；JSON 行结构体字段用 `String`，还原引擎侧 `&'static str` 枚举值时按已知值映射（kind 仅三个常量，`String→&'static str` 映射安全）。同批：`skip_serializing_if` 写 `Vec::is_empty` 不是 `Vec::new`（前者是判谓词后者是构造器，写错报 "expected bool"）。
+- **教训：设计拍板的安全收敛必须配反向用例**——「default 兜底退整命令粒度」拍板后，第一版实现只拦了 `layer=="script"`，`layer=="default"`/`entry=*.default` 溯源路径仍按条目记便签；测试全绿是因为用例只覆盖「同命令重放」，覆盖不到「同 bin 异参数被误放行」。碰巧通过的测试 ≠ 语义实现：凡是「退回/收敛/降级」类拍板，用例必须包含**本不该被收敛覆盖的变体**（此处 = `frobnicate --deep x` 批后 `frobnicate evil` 必须仍弹窗）。
 
 ## 决策记录
 

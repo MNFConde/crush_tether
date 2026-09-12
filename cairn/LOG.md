@@ -5,7 +5,8 @@ This file records substantive progress in reverse-chronological order — newest
 ## 2026-09-12 Ⅵ · M8.6 会话临时放行 + 脚本声明式规则 + suggest 实现（用户批准计划，硬门禁解除）
 
 - **两轮讨论拍板（用户）**：①会话临时放行为主（优先级 > suggest），便签粒度 = **触发原因**（定位到触发询问的规则条目、多个全记全中才放行），危险类别**不跳**（便签信当下/suggest 守长期）；②脚本声明式 = `rule(名字, 优先级, 函数)` 引擎注入注册器（装饰器等价物），数值优先级小值先 + 同值保注册序，check 双形态长期并存；③纠正「脚本无命名规则概念」——结构上每分支即规则，缺的只是命名通道（更正登记 25）。
-- **实现四提交**：脚本声明式（rule 注册器/加载期顶层执行/`confirm_as` 子名/`script.rule` 激活/默认包四具名规则）→ executions 采集（PostToolUse 恒 0 落盘 + `CRUSH_TETHER_LEARN`）→ 会话放行（SessionCache/post op/降级态 session-cache.jsonl/触发原因粒度含 default 收敛整命令补强）→ suggest（交叉推断 + 建议块零写入 + decisions.jsonl 补 session/tool_use_id）。测试 237 绿；D-10/D-11 入档。
+- **实现四代码提交**：脚本声明式（rule 注册器/加载期顶层执行/`confirm_as` 子名/`script.rule` 激活/默认包四具名规则）→ executions 采集（PostToolUse 恒 0 落盘 + `CRUSH_TETHER_LEARN`）→ 会话放行（SessionCache/post op/降级态 session-cache.jsonl/触发原因粒度含 default 收敛整命令补强）→ suggest（交叉推断 + 建议块零写入 + decisions.jsonl 补 session/tool_use_id）；加文档批与 CI 批共六提交。测试 237 绿；D-10/D-11 入档。
+- **批次收尾**：本机 claude headless 探针被用户全局 title 模型配置挡死（mock 不识别 deepseek → 主链路中止）→ 载荷核对移 CI——agent-matrix 四 job 场景/冒烟 settings 全挂 PostToolUse 探针（`00b878d`），next push 首跑自动抓真实载荷；zcode 抓包随插件更新挂账。全门禁 fmt/clippy/test(237)/audit 绿。
 - **顺手修 M8.1 遗漏**：service_reload/service_serve 三用例缺 run_init 前置（自动生成移除后依赖默认包的测试在 master 已挂，stash 验证确认非本轮引入）。
 - **工具坑**：rhai 匿名函数经 `FnPtr` 类型可被 `register_fn` 接收并 `call(&engine, &ast, args)` 存后调用（evaluate 时用实例字段借用）——存闭包的替代路径；Lua chunk 顶层执行错误语义上属加载期拒载（Rejected）非编译错误。
 - Details: design.md「会话内临时放行」「声明式规则函数」节 + suggest 节改写 + 更正登记 24/25、decisions.md D-10/D-11、ROADMAP P8/M8.6、README 运行模式、test-and-ci.md §5 两条挂账（zcode PostToolUse 探针核对/会话放行交互实弹）。

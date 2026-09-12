@@ -1,7 +1,7 @@
 version: 0.1
 project:
   name: "crush_tether"
-  summary: "Rust 实现的 Crush 命令级 bash 权限门（crush-guard 独立化/重写）：P0–P6 收官 + M7.3 测试收口执行中——分类核心/配置 v1/脚本双引擎/serve 服务化/三 adapter（crush·claude-code·zcode）+ 正式 zcode 插件；测试体系见 doc/test-and-ci.md，结果矩阵见 doc/agent-compat-matrix.md"
+  summary: "Rust 实现的 Crush 命令级 bash 权限门（crush-guard 独立化/重写）：P0–P8 收官——分类核心/配置三层(项目·用户·全局+init 显式生成)/脚本双引擎(声明式 rule 注册器+check 双形态)/serve 服务化/三 adapter+wrapper 守卫插件/会话内临时放行/suggest 权限建议(零写入)；测试体系见 doc/test-and-ci.md，结果矩阵见 doc/agent-compat-matrix.md"
 cairn:
   knowledge_dir: "cairn"
   skill_spec_date: "2026-08-07"
