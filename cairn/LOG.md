@@ -2,6 +2,12 @@
 
 This file records substantive progress in reverse-chronological order — newest entry at the top, right below this line. Keep each entry short — summary and pointer only; conclusions settle into `cairn/<topic>.md`.
 
+## 2026-09-12 Ⅷ · 用户文档批次：README 修正瘦身 + doc/user-guide.md 成档
+
+- **依据四工程设计文档核查 README，修 5 处硬伤**：①开头残留「三层皆缺才生成」旧语义与 D-09（init 显式生成）自相矛盾；②PATH 表述未反映 M8.2 wrapper（zcode 插件轨已改 wrapper 拉起、缺席响亮失败）；③`check` 行注释语义反（应为「无子命令参数时默认 check」）；④会话放行示例「批 `git push origin x` 后 `git push y` 免问」违反自家 deny 终审——`git push` 在默认包 deny 桶，永不弹窗放行；⑤zcode 插件节仍是 0.1.0 裸命令名流程。
+- **新增 doc/user-guide.md**（十二章用户操作手册：简介/安装/快速开始/配置/agent 接入/CLI/环境变量/日志/会话放行与 suggest/安全模型/FAQ/文档地图），README 瘦身为门面（配置与 CLI 细节移交 + 指针）；doc/AGENTS.md 补用户手册例外条款（how-to 允许展开，机制/schema 细则仍单源 design.md 回指）。
+- **教训**：面向用户的示例命令先 `explain` 对账默认包裁决画像再入文档，防「文档教的命令自家门就拦」；文档快照核查（对照单一事实源逐节扫）能捞到跨里程碑积累的陈述漂移——README 硬伤全是 M8.1/M8.2/M8.6 行为变更后未回扫 README 所致。
+
 ## 2026-09-12 Ⅶ · CI 首跑红灯归因与修复（M8.1–M8.6 批量推送暴露）
 
 - **事件**：M8.6 收官推送（含积压的 M8.1–M8.4 共 11 提交）触发两 workflow 首跑，CI 2 job + agent-matrix 5 job 全红；归因四类（详见 [agent-hook-testing.md](agent-hook-testing.md)「CI 首跑红灯归因」节）：①M8.1 拆自动生成 → alias 链老测试与 zcode 冒烟断言的隐形拐杖断裂（测试本身另有 env_remove 抵消 env 的假绿缺陷）；②workflow heredoc PostToolUse 块重复插入+丢逗号 → JSON 非法（claude 报 Not logged in / crush 拒载配置）；③crush windows 的 wrapper 守卫检查排在引擎安装前；④cargo test fail-fast 掩盖失败清单。
