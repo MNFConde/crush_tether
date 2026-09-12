@@ -24,7 +24,7 @@ jobs:
       - name: clippy
         run: cargo clippy -- -D warnings
       - name: test
-        run: cargo test
+        run: cargo test --no-fail-fast
       - uses: astral-sh/setup-uv@v6
       - name: check-links
         run: uv run python script/check-links.py
@@ -47,4 +47,4 @@ jobs:
       - uses: actions-rust-lang/setup-rust-toolchain@v1
       - uses: Swatinem/rust-cache@v2
       - name: test
-        run: cargo test
+        run: cargo test --no-fail-fast

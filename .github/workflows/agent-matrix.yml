@@ -91,6 +91,10 @@ jobs:
       - name: Install engine (crush-tether) to PATH
         run: cargo install --path . --locked
 
+      # M8.1 起「三层皆缺」不再自动生成，兜底 confirm 会让正向断言拿不到 allow
+      - name: Provision engine config (init)
+        run: crush-tether init
+
       - name: Wrapper guard unit check (sh, M8.2)
         run: |
           cd plugin/crush-tether/bin
@@ -130,12 +134,6 @@ jobs:
                   "hooks": [{ "type": "command",
                     "command": "python3 $PWD/script/hook_probe.py bash --agent claudecode --source ci --probe-dir $PWD/.hook-probe",
                     "timeout": 30 }] }
-              ]
-              "PostToolUse": [
-                { "matcher": "Bash|PowerShell",
-                  "hooks": [{ "type": "command",
-                    "command": "python3 $PWD/script/hook_probe.py post --agent claudecode --source ci --probe-dir $PWD/.hook-probe",
-                    "timeout": 30 }] }
               ],
               "PostToolUse": [
                 { "matcher": "Bash|PowerShell",
@@ -146,6 +144,7 @@ jobs:
             }
           }
           EOF
+          python3 -m json.tool ci-settings.json > /dev/null
 
       - name: Headless run (mock-driven turn)
         run: |
@@ -247,6 +246,10 @@ jobs:
       - name: Install engine (crush-tether) to PATH
         run: cargo install --path . --locked
 
+      # M8.1 起「三层皆缺」不再自动生成，兜底 confirm 会让正向断言拿不到 allow
+      - name: Provision engine config (init)
+        run: crush-tether init
+
       - name: Start mock LLM backend
         run: |
           python3 script/mock_llm.py --log "$PWD/mock-requests.jsonl" &
@@ -275,7 +278,7 @@ jobs:
                 { "name": "hook-probe",
                   "command": "python3 $PWD/script/hook_probe.py bash --agent crush --source ci --probe-dir $PWD/.hook-probe",
                   "timeout": 30 }
-              ]
+              ],
               "PostToolUse": [
                 { "name": "hook-probe-post",
                   "command": "python3 $PWD/script/hook_probe.py post --agent crush --source ci --probe-dir $PWD/.hook-probe",
@@ -284,6 +287,7 @@ jobs:
             }
           }
           EOF
+          python3 -m json.tool crush.json > /dev/null
 
       - name: Headless run (mock-driven turn)
         run: crush run -m mockspike/mock-model "agent-matrix smoke"
@@ -377,6 +381,10 @@ jobs:
       - name: Install engine (crush-tether) to PATH
         run: cargo install --path . --locked
 
+      # M8.1 起「三层皆缺」不再自动生成，兜底 confirm 会让正向断言拿不到 allow
+      - name: Provision engine config (init)
+        run: crush-tether init
+
       - name: Start mock LLM backend
         run: |
           python script/mock_llm.py --log mock-requests.jsonl &
@@ -404,12 +412,6 @@ jobs:
                   "hooks": [{ "type": "command",
                     "command": "python ${ws}/script/hook_probe.py bash --agent claudecode --source ci --probe-dir ${ws}/.hook-probe",
                     "timeout": 30 }] }
-              ]
-              "PostToolUse": [
-                { "matcher": "Bash|PowerShell",
-                  "hooks": [{ "type": "command",
-                    "command": "python ${ws}/script/hook_probe.py post --agent claudecode --source ci --probe-dir ${ws}/.hook-probe",
-                    "timeout": 30 }] }
               ],
               "PostToolUse": [
                 { "matcher": "Bash|PowerShell",
@@ -420,6 +422,7 @@ jobs:
             }
           }
           EOF
+          python -m json.tool ci-settings.json > /dev/null
 
       - name: Headless run (mock-driven turn)
         run: |
@@ -526,6 +529,14 @@ jobs:
       - name: Check crush on PATH
         run: crush --version
 
+      # 引擎必须先于 wrapper 守卫检查安装：M8.2 的 wrapper 设计即「缺席响亮失败」
+      - name: Install engine (crush-tether) to PATH
+        run: cargo install --path . --locked
+
+      # M8.1 起「三层皆缺」不再自动生成，兜底 confirm 会让正向断言拿不到 allow
+      - name: Provision engine config (init)
+        run: crush-tether init
+
       - name: Wrapper guard unit check (cmd, M8.2)
         run: |
           cd plugin/crush-tether/bin
@@ -538,9 +549,6 @@ jobs:
           set -e
           test "$code" -eq 2
           echo "$out" | grep -q "binary not found"
-
-      - name: Install engine (crush-tether) to PATH
-        run: cargo install --path . --locked
 
       - name: Start mock LLM backend
         run: |
@@ -571,7 +579,7 @@ jobs:
                 { "name": "hook-probe",
                   "command": "python ${ws}/script/hook_probe.py bash --agent crush --source ci --probe-dir ${ws}/.hook-probe",
                   "timeout": 30 }
-              ]
+              ],
               "PostToolUse": [
                 { "name": "hook-probe-post",
                   "command": "python ${ws}/script/hook_probe.py post --agent crush --source ci --probe-dir ${ws}/.hook-probe",
@@ -580,6 +588,7 @@ jobs:
             }
           }
           EOF
+          python -m json.tool crush.json > /dev/null
 
       - name: Headless run (mock-driven turn)
         run: crush run -m mockspike/mock-model "agent-matrix smoke"
@@ -688,6 +697,11 @@ jobs:
 
       - name: Install engine (crush-tether) to PATH
         run: cargo install --path . --locked
+
+      # M8.1 起「三层皆缺」不再自动生成，兜底 confirm 会让正向断言拿不到 allow；
+      # 插件轨 hook 以工作区为 cwd，init 落在工作区根
+      - name: Provision engine config (init)
+        run: crush-tether init
 
       - name: Provision crush-tether plugin (unattended, plugin track)
         run: |
