@@ -109,9 +109,16 @@ case "$mode" in
         grep -q 'rewritten-marker' "$exec_file" || { echo "ASSERT FAIL [rewrite]: ci-exec.txt lacks rewritten-marker (original command ran?)"; exit 1; }
         echo "ASSERT OK [rewrite]: rewritten command executed" ;;
       ask)
-        # 2026-09-12 定性:无头无宿主应答,三 agent 对 ask/confirm 均收场为拒绝
-        [ ! -f "$exec_file" ] || { echo "ASSERT FAIL [ask]: expected headless denial, but tool ran ($exec_file exists)"; exit 1; }
-        echo "ASSERT OK [ask]: headless ask resolves as denial (matches 2026-09-12 characterization)" ;;
+        # 2026-09-12 定性:无头无宿主应答,收场按 agent 分化——claude/zcode=拒绝,
+        # crush=放行(run 原生权限自动接受;CI 双平台复证 2026-09-12,原断言
+        # 未按 agent 分支而误期 crush 拒绝)
+        if [ "$agent" = "crush" ]; then
+          [ -f "$exec_file" ] || { echo "ASSERT FAIL [ask]: crush headless ask auto-accepts via native permission, expected tool ran"; exit 1; }
+          echo "ASSERT OK [ask]: crush headless ask auto-accepted via native permission, tool ran"
+        else
+          [ ! -f "$exec_file" ] || { echo "ASSERT FAIL [ask]: expected headless denial, but tool ran ($exec_file exists)"; exit 1; }
+          echo "ASSERT OK [ask]: headless ask resolves as denial (claude 2026-09-12 / zcode 2026-09-11)"
+        fi ;;
       timeout)
         # 形态分化(2026-09-12 实测):claude 无头超时=拒绝/交互放行(2026-09-09);
         # crush 无头超时=放行(34s 复证 2026-09-09 33s);zcode 未定性不入环
