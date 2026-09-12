@@ -2,6 +2,14 @@
 
 This file records substantive progress in reverse-chronological order — newest entry at the top, right below this line. Keep each entry short — summary and pointer only; conclusions settle into `cairn/<topic>.md`.
 
+## 2026-09-12 Ⅱ · M8.2 wrapper 插件一期落地（失效模式 #2 结构性对冲）
+
+- **spike 定论（bundle 源码级）**：zcode 对 hook `command` 做 `${ZCODE_PLUGIN_ROOT}`/`${ZCODE_PLUGIN_ROOT}` 模板变量展开、展开先于引号转义（`zcode.cjs` 插桩核对 + 官方 hookify 插件同款依赖佐证）——wrapper 可置于插件 `bin/`、以插件根绝对路径拉起，不依赖 PATH，绕开「插件目录是否上 PATH」的未知数。
+- **落地**：`plugin/crush-tether/bin/` wrapper.cmd + wrapper.sh（保持哑：转发/缺席 exit 2+指引）、hooks.json 改指模板路径、插件 0.2.0；本机双路径实测（在场 exit 0 / deny exit 2 透传 / 缺席 exit 2+指引全对）。
+- **平台坑（新登记）**：批处理文件必须纯 ASCII——cmd.exe 按 OEM 代码页解析 batch，UTF-8 中文注释被啃成乱码杂命令执行；wrapper.cmd 全 ASCII 化后修复。
+- **挂账**：CI 三 job 验证待 push 首跑（claude-ubuntu 测 sh / crush-win 测 cmd / zcode-win 插件装配端到端）；本机 zcode 0.2.0 实弹随用户下次插件重装（现网 0.1.0 行为不变）；Linux .sh 接线随 zcode ubuntu job。
+- Details: design.md「插件分发形态与装载守卫」wrapper 落地条、ROADMAP P8/M8.2、test-and-ci.md §5。
+
 ## 2026-09-12 · P8 批次开工：M8.1 全局层配置链落地 + init 显式生成取代自动生成
 
 - **P8 登记**：ROADMAP 新批次 P8（M8.1 全局层/M8.2 wrapper/M8.3 旗标预研/M8.4 无头场景批/M8.5 权限学习设计），用户拍板记录在案；M8.5 带硬门禁（设计后停下讨论，实现须另行授权）。

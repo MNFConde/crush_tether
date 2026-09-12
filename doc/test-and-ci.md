@@ -120,7 +120,8 @@ mock LLM 后端驱动 agent 完成一轮固定 tool_use(命令可配,`--cmd`),�
 | crush 原生确认/计划模式 × hook 交叉 | 模式×hook | 人工交互 | [矩阵 §1.3](agent-compat-matrix.md#13-原生模式-hook-交叉按-agent) | yolo 语义已有源码级核对,模式交叉未实测 |
 | zcode headless 全轴:ask 无头收场、超时、模式交叉在 headless 形态下的表现 | 协议+agent 行为 | 探针实验 | CI 场景组(第二批)+ [矩阵 §1.2](agent-compat-matrix.md) | 三档 deny/fail-open/rewrite 已由场景组覆盖(2026-09-11);ask 无头收场三 agent 均未定性,超时含 windows 进程清理观察 |
 | 无头模式旗标预研(claude `--permission-mode` / zcode `-p` 模式参数是否存在及形态) | 模式×hook | 人工交互 | [矩阵 §1.3](agent-compat-matrix.md#13-原生模式-hook-交叉按-agent) | 纯探测,第三批场景化的前提 |
-| zcode ubuntu job | agent 行为 | 串联冒烟 | workflow | Linux 版内测中,公测后补(发行渠道落地即可平移 windows job 配方) |
+| zcode ubuntu job | agent 行为 | 串联冒烟 | workflow | Linux 版内测中,公测后补(发行渠道落地即可平移 windows job 配方);同批换接 wrapper .sh(hooks.json 现指 .cmd,M8.2) |
+| wrapper 本机 zcode 0.2.0 实弹 | agent 行为 | 插件重装+headless | [矩阵 §1.2](agent-compat-matrix.md) | 0.2.0 wrapper 已落地(M8.2,CI 三 job 覆盖),本机 cache 拷贝须重装生效,现网 0.1.0 行为不变;随用户下次插件重装一并验 |
 | zcode cron latest 哨兵的首个自动触发尚待观察 | 协议 | 串联冒烟 | [矩阵 §1.1/§2](agent-compat-matrix.md) | 每周一 UTC |
 
 ## 6. 探针与工具设计

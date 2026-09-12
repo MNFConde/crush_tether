@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "process",
-            "command": "crush-tether",
+            "command": "${ZCODE_PLUGIN_ROOT}/bin/crush-tether-wrapper.cmd",
             "args": ["hook", "--agent", "zcode"],
             "timeoutMs": 8000
           }

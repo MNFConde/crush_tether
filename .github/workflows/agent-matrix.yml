@@ -91,6 +91,19 @@ jobs:
       - name: Install engine (crush-tether) to PATH
         run: cargo install --path . --locked
 
+      - name: Wrapper guard unit check (sh, M8.2)
+        run: |
+          cd plugin/crush-tether/bin
+          # present: forward (check mode, empty stdin -> silent exit 0)
+          ./crush-tether-wrapper.sh </dev/null
+          # absent: empty PATH -> exit 2 + guidance (failure mode #2 loud failure)
+          set +e
+          out=$(env PATH="" ./crush-tether-wrapper.sh </dev/null 2>&1)
+          code=$?
+          set -e
+          test "$code" -eq 2
+          echo "$out" | grep -q "binary not found"
+
       - name: Start mock LLM backend
         run: |
           python3 script/mock_llm.py --log "$PWD/mock-requests.jsonl" &
@@ -478,6 +491,19 @@ jobs:
 
       - name: Check crush on PATH
         run: crush --version
+
+      - name: Wrapper guard unit check (cmd, M8.2)
+        run: |
+          cd plugin/crush-tether/bin
+          # present: forward (check mode, empty stdin -> silent exit 0)
+          cmd //c crush-tether-wrapper.cmd </dev/null
+          # absent: PATH without cargo bin -> exit 2 + guidance (failure mode #2)
+          set +e
+          out=$(PATH="/c/Windows/System32:/c/Windows" cmd //c crush-tether-wrapper.cmd </dev/null 2>&1)
+          code=$?
+          set -e
+          test "$code" -eq 2
+          echo "$out" | grep -q "binary not found"
 
       - name: Install engine (crush-tether) to PATH
         run: cargo install --path . --locked
