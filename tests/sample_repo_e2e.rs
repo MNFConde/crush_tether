@@ -3,14 +3,16 @@
 
 mod common;
 
-use common::{TempDir, run_check, run_check_env};
+use common::{TempDir, run_check, run_check_env, run_init};
 
-/// 三个「可改回」项按草案推荐值在默认包（引导生成）下生效展示：
+/// 三个「可改回」项按草案推荐值在默认包（init 生成）下生效展示：
 /// `go run` 落 confirm、`git reset` 取 confirm 档（--hard 升 deny）、
 /// `-h` 保留 confirm.flag（更正登记 5）。
 #[test]
 fn default_package_recommended_values_in_effect() {
-    let proj = TempDir::new("m27-defaults"); // 空仓库 → 首跑引导默认包
+    let proj = TempDir::new("m27-defaults"); // init 显式生成默认包（P8/M8.1）
+    let r = run_init(proj.path(), &[], &[]);
+    assert_eq!(r.code, 0, "{}", r.stderr);
     let cases: [(&str, i32, &str); 7] = [
         ("git status", 0, "{\"decision\":\"allow\"}"),
         // -h 保留 confirm.flag：status 命中 allow.sub，-h 命中 confirm.flag → 合成 confirm

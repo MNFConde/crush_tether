@@ -74,6 +74,7 @@ pub fn run_mode_env(
         .env("USERPROFILE", project)
         .env("HOME", project)
         .env_remove("CRUSH_TETHER_CONFIG")
+        .env_remove("CRUSH_TETHER_GLOBAL_DIR")
         .envs(envs.iter().copied())
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -109,6 +110,32 @@ pub fn run_mode_env(
 /// 无附加参数的便捷形态。
 pub fn run_check(project: &Path, command: &str) -> CheckRun {
     run_check_with(project, &[], command)
+}
+
+/// init 子进程驱动（P8/M8.1）：不消费 hook JSON；环境隔离同
+/// [`run_mode_env`]（`CRUSH_TETHER_GLOBAL_DIR` 一并清空，`envs` 可覆盖）。
+/// `extra_args` 附加 CLI 参数（如 `["--user"]`、`["--engine", "lua"]`）。
+pub fn run_init(project: &Path, extra_args: &[&str], envs: &[(&str, &str)]) -> CheckRun {
+    let child = Command::new(BIN)
+        .arg("init")
+        .args(extra_args)
+        .env("CRUSH_PROJECT_DIR", project)
+        .env("USERPROFILE", project)
+        .env("HOME", project)
+        .env_remove("CRUSH_TETHER_CONFIG")
+        .env_remove("CRUSH_TETHER_GLOBAL_DIR")
+        .envs(envs.iter().copied())
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap_or_else(|e| panic!("spawn crush-tether init: {e}"));
+    let out = child.wait_with_output().expect("wait process");
+    CheckRun {
+        stdout: String::from_utf8_lossy(&out.stdout).into_owned(),
+        stderr: String::from_utf8_lossy(&out.stderr).into_owned(),
+        code: out.status.code().unwrap_or(-1),
+    }
 }
 
 /// 保证 serve 子进程在所有路径上被回收（clippy zombie-process）。

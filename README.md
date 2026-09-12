@@ -27,15 +27,16 @@ cargo install --path .  # 开发测试推荐：装入 cargo bin（已在 PATH）
 |---|---|
 | 项目层 | `<项目根>/.crush-tether/` |
 | 用户层 | `~/.config/crush-tether/` |
+| 全局层 | Unix `/etc/crush-tether/`；Windows `%PROGRAMDATA%\crush-tether\`（`CRUSH_TETHER_GLOBAL_DIR` 可覆盖） |
 | 显式覆盖 | `--config <path>` 或 `CRUSH_TETHER_CONFIG`（单文件顶替项目层） |
 
-首次运行且三层皆缺有效配置时，在项目 `.crush-tether/` 生成默认包：
+配置**不自动生成**。`crush-tether init` 显式生成默认包（缺省项目层；`--user`/`--global` 切目标层；`--engine lua` 生成 `rules.lua`）：
 
 - `rules.toml` —— 声明层：`[local]`/`[global]` 双表 + 每命令 allow/confirm/deny 三桶查表（数组 = 覆盖，inline table `add`/`remove` = 增删；跨层字段级继承合并）。
 - `rules.rhai` 或 `rules.lua` —— 脚本层：声明层表达不了的条件判断（两态子命令、`find` 突变参数、`curl|sh` 参数内管道、管道 sink、写特征升级）。脚本只上调、不放行——返回 allow 即契约违约。
 - `knowledge.toml` —— 命令知识库：别名归一、写词元/写参数计数等数据源。
 
-规则文件**损坏 ≠ 缺失**：解析失败 → 告警 + fail-safe confirm、原文件不动、不覆盖重生成。lint 只告警不拒绝加载。格式细则见 design.md「配置格式与脚本边界（定稿）」。
+规则文件**损坏 ≠ 缺失**：解析失败 → 告警 + fail-safe confirm、原文件不动、不覆盖重生成。三层皆缺时引擎按裸兜底运行（未匹配一律 confirm）并提示先跑 init。lint 只告警不拒绝加载。格式细则见 design.md「配置格式与脚本边界（定稿）」。
 
 **默认包裁决画像**（以生成的 `rules.toml` 为准，可自行挪档）：读类命令与项目内安全写（`git add`/`commit`、`touch`/`mkdir`、`cargo build`/`test`、`npm run` 等）放行；写重定向、写 flag、包管理器安装、`rm`/`curl`/`wget` 等确认；`sudo`/`mkfs`/`git push`/`reset --hard` 等阻断；**未匹配命令一律确认兜底**（`node -e`、`go run` 等任意代码执行刻意不入 allow 表）。改完即热重载生效，无需重启。
 
@@ -48,6 +49,7 @@ crush-tether check    # 无参数时也走 check（冒烟/测试用）
 crush-tether benchmark
 crush-tether explain '<command>'   # 单发全溯源报告（M7.1 调试）
 crush-tether repl                  # 规则调试器：改规则即测（M7.1）
+crush-tether init [--user|--global]  # 显式生成默认配置包（缺省项目层）
 ```
 
 - **hook**（agent 接入的主路径）：connect-or-spawn——尝试连接项目 serve 端点；无实例则 detached 拉起 serve 并有界等就绪；仍失败则本进程跑全量管线，绝不无裁决放行。

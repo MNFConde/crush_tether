@@ -3,7 +3,7 @@
 
 mod common;
 
-use common::{TempDir, run_check, run_check_with};
+use common::{TempDir, run_check, run_check_with, run_init};
 
 fn project_with_script(tag: &str, rules: &str, script: Option<&str>) -> TempDir {
     let proj = TempDir::new(tag);
@@ -108,17 +108,15 @@ fn unsupported_engine_fails_safe() {
 
 #[test]
 fn default_package_four_predicates_end_to_end() {
-    // 空仓库首跑引导完整默认包（rules.toml + knowledge.toml + rules.rhai），
-    // 四类谓词经真实二进制生效。
+    // init 生成完整默认包（rules.toml + knowledge.toml + rules.rhai；
+    // P8/M8.1：init 是唯一生成路径），四类谓词经真实二进制生效。
     let proj = TempDir::new("m32-predicates");
     let dir = proj.path().join(".crush-tether");
+    let r = run_init(proj.path(), &[], &[]);
+    assert_eq!(r.code, 0, "{}", r.stderr);
     assert!(
-        dir.join("rules.rhai").is_file() || {
-            // 首跑引导（生成完整默认包）
-            let _ = run_check(proj.path(), "ls");
-            dir.join("rules.rhai").is_file()
-        },
-        "引导包必须包含 rules.rhai"
+        dir.join("rules.rhai").is_file(),
+        "init 包必须包含 rules.rhai"
     );
 
     // 1) 两态子命令（数据读知识库）：git config 双位置参数 / branch 写词元
@@ -168,10 +166,11 @@ fn default_package_four_predicates_end_to_end() {
 
 #[test]
 fn knowledge_deleted_two_state_falls_to_confirm() {
-    // 引导后删除 knowledge.toml：脚本查不到数据 → 有子命令的 allow 落
+    // init 后删除 knowledge.toml：脚本查不到数据 → 有子命令的 allow 落
     // confirm 兜底（查表层不受影响，literal 词条照常命中）。
     let proj = TempDir::new("m32-kb-deleted");
-    let _ = run_check(proj.path(), "ls"); // 引导
+    let r = run_init(proj.path(), &[], &[]); // init（P8/M8.1）
+    assert_eq!(r.code, 0, "{}", r.stderr);
     std::fs::remove_file(proj.path().join(".crush-tether").join("knowledge.toml")).unwrap();
 
     let r = run_check(proj.path(), "git branch -d x");

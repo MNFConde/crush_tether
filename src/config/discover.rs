@@ -4,7 +4,9 @@
 //!   `CRUSH_PROJECT_DIR` 优先，缺失时从 cwd 逐级上溯找最近 `.git` 或
 //!   `.crush-tether/`（design.md「配置分层与优先级」）。
 //! - 用户层：`~/.config/crush-tether/rules.toml`。
-//! - 全局层：v1 不设发现路径（合并逻辑与单测就位，路径后期设计）。
+//! - 全局层：`/etc/crush-tether/rules.toml`（Unix）或
+//!   `%PROGRAMDATA%\crush-tether\rules.toml`（Windows）；环境变量
+//!   `CRUSH_TETHER_GLOBAL_DIR` 优先（测试/便携覆盖，P8/M8.1 定稿 D-09）。
 //!
 //! 损坏 ≠ 缺失（D-03）：任一层「存在但加载/解析失败」→ 整体 Err，调用方
 //! 告警 + fail-safe confirm；绝不带着坏层静默用其余层裁决。
@@ -18,30 +20,48 @@ use crate::knowledge::KnowledgeBase;
 /// 发现到的三层配置（`None` = 该层无配置文件）。
 #[derive(Debug)]
 pub struct FoundLayers {
-    /// v1 恒 None（无发现路径），为后期设计留位。
+    /// 全局层规则（系统路径或 `CRUSH_TETHER_GLOBAL_DIR`，见 [`global_dir`]）。
     pub global: Option<RulesFile>,
     /// 用户层规则（`~/.config/crush-tether/rules.toml`）。
     pub user: Option<RulesFile>,
     /// 项目层规则（`<project>/.crush-tether/rules.toml`）。
     pub project: Option<RulesFile>,
-    /// 知识库 main：项目层 `.crush-tether/knowledge.toml`（v1 单文件，随默认
-    /// 配置生成落盘）。`Arc` 共享：RuleSet 装配的多处消费免深克隆。
+    /// 知识库 main：项目层 `.crush-tether/knowledge.toml`（v1 单文件，随 init
+    /// 默认包落盘）。`Arc` 共享：RuleSet 装配的多处消费免深克隆。
     pub knowledge: Option<Arc<KnowledgeBase>>,
 }
 
-impl FoundLayers {
-    /// 是否三层皆缺（默认配置生成的触发条件，M2.6 消费）。
-    pub fn all_absent(&self) -> bool {
-        self.global.is_none() && self.user.is_none() && self.project.is_none()
+/// 全局层配置目录（P8/M8.1 定稿）：`CRUSH_TETHER_GLOBAL_DIR` 优先（测试/
+/// 便携覆盖），否则系统路径——Unix `/etc/crush-tether`，Windows
+/// `%PROGRAMDATA%\crush-tether`；平台变量缺失 → None（该层跳过）。
+pub fn global_dir() -> Option<PathBuf> {
+    if let Some(d) = std::env::var_os("CRUSH_TETHER_GLOBAL_DIR")
+        && !d.is_empty()
+    {
+        return Some(PathBuf::from(d));
+    }
+    #[cfg(windows)]
+    {
+        std::env::var_os("PROGRAMDATA").map(|d| PathBuf::from(d).join("crush-tether"))
+    }
+    #[cfg(not(windows))]
+    {
+        Some(PathBuf::from("/etc/crush-tether"))
     }
 }
 
-/// 逐层发现并加载。`project_root` / `home` 显式传入以便测试（调用方经
-/// [`find_project_root`] / [`home_dir`] 解析；None = 跳过该层）。
+/// 逐层发现并加载。`project_root` / `home` / `global` 显式传入以便测试
+/// （调用方经 [`find_project_root`] / [`home_dir`] / [`global_dir`] 解析；
+/// None = 跳过该层）。
 pub fn discover_layers(
     project_root: Option<&Path>,
     home: Option<&Path>,
+    global: Option<&Path>,
 ) -> Result<FoundLayers, LoadError> {
+    let global = match global {
+        Some(g) => load_optional(&g.join("rules.toml"))?,
+        None => None,
+    };
     let user = match home {
         Some(h) => load_optional(&h.join(".config").join("crush-tether").join("rules.toml"))?,
         None => None,
@@ -55,7 +75,7 @@ pub fn discover_layers(
         None => None,
     };
     Ok(FoundLayers {
-        global: None,
+        global,
         user,
         project,
         knowledge,
@@ -190,31 +210,43 @@ mod tests {
         )
         .unwrap();
 
-        let found = discover_layers(Some(proj.path()), Some(home.path())).unwrap();
-        assert!(found.global.is_none(), "v1 全局层无发现路径");
+        let found = discover_layers(Some(proj.path()), Some(home.path()), None).unwrap();
+        assert!(found.global.is_none(), "未传全局目录则该层跳过");
         assert_eq!(found.user.as_ref().unwrap().default, Some(Decision::Deny));
         let proj_file = found.project.as_ref().unwrap();
         match &proj_file.local.buckets.allow {
             Some(ListField::Set(v)) => assert!(v.contains(&"ls".to_string())),
             other => panic!("project allow should be a Set, got {other:?}"),
         }
-        assert!(!found.all_absent());
     }
 
     #[test]
-    fn discover_layers_all_absent_when_no_files() {
+    fn discover_layers_reads_global_layer() {
+        // P8/M8.1：全局层发现路径定稿（D-09）。
+        let sys = TempDir::new("m81", "sys");
+        std::fs::write(
+            sys.path().join("rules.toml"),
+            "version = 1\ndefault = \"deny\"",
+        )
+        .unwrap();
+        let found = discover_layers(None, None, Some(sys.path())).unwrap();
+        assert_eq!(found.global.as_ref().unwrap().default, Some(Decision::Deny));
+    }
+
+    #[test]
+    fn discover_layers_all_none_when_no_files() {
         let home = TempDir::new("m22", "home-empty");
         let proj = TempDir::new("m22", "proj-empty");
-        let found = discover_layers(Some(proj.path()), Some(home.path())).unwrap();
-        assert!(found.all_absent());
+        let found = discover_layers(Some(proj.path()), Some(home.path()), None).unwrap();
+        assert!(found.global.is_none() && found.user.is_none() && found.project.is_none());
     }
 
     #[test]
     fn discover_layers_skips_layer_without_home() {
         let proj = TempDir::new("m22", "proj-nohome");
-        let found = discover_layers(Some(proj.path()), None).unwrap();
+        let found = discover_layers(Some(proj.path()), None, None).unwrap();
         assert!(found.user.is_none());
-        assert!(found.all_absent());
+        assert!(found.project.is_none() && found.global.is_none());
     }
 
     #[test]
@@ -225,6 +257,14 @@ mod tests {
         std::fs::create_dir_all(&proj_cfg).unwrap();
         std::fs::write(proj_cfg.join("rules.toml"), "version = 1\nalow = []").unwrap();
 
-        assert!(discover_layers(Some(proj.path()), None).is_err());
+        assert!(discover_layers(Some(proj.path()), None, None).is_err());
+    }
+
+    #[test]
+    fn discover_layers_broken_global_is_error_not_absence() {
+        // 全局层同受 D-03 约束：坏全局层 → 整体 Err，不带坏层静默裁决。
+        let sys = TempDir::new("m81", "sys-broken");
+        std::fs::write(sys.path().join("rules.toml"), "version = 1\nalow = []").unwrap();
+        assert!(discover_layers(None, None, Some(sys.path())).is_err());
     }
 }

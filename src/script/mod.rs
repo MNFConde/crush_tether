@@ -642,14 +642,16 @@ impl ScriptChain {
     }
 }
 
-/// 加载脚本层链：用户层 `~/.config/crush-tether/<script_file>` 先、项目层
-/// `.crush-tether/<script_file>` 后（缺失 = 跳过该层；两层皆缺 = None，
-/// TOML 自足）。脚本文件名由引擎决定（`rules.rhai` / `rules.lua`）。本引擎
-/// 脚本缺失但该层存在他引擎脚本 → stderr 告警（防静默丢失脚本层——引擎
-/// 切换后忘建对应文件时裁决面缩水）。任一层损坏（含 script_allow 对账
-/// 拒载）→ `Err` → fail-safe confirm。
+/// 加载脚本层链：全局层（系统路径，P8/M8.1）先、用户层
+/// `~/.config/crush-tether/<script_file>` 次之、项目层
+/// `.crush-tether/<script_file>` 最后（缺失 = 跳过该层；三层皆缺 = None，
+/// TOML 自足）。项目脚本最后执行，可作最终裁决。脚本文件名由引擎决定
+/// （`rules.rhai` / `rules.lua`）。本引擎脚本缺失但该层存在他引擎脚本 →
+/// stderr 告警（防静默丢失脚本层——引擎切换后忘建对应文件时裁决面缩水）。
+/// 任一层损坏（含 script_allow 对账拒载）→ `Err` → fail-safe confirm。
 pub fn load_script_chain(
     project: &Path,
+    global: Option<&Path>,
     home: Option<&Path>,
     kb: Option<Arc<KnowledgeBase>>,
     decls: ScriptAllowDecls,
@@ -662,6 +664,9 @@ pub fn load_script_chain(
     };
     let mut engines = Vec::new();
     let mut layers: Vec<(&'static str, Option<PathBuf>)> = Vec::new();
+    if let Some(g) = global {
+        layers.push(("global", Some(g.to_path_buf())));
+    }
     if let Some(h) = home {
         layers.push(("user", Some(h.join(".config").join("crush-tether"))));
     }
@@ -944,13 +949,14 @@ mod tests {
     fn missing_script_file_is_none_not_error() {
         let r = load_script_chain(
             Path::new("D:/code/tmp/definitely-absent"),
+            None,
             Some(Path::new("D:/code/tmp/definitely-absent")),
             None,
             ScriptAllowDecls::default(),
             "rhai",
         )
         .unwrap();
-        assert!(r.is_none(), "TOML 自足：两层脚本皆缺失不是错误");
+        assert!(r.is_none(), "TOML 自足：三层脚本皆缺失不是错误");
     }
 
     #[test]

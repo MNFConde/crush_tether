@@ -2,6 +2,13 @@
 
 This file records substantive progress in reverse-chronological order — newest entry at the top, right below this line. Keep each entry short — summary and pointer only; conclusions settle into `cairn/<topic>.md`.
 
+## 2026-09-12 · P8 批次开工：M8.1 全局层配置链落地 + init 显式生成取代自动生成
+
+- **P8 登记**：ROADMAP 新批次 P8（M8.1 全局层/M8.2 wrapper/M8.3 旗标预研/M8.4 无头场景批/M8.5 权限学习设计），用户拍板记录在案；M8.5 带硬门禁（设计后停下讨论，实现须另行授权）。
+- **M8.1 定稿与落地（用户逐项拍板）**：全局层路径 = Unix `/etc/crush-tether`、Windows `%PROGRAMDATA%\crush-tether`、`CRUSH_TETHER_GLOBAL_DIR` 覆盖；**移除 M2.6 引导自动生成**（更正登记 23 + D-09）——init 子命令（缺省项目层/`--user`/`--global`）成为配置创建唯一路径，三层皆缺 → 裸兜底 confirm + stderr 提示；脚本链同构扩展 global → user → project；D-07 词表 global 达成可达（explain 实证 `global.default` 命中）。
+- **测试迁移**：seed_defaults 重写为 init 驱动 + 三层效力端到端（全局 deny → 用户 allow 覆盖 → 项目 deny 再覆盖）；依赖自动引导的 e2e（sample_repo/script_engine×2/script_lua）改 init 先行；common 助手增 run_init 与 `CRUSH_TETHER_GLOBAL_DIR` 隔离（防宿主环境污染）。四道门禁全绿（130+ 测试）。
+- Details: `doc/design.md`（分层节/零内置策略节/更正登记 23）、`doc/decisions.md` D-09、README 配置节、ROADMAP P8。
+
 ## 2026-09-11 Ⅱ · Cairn audit + 沉淀补账（知识层安全网例行检查）
 
 - **audit 发现并当场沉淀**:① agent-hook-testing.md 补 2026-09-11 定性(fail-open 形态分化 + 机制理解[兜底类语义才会分化]/zcode spawn 精简 env + spawn 可达性二分排障法/无头 confirm 保守拒/增量装配教训),新增教训母题二「交互如此≠无头如此」(能力×形态双维,与四更同构);② plugin-distribution-analysis.md 补无人值守装配两种形态(CI 清空重建 vs user 增量)+ spawn env 对正式插件裸命令名前提的警示;③ rust-rewrite-notes.md 记 `check` 裸参数静默忽略坑与 `uv --directory` cwd 切换坑;④ test-and-ci.md「明确不做」深化(交互 CI 化否决论证固化);⑤ `.cairn/config.yaml` project summary 自规划期更新至现态。

@@ -4,7 +4,7 @@
 
 mod common;
 
-use common::{TempDir, run_mode_env};
+use common::{TempDir, run_init, run_mode_env};
 
 fn compile(
     src: &str,
@@ -274,10 +274,20 @@ fn lua_kb_primitives_compose() {
 }
 
 #[test]
-fn lua_engine_flag_runs_end_to_end_with_seeded_lua_pack() {
-    // --engine lua 端到端：默认包按引擎生成 rules.lua（而非 rules.rhai），
-    // 脚本层谓词生效（find -delete 升 confirm）。
+fn lua_engine_flag_runs_end_to_end_with_inited_lua_pack() {
+    // init --engine lua 端到端（P8/M8.1：init 是默认包唯一生成路径）：
+    // 默认包按引擎生成 rules.lua（而非 rules.rhai），脚本层谓词生效
+    // （find -delete 升 confirm）。
     let proj = TempDir::new("lua-e2e");
+    let r = run_init(proj.path(), &["--engine", "lua"], &[]);
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    assert!(
+        proj.path()
+            .join(".crush-tether")
+            .join("rules.lua")
+            .is_file(),
+        "init --engine lua 应生成 rules.lua"
+    );
     let r = run_mode_env(
         proj.path(),
         "check",
@@ -287,13 +297,6 @@ fn lua_engine_flag_runs_end_to_end_with_seeded_lua_pack() {
     );
     assert_eq!(r.code, 0, "{}", r.stderr);
     assert!(r.stdout.trim().is_empty(), "{}", r.stdout);
-    assert!(
-        proj.path()
-            .join(".crush-tether")
-            .join("rules.lua")
-            .is_file(),
-        "lua 默认包应生成 rules.lua"
-    );
     assert!(
         !proj
             .path()

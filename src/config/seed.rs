@@ -1,14 +1,13 @@
-//! 默认配置生成（v1，项目层）：三层皆缺才生成（design.md「零内置策略与
-//! 默认配置生成（定稿）」）。
+//! 默认配置包写入器（`init` 消费，P8/M8.1）：配置创建唯一路径——自动
+//! 生成已移除（D-09，design.md 更正登记 23）。
 //!
 //! - 模板内嵌于二进制只是**生成源数据**，不参与判定，不构成内置策略；
 //!   toml 内容与 `doc/design.md` 两个示例块逐字节一致（tests/seed_defaults.rs
 //!   的模板=文档测试把模板钉在文档上）。
 //! - 「损坏 ≠ 缺失」（D-03）：任一层存在但解析失败 → 告警 + confirm 兜底、
-//!   原文件不动、**不生成**（触发判断在调用方：仅发现层 Ok 且三层皆缺时
-//!   才进入本模块）。
-//! - 幂等 + 原子：模板内容恒定，temp + rename 原子替换；多 hook 并发发现
-//!   缺失时各自写临时文件后 rename，同一内容天然收敛到同一结果。
+//!   原文件不动；本模块对已存在文件一律跳过（缺哪个补哪个），语义相容。
+//! - 幂等 + 原子：模板内容恒定，temp + rename 原子替换；并发 init 各自写
+//!   临时文件后 rename，同一内容天然收敛到同一结果。
 //! - 脚本模板按引擎选择（M6.1）：rhai → `rules.rhai`，lua → `rules.lua`，
 //!   两者承载同一套四类谓词（语义等价，钉死测试双跑对账）。
 
@@ -38,17 +37,17 @@ pub fn default_files(engine: &str) -> Vec<(&'static str, &'static str)> {
     ]
 }
 
-/// 在 `<project_root>/.crush-tether/` 生成默认包；已存在的文件一律不动
-/// （尊重现状）。返回本次实际新写入的文件数。
+/// 在 `config_dir` 写出默认包（init 三层共用：项目 `.crush-tether` / 用户
+/// `~/.config/crush-tether` / 全局系统路径）；已存在的文件一律不动（尊重
+/// 现状）。返回本次实际新写入的文件数。
 ///
 /// 并发安全：临时文件名带进程 id + 纳秒时间戳，`rename` 原子替换；并发
 /// 写入的同一内容互相覆盖后字节一致（收敛）。
-pub fn seed_defaults_if_absent(project_root: &Path, engine: &str) -> std::io::Result<usize> {
-    let dir = project_root.join(".crush-tether");
-    std::fs::create_dir_all(&dir)?;
+pub fn write_default_pack(config_dir: &Path, engine: &str) -> std::io::Result<usize> {
+    std::fs::create_dir_all(config_dir)?;
     let mut written = 0;
     for (name, content) in default_files(engine) {
-        let dest = dir.join(name);
+        let dest = config_dir.join(name);
         if dest.exists() {
             continue;
         }
@@ -109,12 +108,13 @@ mod tests {
     #[test]
     fn seeds_all_pack_files_then_is_idempotent() {
         let proj = TempDir::new("m26", "seed");
-        assert_eq!(seed_defaults_if_absent(proj.path(), "rhai").unwrap(), 3);
-        let rules_path = proj.path().join(".crush-tether").join("rules.toml");
+        let dir = proj.path().join(".crush-tether");
+        assert_eq!(write_default_pack(&dir, "rhai").unwrap(), 3);
+        let rules_path = dir.join("rules.toml");
         let before = std::fs::read_to_string(&rules_path).unwrap();
         assert_eq!(before, DEFAULT_RULES_TOML, "重复生成字节一致");
         // 已存在 → 不再写（written=0，内容不变）。
-        assert_eq!(seed_defaults_if_absent(proj.path(), "rhai").unwrap(), 0);
+        assert_eq!(write_default_pack(&dir, "rhai").unwrap(), 0);
         assert_eq!(std::fs::read_to_string(&rules_path).unwrap(), before);
     }
 
@@ -263,7 +263,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            seed_defaults_if_absent(proj.path(), "rhai").unwrap(),
+            write_default_pack(&dir, "rhai").unwrap(),
             2,
             "只补缺的 knowledge.toml 与 rules.rhai"
         );
@@ -277,19 +277,18 @@ mod tests {
     #[test]
     fn concurrent_seeding_converges_to_same_bytes() {
         let proj = TempDir::new("m26", "race");
-        let root: PathBuf = proj.path().to_path_buf();
+        let dir: PathBuf = proj.path().join(".crush-tether");
         let handles: Vec<_> = (0..8)
             .map(|_| {
-                let root = root.clone();
-                std::thread::spawn(move || seed_defaults_if_absent(&root, "rhai"))
+                let dir = dir.clone();
+                std::thread::spawn(move || write_default_pack(&dir, "rhai"))
             })
             .collect();
         for h in handles {
             h.join().expect("thread ok").expect("seed ok");
         }
-        let rules = std::fs::read_to_string(root.join(".crush-tether").join("rules.toml")).unwrap();
-        let kb =
-            std::fs::read_to_string(root.join(".crush-tether").join("knowledge.toml")).unwrap();
+        let rules = std::fs::read_to_string(dir.join("rules.toml")).unwrap();
+        let kb = std::fs::read_to_string(dir.join("knowledge.toml")).unwrap();
         assert_eq!(rules, DEFAULT_RULES_TOML);
         assert_eq!(kb, DEFAULT_KNOWLEDGE_TOML);
     }

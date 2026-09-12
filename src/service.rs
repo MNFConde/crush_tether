@@ -203,7 +203,7 @@ impl Default for DecisionTrace {
 }
 
 impl RuleSet {
-    /// 加载配置（三层发现 + 引导生成 + 显式覆盖）与脚本层；任一损坏返回
+    /// 加载配置（三层发现 + 显式覆盖）与脚本层；任一损坏返回
     /// `Err(RuleSetError)`——调用方按 fail-safe confirm 处理（D-03：损坏 ≠
     /// 缺失，绝不静默回落）。
     pub fn load(
@@ -212,31 +212,22 @@ impl RuleSet {
         engine: &str,
     ) -> Result<RuleSet, RuleSetError> {
         let home = crate::config::home_dir();
-        let found = crate::config::discover_layers(Some(project), home.as_deref());
-        // 三层皆缺 → 引导生成默认包（生成动作是管线引导步骤，不经规则链，
-        // design.md「零内置策略与默认配置生成」）。任一层损坏（found 为 Err）
-        // 时不生成：损坏 ≠ 缺失（D-03），fail-safe confirm、原文件不动。
-        let found = match found {
-            Ok(l) if l.all_absent() && crate::config::explicit_path(config_arg).is_none() => {
-                match crate::config::seed::seed_defaults_if_absent(project, engine) {
-                    Ok(_) => {
-                        eprintln!(
-                            "crush-tether: no config found; seeded defaults in {}",
-                            project.join(".crush-tether").display()
-                        );
-                        crate::config::discover_layers(Some(project), home.as_deref())
-                    }
-                    Err(e) => {
-                        eprintln!(
-                            "crush-tether: seeding default config failed: {e}; continuing \
-                             without config (fail-safe confirm)"
-                        );
-                        Ok(l)
-                    }
-                }
-            }
-            other => other,
-        };
+        let global = crate::config::global_dir();
+        let found =
+            crate::config::discover_layers(Some(project), home.as_deref(), global.as_deref());
+        // 三层皆缺 → 裸兜底 + 提示 init（P8/M8.1，D-09：自动生成已移除，
+        // 配置创建唯一路径 = `crush-tether init`；缺省裁决 confirm 不变）。
+        if let Ok(l) = &found
+            && l.global.is_none()
+            && l.user.is_none()
+            && l.project.is_none()
+            && crate::config::explicit_path(config_arg).is_none()
+        {
+            eprintln!(
+                "crush-tether: no config found; unmatched commands default to confirm. \
+                 run `crush-tether init` to generate a default pack."
+            );
+        }
         // 知识库 Arc 共享（发现层一次性包装；脚本链/lint/查表免深克隆）。
         let kb_arc = found.as_ref().ok().and_then(|l| l.knowledge.clone());
         let kb = kb_arc.as_deref();
@@ -279,11 +270,12 @@ impl RuleSet {
             }
         };
 
-        // 脚本层链：用户层先、项目层最后（design.md「配置拆分」；缺失 =
-        // 无该层，TOML 自足）。任一层编译/加载失败（含 script_allow 对账
-        // 拒载）必须告警 + fail-safe confirm。
+        // 脚本层链：全局 → 用户 → 项目（design.md「配置拆分」；项目最后
+        // 执行可作最终裁决；缺失 = 无该层，TOML 自足）。任一层编译/加载
+        // 失败（含 script_allow 对账拒载）必须告警 + fail-safe confirm。
         let script = match crate::script::load_script_chain(
             project,
+            global.as_deref(),
             home.as_deref(),
             kb_arc.clone(),
             lookup.script_allow().clone(),

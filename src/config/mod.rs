@@ -15,7 +15,7 @@ use std::fmt;
 use std::path::{Path, PathBuf};
 
 pub use discover::{
-    FoundLayers, discover_layers, find_project_root, find_project_root_from, home_dir,
+    FoundLayers, discover_layers, find_project_root, find_project_root_from, global_dir, home_dir,
 };
 pub use merge::{
     DEFAULT_PRECEDENCE, Dims, LayerLabels, Layers, MergedCommand, MergedRules, MergedScope,

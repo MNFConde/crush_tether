@@ -8,8 +8,10 @@
 //! - `benchmark`：双跑对比（in-process vs serve 路径），验收 diff 为空。
 //! - `explain`：单发全溯源报告（M7.1 人读调试）。
 //! - `repl`：用户面规则调试器（M7.1，每条输入重载配置，改规则即测）。
+//! - `init`：显式生成默认配置包（P8/M8.1，D-09——配置创建唯一路径，自动
+//!   生成已移除；缺省项目层，`--user`/`--global` 切目标层）。
 //!
-//! 裁决管线：配置加载（显式覆盖或三层发现 + 引导生成）→ 字段级继承合并 →
+//! 裁决管线：配置加载（显式覆盖或三层发现）→ 字段级继承合并 →
 //! rules.toml 查表（多命中合成）→ rules.rhai 脚本 → 定稿点 → 组合裁决，
 //! 装配在 `service::RuleSet`（serve 与 check 共用同一实现）。
 
@@ -31,12 +33,14 @@ fn main() -> ExitCode {
     let mut idle_secs: Option<u64> = None;
     let mut batch = false;
     let mut cases: Option<String> = None;
+    let mut init_user = false;
+    let mut init_global = false;
     let mut positional: Vec<String> = Vec::new();
 
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
         match arg.as_str() {
-            "check" | "hook" | "serve" | "benchmark" | "explain" | "repl" => mode = arg,
+            "check" | "hook" | "serve" | "benchmark" | "explain" | "repl" | "init" => mode = arg,
             "--agent" => match args.next().as_deref().and_then(Agent::parse) {
                 Some(a) => agent = a,
                 None => {
@@ -75,6 +79,9 @@ fn main() -> ExitCode {
                 }
             },
             "--batch" => batch = true,
+            // init 目标层（P8/M8.1）：缺省项目层，两旗标互斥。
+            "--user" => init_user = true,
+            "--global" => init_global = true,
             "--cases" => match args.next() {
                 Some(p) => cases = Some(p),
                 None => {
@@ -126,6 +133,7 @@ fn main() -> ExitCode {
             let project = crush_tether::repl::resolve_project(project_arg.as_ref());
             crush_tether::repl::run(&project, config_arg.as_deref(), &engine)
         }
+        "init" => run_init(project_arg.as_ref(), &engine, init_user, init_global),
         _ => {
             if batch {
                 return run_batch(config_arg.as_deref(), &engine, project_arg.as_ref());
@@ -142,6 +150,61 @@ fn main() -> ExitCode {
 /// （`rules.rhai`/`rules.lua`）与日志 script.file 溯源。
 fn engine_label(engine_arg: Option<&str>) -> String {
     engine_arg.unwrap_or("rhai").to_string()
+}
+
+/// init 模式（P8/M8.1，D-09）：显式生成默认配置包——配置创建唯一路径，
+/// 已存在文件一律不动（缺哪个补哪个）。缺省项目层（`--project` 可指根），
+/// `--user`/`--global` 切目标层（互斥）。目标目录解析失败 → stderr + exit 2。
+fn run_init(project_arg: Option<&PathBuf>, engine: &str, user: bool, global: bool) -> ExitCode {
+    if user && global {
+        eprintln!("crush-tether: --user and --global are mutually exclusive");
+        return ExitCode::from(2);
+    }
+    let dir = if global {
+        match crush_tether::config::global_dir() {
+            Some(d) => d,
+            None => {
+                eprintln!(
+                    "crush-tether: cannot resolve global config directory \
+                     (set CRUSH_TETHER_GLOBAL_DIR or PROGRAMDATA)"
+                );
+                return ExitCode::from(2);
+            }
+        }
+    } else if user {
+        match crush_tether::config::home_dir() {
+            Some(h) => h.join(".config").join("crush-tether"),
+            None => {
+                eprintln!("crush-tether: cannot resolve home directory (set USERPROFILE or HOME)");
+                return ExitCode::from(2);
+            }
+        }
+    } else {
+        project_arg
+            .cloned()
+            .unwrap_or_else(crush_tether::config::find_project_root)
+            .join(".crush-tether")
+    };
+    match crush_tether::config::seed::write_default_pack(&dir, engine) {
+        Ok(0) => {
+            println!(
+                "crush-tether: default pack already present in {} (nothing written)",
+                dir.display()
+            );
+            ExitCode::from(0)
+        }
+        Ok(n) => {
+            println!(
+                "crush-tether: wrote {n} default pack file(s) to {}",
+                dir.display()
+            );
+            ExitCode::from(0)
+        }
+        Err(e) => {
+            eprintln!("crush-tether: init failed: {e}");
+            ExitCode::from(2)
+        }
+    }
 }
 
 fn read_project(agent: Agent) -> Option<(String, PathBuf)> {
