@@ -6,16 +6,16 @@ mod fixture;
 use crush_tether::model::Decision;
 use fixture::{decide, decide_lua};
 
-// fixture PROJECT = "D:/Code/RustCodeProject/mdor"（词法基准，不要求存在）。
+// fixture PROJECT = env!("CARGO_MANIFEST_DIR")（词法基准，两平台皆真绝对路径）。
 
 #[test]
 fn cd_inside_project_then_write_inside_allows() {
     // 相对 cd 目标 join 项目根 → 基准仍在项目内 → 项目内写放行。
     assert_eq!(decide("cd sub && touch x"), Decision::Allow);
-    assert_eq!(
-        decide("cd D:/Code/RustCodeProject/mdor && git status"),
-        Decision::Allow
-    );
+    // 绝对形态 cd 到项目根 + 读命令照常放行（路径随平台取真实仓库根，
+    // 正斜杠化以嵌入命令词元——Windows 反斜杠在 bash 词元里是转义符）。
+    let root = fixture::PROJECT.replace('\\', "/");
+    assert_eq!(decide(&format!("cd {root} && git status")), Decision::Allow);
 }
 
 #[test]

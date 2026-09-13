@@ -14,8 +14,11 @@ use crush_tether::lookup::RuleLookup;
 use crush_tether::model::{Decision, Verdict};
 use crush_tether::script::{LuaEngine, RhaiEngine, RuleEngine};
 
-/// 仓库根：词法判断基准（不要求目录存在）。
-pub const PROJECT: &str = "D:/Code/RustCodeProject/mdor";
+/// 仓库根：词法判断基准。取真实 manifest 目录（CARGO_MANIFEST_DIR）——
+/// 两平台皆为真绝对路径；此前硬编码 `D:/...` 在 Linux 是相对路径，会把
+/// `inside_repo` 的相对分支带进双前置误判（CI linux 逃逸用例红灯根因，
+/// 2026-09-13 修正）。
+pub const PROJECT: &str = env!("CARGO_MANIFEST_DIR");
 
 /// 用默认包模板跑一次完整管线，返回组合裁决档位（脚本层 = Rhai 默认模板）。
 pub fn decide(cmd: &str) -> Decision {

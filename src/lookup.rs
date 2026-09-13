@@ -621,8 +621,11 @@ mod tests {
     use crate::config::{Layers, RulesFile, merge};
     use std::path::PathBuf;
 
-    /// 项目根固定为不存在的参考目录；逃逸用例用仓库外绝对/相对路径。
-    const PROJ: &str = "D:/code/tmp/lookup-project";
+    /// 项目根取真实 manifest 目录（两平台皆真绝对路径）——逃逸用例用
+    /// 仓库外相对路径（`../outside`）；此前硬编码 `D:/...` 在 Linux 是
+    /// 相对路径，`inside_repo` 相对分支双前置误判仓库内（CI 红灯根因，
+    /// 2026-09-13 修正）。
+    const PROJ: &str = env!("CARGO_MANIFEST_DIR");
 
     fn file(src: &str) -> RulesFile {
         RulesFile::parse_toml(src).expect("fixture parses")
