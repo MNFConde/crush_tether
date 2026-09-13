@@ -14,9 +14,9 @@ jobs:
   quality:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       # 读 rust-toolchain.toml 钉版 1.97.1（minimal profile，文件内已含 rustfmt/clippy 组件）
-      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - uses: actions-rust-lang/setup-rust-toolchain@v2
       - uses: Swatinem/rust-cache@v2
       - name: fmt
         run: cargo fmt --check
@@ -25,7 +25,8 @@ jobs:
         run: cargo clippy -- -D warnings
       - name: test
         run: cargo test --no-fail-fast
-      - uses: astral-sh/setup-uv@v6
+      # v8 起不再发布 major 浮动 tag（供应链安全），只能钉不可变完整版号
+      - uses: astral-sh/setup-uv@v10.1.0
       - name: check-links
         run: uv run python script/check-links.py
       # D-08：rhai 传递依赖 smartstring unmaintained（RUSTSEC-2026-0249，无 CVE）
@@ -43,8 +44,8 @@ jobs:
   windows-test:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - uses: actions/checkout@v7
+      - uses: actions-rust-lang/setup-rust-toolchain@v2
       - uses: Swatinem/rust-cache@v2
       - name: test
         run: cargo test --no-fail-fast
