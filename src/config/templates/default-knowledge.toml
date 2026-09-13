@@ -64,3 +64,22 @@ delegates = "Makefile"            # 联系：委托执行项目内文件中的�
 
 [sudo]
 wraps = "*"                       # 联系：包装壳（v1 仅登记）
+
+# 危险 flag/写形态事实（M10.2，Kode-CLI 权限审查引入）：默认包不含这两
+# bin（落 default confirm 兜底）——登记供项目自放开时 lint 提示与精确拦截。
+# jq 程序串内 system() 可执行任意命令：TOML 无参数内容槽位，引擎不拦；
+# 下列 flag 读任意文件/注入变量，按带值登记（子命令探测跳值、lint 消费）。
+[jq]
+flag."--from-file"   = { same_flag = "-f" }
+flag."-f"            = { takes_value = true }
+flag."--library-path" = { same_flag = "-L" }
+flag."-L"            = { takes_value = true }
+flag."--arg"         = { takes_value = true }
+flag."--argjson"     = { takes_value = true }
+flag."--rawfile"     = { takes_value = true }
+flag."--slurpfile"   = { takes_value = true }
+flag."--indent"      = { takes_value = true }
+
+# sed -i 原地写（GNU 后缀随 -i 粘连，不入 takes_value；BSD 分离形态保守不登记）。
+[sed]
+write_flags = ["-i", "--in-place"]
