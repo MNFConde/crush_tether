@@ -27,8 +27,10 @@ allow.sub    = ["status", "log", "diff", "show", "branch", "--version", "remote"
 confirm.sub  = ["rm", "restore", "reset"]   # reset 软/mixed 走确认；--hard 在 deny.flag
 deny.sub     = ["push", "pull", "clean", "rebase", "revert", "cherry-pick",
   "fetch", "gc", "prune", "filter-branch", "reflog"]
-confirm.flag = ["--output", "-o", "--pretty", "--format", "--config", "-c",
-  "--force", "-f", "--in-place", "-w", "--write", "-h"]   # -h 笔误登记保留（更正登记 5）
+confirm.flag = ["--output", "-o", "--config", "-c",
+  "--force", "-f", "--in-place", "-w", "--write", "-h"]
+  # -h 笔误登记保留（更正登记 5）；--pretty/--format 已移除（M9.1/D-12：
+  # 输出整形不落盘，真写面由 --output/-o/-c 承载，组合形态仍被 --output 拦）
 deny.flag    = ["--hard"]
 
 [local.npm]

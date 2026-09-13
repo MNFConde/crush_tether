@@ -457,8 +457,10 @@ allow.sub    = ["status", "log", "diff", "show", "branch", "--version", "remote"
 confirm.sub  = ["rm", "restore", "reset"]   # reset 软/mixed 走确认；--hard 在 deny.flag
 deny.sub     = ["push", "pull", "clean", "rebase", "revert", "cherry-pick",
   "fetch", "gc", "prune", "filter-branch", "reflog"]
-confirm.flag = ["--output", "-o", "--pretty", "--format", "--config", "-c",
-  "--force", "-f", "--in-place", "-w", "--write", "-h"]   # -h 笔误登记保留（更正登记 5）
+confirm.flag = ["--output", "-o", "--config", "-c",
+  "--force", "-f", "--in-place", "-w", "--write", "-h"]
+  # -h 笔误登记保留（更正登记 5）；--pretty/--format 已移除（M9.1/D-12：
+  # 输出整形不落盘，真写面由 --output/-o/-c 承载，组合形态仍被 --output 拦）
 deny.flag    = ["--hard"]
 
 [local.npm]
@@ -545,6 +547,11 @@ sub.tag        = { write_tokens = ["-d", "--delete", "-a", "-s", "-m", "-f", "-u
 sub.config     = { write_arg_count = 2 }   # 位置参数 ≥2 即写形态
 flag."--force" = { same_flag = "-f" }      # 联系：flag 等价
 flag."--hard"  = { irreversible = true }   # 属性：破坏性参数
+# 前置全局选项带值（M9.1）：子命令探测跳值——`git -C <p> <sub>` 不再顶掉子命令槽
+flag."-C"        = { takes_value = true }
+flag."-c"        = { takes_value = true }
+flag."--git-dir" = { takes_value = true }
+flag."--work-tree" = { takes_value = true }
 
 [make]
 delegates = "Makefile"            # 联系：委托执行项目内文件中的任意命令
@@ -598,6 +605,8 @@ wraps = "*"                       # 联系：包装壳（v1 仅登记）
 | 委托执行 | `make`、`npm run` | `delegates`（lint 提示） |
 | 网络访问/平台差异等 | curl 联网、GNU vs BSD | 不进：无消费机制（记了没人读的死数据），按需扩展 |
 | 完全未知的命令 | agent 自造的 `ll`（非交互 shell 不展开用户 alias） | fail-safe → confirm |
+
+**子命令探测（M9.1 修订）**：子命令 = args 中**首个非 flag 词元**——`-` 开头按 flag 处理，知识库 `takes_value` 登记的带值 flag 跳过其值（sticky 短 flag 与 `--flag=value` 不跳值）；flag 候选扫描同为全词元。原「bin 后第一个词元即子命令」的硬规则使 `git -C <路径> <子命令>` 等前置全局选项形态落 default confirm（[更正登记](#更正登记对既有定稿) 26）；脚本侧 `ctx.sub` 与查表共用同一探测（`knowledge::extract_sub`），防两处词汇漂移。
 
 ### 脚本层职责边界（定稿）
 
@@ -784,6 +793,7 @@ allow.flag = { remove = ["-h"] }                 # 继承并移除（flag 也能
 
 > 以下为对本文档已定稿措辞的更正（草案阶段调整，非推翻方向），原定稿表述处已加更正指针，不静默覆盖：
 
+26. 「子命令 = bin 后第一个词元（`normalize` 硬取 args[0]）；flag 扫描自 args[1..] 起」→ **2026-09-13 修订（M9.1/D-12）**：子命令 = args 中**首个非 flag 词元**（`-` 开头按 flag；kb `takes_value` 登记的带值 flag 跳过其值），flag 扫描改全词元——`git -C/--no-pager/-c` 等前置全局选项不再顶掉子命令槽，前导 flag 可命中 flag 桶；脚本 `ctx.sub` 同口径（ScriptCtx 与查表共用 `extract_sub` 探测，kb 缺席时纯语法探测语义不缺位）。同批：git confirm.flag 移除 `--pretty`/`--format`（输出整形不落盘，真写面由 --output/-o/-c 承载，组合形态仍被 --output 拦）。
 25. 「`script.rule` v1 恒 null——脚本无命名规则概念」（日志节注记）→ **2026-09-12 更正**：「无命名规则概念」表述过粗（用户纠正）——规则脚本结构上每个分支即一条规则（默认包四分支即四条），v1 缺的只是**命名通道**（决策返回值为光秃枚举，引擎收不到分支名）。随 M8.6 声明式规则函数（`rule()` 注册器 + `confirm_as`）激活该保留字段。
 24. 「脚本单 `check()` 入口」→ **2026-09-12 M8.6 扩展为双形态并存**（设计演进，非推翻）：`rule(名字, 优先级, 函数)` 声明式注册 + 旧 `check` 形态，见[声明式规则函数](#声明式规则函数rule-注册器定稿)；表达力等价，顺序显式化 + 规则可追溯。同期：权限学习节定位调整（suggest 降为配置打磨手段，主功能 = 会话内临时放行），见 D-10。
 

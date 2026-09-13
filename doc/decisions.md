@@ -21,6 +21,7 @@
 | [D-09](#d-09-init-显式生成取代自动生成与全局层路径定稿) | init 显式生成取代自动生成 + 全局层系统路径 | 已决策 | [design.md「零内置策略」](design.md#零内置策略与默认配置生成定稿) |
 | [D-10](#d-10-会话内临时放行为主suggest-降级为配置打磨手段) | 会话内临时放行为主；suggest 降级为配置打磨手段 | 已决策 | [design.md「会话内临时放行」](design.md#会话内临时放行session-allow定稿) |
 | [D-11](#d-11-脚本声明式规则函数rule-注册器) | 脚本声明式规则函数：rule() 注册器 + check 双形态并存 | 已决策 | [design.md「声明式规则函数」](design.md#声明式规则函数rule-注册器定稿) |
+| [D-12](#d-12-子命令探测跳过前置全局选项与-flag-收窄) | 子命令探测跳过前置全局选项（三件套）+ --pretty/--format 移出 confirm.flag | 已决策 | [design.md「单命令建模」](design.md#单命令建模定稿) |
 
 ---
 
@@ -298,6 +299,34 @@
 > 原因：Lua 无对应物（双语言形态分叉）、注解字符串 DIY 解析、feature 门控绑定。
 
 **影响**：`src/script/mod.rs`（注册器/加载期顶层执行/循环短路/`ConfirmAs`/`ChainOutcome`）；`src/script/lua.rs` 同构；`DecisionTrace.script_rule` 与 decisions.jsonl `script.rule` 激活；默认包改写四具名规则；`tests/script_engine.rs`/`script_lua.rs` 新用例。
+
+---
+
+## D-12 子命令探测跳过前置全局选项与 flag 收窄
+
+| 状态 | 日期 | 规范位置 |
+|---|---|---|
+| 已决策（含实现落地 M9.1） | 2026-09-13 | design.md「单命令建模（定稿）」子命令探测段 |
+
+**背景**：实测暴露两类误拦。①`git -C <路径> <子命令>`、`git --no-pager log` 等前置全局选项形态下，子命令探测（硬取 args[0]）把 `-C`/`--no-pager` 当成子命令 → 查无此 sub → default confirm——25 条真实工作命令样本中 7 条因此误拦，多仓库 agent 工作流高频受害；②flag 扫描自 args[1..] 起，前导 flag（`git -c k=v log` 的 `-c`，confirm.flag 在册）永远打不中——查表 sub 落空歪打正着地 confirm，但子命令探测修复后该洞即暴露。同期用户拍板 `--pretty`/`--format` 移出 confirm.flag（输出整形不落盘；原家族化保守超近似的撤回）。
+
+**决策**（三件套成对落地，缺一即开洞或修不全）：
+
+- **子命令探测**：子命令 = args 中首个非 flag 词元（`-` 开头按 flag；kb `takes_value` 登记的带值 flag 跳过其值；sticky 短 flag 与 `--flag=value` 不跳值）——实现在 `knowledge::extract_sub`，查表与脚本 `ctx.sub` 共用（kb 缺席时纯语法探测，语义不缺位）。
+- **flag 扫描全词元**：前导 flag 从此进入 flag 桶判定（`git -c k=v log` → confirm 正确化）。
+- **kb 数据**：默认包 [git] 登记 `-C`/`-c`/`--git-dir`/`--work-tree` 的 `takes_value`；同批 confirm.flag 移除 `--pretty`/`--format`（`--format=x --output=y` 组合仍被 --output 拦）。
+
+**依据**：机制与数据互相依赖——只补登记不修探测则 sub 仍被顶掉；只修探测不补登记则带值 flag 的值被误当 flag 候选；不改全词元扫描则 `-c` 漏检成放行洞。`ctx.sub` 必须同步：否则 `git -C x config a b` 修复后 two_state 拿 raw sub 查不到 write_arg_count，写形态漏放。
+
+### 被否决的替代方案
+
+> [!CAUTION] 【已否决】 仅补 kb 登记（机制不动）
+> 原因：sub 提取不消费 takes_value，登记后 `-C` 依旧顶掉子命令槽——纯数据修不了机制缺口。
+>
+> 【已否决】 仅修探测机制（kb 不登记）
+> 原因：引擎不知 `-C` 带值，`D:/x` 被误当 flag 候选/子命令，跳值失败。
+
+**影响**：`src/knowledge.rs`（`extract_sub` 共享探测）；`src/lookup.rs`（normalize/flag_bases 全词元）；`src/script/{mod,lua}.rs`（引擎存 canon、`ctx.sub` 同口径、新原语 `kb_takes_value`）；默认包四模板（kb git 全局选项、confirm.flag 收窄、脚本 `positional_count` 重写）；测试 `tests/global_option_sub.rs` 新档 + lookup 单测矩阵；更正登记 26。
 
 ---
 

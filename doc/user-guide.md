@@ -349,6 +349,9 @@ serve 热重载有 600ms debounce 且信号在请求间隙消费——最坏滞�
 **Q：会话放行没生效？**
 ① 无头会话不生长便签（无 confirm 弹窗）；② 检查 `CRUSH_TETHER_SESSION_ALLOW` 未设为 off；③ 便签跨会话天然失效——本设计如此，不是故障。
 
+**Q：`git -C <路径> <子命令>`、`git --no-pager log` 这类带前置全局选项的命令怎么判？**
+子命令探测会跳过前置全局选项（带值的按知识库 `takes_value` 登记跳值——默认包已登记 git 的 `-C`/`-c`/`--git-dir`/`--work-tree`），按真正的子命令查表。未登记带值 flag 的命令保守落确认。另：`--pretty`/`--format` 不落盘，已移出确认名单；`--output`/`-o`/`-c` 等真写/真改行为面仍会确认。
+
 **Q：lint 告警要看吗？**
 lint 只告警不拒绝加载。典型告警：同 token 双桶、等价冗余（allow `pip` 又 allow `pip3`）、allow 了 `may_write` 命令、`script_allow` 死声明。按提示清理即可。
 

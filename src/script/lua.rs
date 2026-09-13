@@ -36,7 +36,7 @@ use mlua::{
 
 use crate::cmd_parse::SimpleCommand;
 use crate::config::merge::ScriptAllowDecls;
-use crate::knowledge::KnowledgeBase;
+use crate::knowledge::{CanonMaps, KnowledgeBase};
 use crate::model::Decision;
 
 use super::{AllowActivation, ConfirmAs, ScriptCtx, ScriptDecision, ScriptError, ScriptOutcome};
@@ -79,6 +79,8 @@ pub struct LuaEngine {
     decls: ScriptAllowDecls,
     /// 机制 1 提取的 `allow("…")` 字面量集。
     allow_literals: Vec<String>,
+    /// 规范形映射（M9.1：`ctx.sub` 与查表共用同一子命令探测口径）。
+    canon: Option<Arc<CanonMaps>>,
 }
 
 impl LuaEngine {
@@ -121,7 +123,9 @@ impl LuaEngine {
         )
         .map_err(|e| ScriptError::Compile(e.to_string()))?;
 
-        register_primitives(&lua, project, kb)?;
+        // M9.1：规范形映射随 kb 预建（ctx.sub 子命令探测共用同一口径）。
+        let canon = kb.as_ref().map(|k| Arc::new(k.canon_maps()));
+        register_primitives(&lua, project, kb, canon.clone())?;
         register_decision_table(&lua)?;
         register_allow(&lua, decls.clone())?;
 
@@ -233,6 +237,7 @@ impl LuaEngine {
             budget,
             decls,
             allow_literals: extracted,
+            canon,
         })
     }
 }
@@ -254,7 +259,20 @@ impl super::RuleEngine for LuaEngine {
         pipe_to_shell: bool,
     ) -> Result<ScriptOutcome, ScriptError> {
         self.budget.store(0, Ordering::Relaxed);
-        let ctx = ScriptCtx::new(cmd, verdict, project, pipe_to_shell);
+        // M9.1：ctx.sub 与查表共用同一子命令探测（前导全局选项不顶掉 sub）。
+        // kb 缺席 → 空 canon（纯语法探测，语义不缺位——两态判定的 kb 缺席
+        // 兜底依赖 ctx.sub 非空）。
+        let sub = self.canon.as_ref().map_or_else(
+            || {
+                crate::knowledge::extract_sub(
+                    cmd.bin().unwrap_or(""),
+                    cmd.args(),
+                    &crate::knowledge::CanonMaps::empty(),
+                )
+            },
+            |c| crate::knowledge::extract_sub(&c.canon_bin(cmd.bin().unwrap_or("")), cmd.args(), c),
+        );
+        let ctx = ScriptCtx::new(cmd, sub, verdict, project, pipe_to_shell);
         if self.rules.is_empty() {
             // 兼容形态：单 `check(ctx)` 入口（机制不变，M8.6 双形态并存）。
             let result: Value = self
@@ -371,6 +389,7 @@ fn register_primitives(
     lua: &Lua,
     project: PathBuf,
     kb: Option<Arc<KnowledgeBase>>,
+    canon: Option<Arc<CanonMaps>>,
 ) -> Result<(), ScriptError> {
     let p = project.clone();
     lua.globals()
@@ -463,6 +482,22 @@ fn register_primitives(
             "kb_present",
             lua.create_function(move |_, ()| Ok(kb.is_some()))
                 .map_err(compile_err)?,
+        )
+        .map_err(compile_err)?;
+    // M9.1：带值 flag 查询（canon 规范形；默认模板 positional_count 跳值
+    // 用）——kb 缺席或未登记返回 false（值词元按位置参数计，保守不变）。
+    lua.globals()
+        .set(
+            "kb_takes_value",
+            lua.create_function(move |_, (bin, flag): (String, String)| {
+                let Some(c) = canon.as_ref() else {
+                    return Ok(false);
+                };
+                let b = c.canon_bin(&bin);
+                let f = c.canon_flag(&b, &flag);
+                Ok(c.flag_takes_value(&b, &f))
+            })
+            .map_err(compile_err)?,
         )
         .map_err(compile_err)?;
     Ok(())

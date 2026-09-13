@@ -204,7 +204,11 @@ impl RuleLookup {
     fn normalize(&self, bin0: &str, cmd: &SimpleCommand) -> Normalized {
         let mut chain: Vec<String> = Vec::new();
         let mut bin = bin0.to_string();
-        let mut sub = cmd.args().first().cloned();
+        // M9.1：sub 探测跳过前导 flag 及带值 flag 的值（口径 =
+        // knowledge::extract_sub）；takes_value 以原始 bin 的规范形查
+        // （flag 扫描仍用别名改写后的最终 bin）。
+        let mut sub =
+            crate::knowledge::extract_sub(&self.canon.canon_bin(bin0), cmd.args(), &self.canon);
         loop {
             // 子命令别名优先（bin+子命令 → 目标 bin，子命令槽位被吸收），
             // 其次命令别名（子命令原样保留）。
@@ -229,8 +233,9 @@ impl RuleLookup {
             bin = next;
             chain.push(bin.clone());
         }
-        let args = cmd.args().get(1..).unwrap_or(&[]);
-        let flags = self.flag_bases(&bin, args);
+        // M9.1：flag 扫描改全词元——前导 flag（`git -c k=v log` 的 -c）
+        // 从此可命中 flag 桶；sub 词元混入候选无害（按 dims.flag 过滤）。
+        let flags = self.flag_bases(&bin, cmd.args());
         Normalized {
             bin,
             sub,
@@ -1026,5 +1031,67 @@ mod tests {
         let c = l.classify_traced(&cmd("ls"), Path::new(PROJ));
         assert_eq!(c.kb_chain, Vec::<String>::new(), "kb:[] = 归一未生效");
         assert_eq!(c.verdict.decision, Decision::Allow);
+    }
+
+    // ── M9.1：前置全局选项不再顶掉子命令槽 ──
+
+    const GIT_GLOBAL_KB: &str = concat!(
+        "version = 1\n",
+        "[git]\n",
+        "flag.\"-C\" = { takes_value = true }\n",
+        "flag.\"-c\" = { takes_value = true }\n",
+    );
+
+    #[test]
+    fn global_option_with_value_skipped_sub_recognized() {
+        // kb 登记 -C takes_value：值词元跳过，status/push 识别为子命令。
+        let l = lookup_kb(BASE, GIT_GLOBAL_KB);
+        assert_eq!(
+            classify(&l, "git -C D:/x status --short").decision,
+            Decision::Allow
+        );
+        assert_eq!(
+            classify(&l, "git -C D:/x push origin main").decision,
+            Decision::Deny,
+            "deny.sub 同样经修正 sub 命中"
+        );
+    }
+
+    #[test]
+    fn unregistered_value_flag_falls_to_section_default() {
+        // kb 未登记 -X：值词元被当子命令 → 查无此 sub → default（fail-safe 不误放）。
+        let l = lookup(BASE);
+        assert_eq!(
+            classify(&l, "git -X D:/x status").decision,
+            Decision::Confirm
+        );
+    }
+
+    #[test]
+    fn valueless_leading_flag_skipped() {
+        // --no-pager 无值：无需 kb 登记，log 直接识别为子命令。
+        let l = lookup(BASE);
+        assert_eq!(
+            classify(&l, "git --no-pager log -n 3").decision,
+            Decision::Allow
+        );
+    }
+
+    #[test]
+    fn leading_flag_reaches_flag_bucket() {
+        // flag 扫描改全词元：args[0] 的 -c 可命中 confirm.flag（与 allow.sub
+        // 合成 → confirm）。旧规则下 -c 被吞进 sub 槽，永远打不中。
+        let l = lookup(BASE);
+        assert_eq!(
+            classify(&l, "git -c core.autocrlf=false log").decision,
+            Decision::Confirm
+        );
+    }
+
+    #[test]
+    fn no_sub_flag_only_args_keep_default() {
+        // 全 flag 无子命令（`git --no-pager`）：sub = None → 落 default，语义不变。
+        let l = lookup(BASE);
+        assert_eq!(classify(&l, "git --no-pager").decision, Decision::Confirm);
     }
 }

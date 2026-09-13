@@ -280,6 +280,39 @@ impl CanonMaps {
     }
 }
 
+/// 子命令探测（M9.1）：逐词元走 args——`-` 开头按 flag 处理；带值 flag
+/// （canon `takes_value`、token 无 `=`、非 sticky 短 flag）跳过其值；
+/// **首个非 flag 词元为子命令**。原规则「bin 后第一个词元即子命令」会让
+/// `git -C <p> status` 的 `-C` 顶掉子命令槽（查无此 sub → default confirm）。
+/// `bin` 须传规范形（`CanonMaps::canon_bin`，takes_value 以规范形记录）；
+/// 查表与脚本 `ctx.sub` 共用本探测，防两处词汇漂移。
+pub fn extract_sub(bin: &str, args: &[String], canon: &CanonMaps) -> Option<String> {
+    let mut skip_next = false;
+    for a in args {
+        if skip_next {
+            skip_next = false;
+            continue;
+        }
+        if a.starts_with('-') {
+            let base = a.split('=').next().unwrap_or(a);
+            // 短 flag 粘连值：-oX 的 flag 名是 -o（sticky 不消费下一词元）。
+            let mut probe = base;
+            let mut sticky = false;
+            if base.len() > 2 && base.starts_with('-') && !base.starts_with("--") {
+                probe = &base[..2];
+                sticky = true;
+            }
+            let c = canon.canon_flag(bin, probe);
+            if !sticky && !a.contains('=') && canon.flag_takes_value(bin, &c) {
+                skip_next = true;
+            }
+            continue;
+        }
+        return Some(a.clone());
+    }
+    None
+}
+
 impl<'de> Deserialize<'de> for KnowledgeBase {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where

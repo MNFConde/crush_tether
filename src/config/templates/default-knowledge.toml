@@ -36,6 +36,11 @@ sub.tag        = { write_tokens = ["-d", "--delete", "-a", "-s", "-m", "-f", "-u
 sub.config     = { write_arg_count = 2 }   # 位置参数 ≥2 即写形态
 flag."--force" = { same_flag = "-f" }      # 联系：flag 等价
 flag."--hard"  = { irreversible = true }   # 属性：破坏性参数
+# 前置全局选项带值（M9.1）：子命令探测跳值——`git -C <p> <sub>` 不再顶掉子命令槽
+flag."-C"        = { takes_value = true }
+flag."-c"        = { takes_value = true }
+flag."--git-dir" = { takes_value = true }
+flag."--work-tree" = { takes_value = true }
 
 [make]
 delegates = "Makefile"            # 联系：委托执行项目内文件中的任意命令

@@ -20,11 +20,29 @@
 -- 可用原语见 doc/design.md「DSL 引擎（定稿）」；本文件是数据文件，在
 -- crush-tether 二进制内的沙箱执行（限流 + 库白名单 + 无 IO API）。
 
--- 位置参数计数：args[1] 是子命令本身，不计；以 - 开头的词元是 flag，不计。
+-- 位置参数计数（M9.1）：跳过 flag 与 kb takes_value 带值 flag 的值；首个
+-- 非 flag 词元是子命令本身，不计（前导全局选项形态下 sub 不在 args[1]）。
 local function positional_count(ctx)
     local n = 0
-    for i = 2, #ctx.args do
-        if ctx.args[i]:sub(1, 1) ~= "-" then
+    local seen_sub = false
+    local skip = false
+    for _, w in ipairs(ctx.args) do
+        if skip then
+            skip = false
+        elseif w:sub(1, 1) == "-" then
+            local base = w:match("^([^=]*)")
+            local probe = base
+            local sticky = false
+            if #base > 2 and base:sub(1, 1) == "-" and base:sub(2, 2) ~= "-" then
+                probe = base:sub(1, 2)
+                sticky = true
+            end
+            if not string.find(w, "=", 1, true) and not sticky and kb_takes_value(ctx.bin, probe) then
+                skip = true
+            end
+        elseif not seen_sub then
+            seen_sub = true
+        else
             n = n + 1
         end
     end

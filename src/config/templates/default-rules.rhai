@@ -20,11 +20,27 @@
 // 文件，在 crush-tether 二进制内的沙箱执行（限流 + 无 IO API）；可用原语
 // 见 doc/design.md「DSL 引擎（定稿）」。
 
-// 位置参数计数：args[0] 是子命令本身，不计；以 - 开头的词元是 flag，不计。
+// 位置参数计数（M9.1）：跳过 flag 与 kb takes_value 带值 flag 的值；首个
+// 非 flag 词元是子命令本身，不计（前导全局选项形态下 sub 不在 args[0]）。
 fn positional_count(ctx) {
     let n = 0;
-    for i in 1..ctx.args.len() {
-        if !ctx.args[i].starts_with("-") { n += 1; }
+    let seen_sub = false;
+    let skip = false;
+    for w in ctx.args {
+        if skip { skip = false; continue; }
+        if w.starts_with("-") {
+            let base = w.split("=")[0];
+            let probe = base;
+            let sticky = false;
+            if base.len() > 2 && base.starts_with("-") && !base.starts_with("--") {
+                probe = base.sub_string(0, 2);
+                sticky = true;
+            }
+            if !w.contains("=") && !sticky && kb_takes_value(ctx.bin, probe) { skip = true; }
+            continue;
+        }
+        if !seen_sub { seen_sub = true; continue; }
+        n += 1;
     }
     n
 }

@@ -30,7 +30,7 @@ use rhai::{ASTNode, Dynamic, Engine, EvalAltResult, Expr, Position, Stmt};
 
 use crate::cmd_parse::SimpleCommand;
 use crate::config::merge::{DeclScope, ScriptAllowDecls};
-use crate::knowledge::KnowledgeBase;
+use crate::knowledge::{CanonMaps, KnowledgeBase};
 use crate::model::Decision;
 
 mod lua;
@@ -235,6 +235,8 @@ pub struct RhaiEngine {
     decls: ScriptAllowDecls,
     /// 机制 1 提取的 `allow("…")` 字面量集。
     allow_literals: Vec<String>,
+    /// 规范形映射（M9.1：`ctx.sub` 与查表共用同一子命令探测口径）。
+    canon: Option<Arc<CanonMaps>>,
 }
 
 impl RhaiEngine {
@@ -255,7 +257,9 @@ impl RhaiEngine {
         engine.set_max_array_size(1_000);
         engine.set_max_string_size(10_000);
 
-        register_primitives(&mut engine, project, kb);
+        // M9.1：规范形映射随 kb 预建（ctx.sub 子命令探测共用同一口径）。
+        let canon = kb.as_ref().map(|k| Arc::new(k.canon_maps()));
+        register_primitives(&mut engine, project, kb, canon.clone());
         register_decision_types(&mut engine);
         register_ctx_type(&mut engine);
         register_allow(&mut engine, decls.clone());
@@ -363,6 +367,7 @@ impl RhaiEngine {
             rules: collected,
             decls,
             allow_literals: extracted,
+            canon,
         })
     }
 }
@@ -383,7 +388,20 @@ impl RuleEngine for RhaiEngine {
         project: &Path,
         pipe_to_shell: bool,
     ) -> Result<ScriptOutcome, ScriptError> {
-        let ctx = ScriptCtx::new(cmd, verdict, project, pipe_to_shell);
+        // M9.1：ctx.sub 与查表共用同一子命令探测（前导全局选项不顶掉 sub）。
+        // kb 缺席 → 空 canon（无 takes_value 登记，纯语法探测，语义不缺位——
+        // 两态判定的 kb 缺席兜底依赖 ctx.sub 非空）。
+        let sub = self.canon.as_ref().map_or_else(
+            || {
+                crate::knowledge::extract_sub(
+                    cmd.bin().unwrap_or(""),
+                    cmd.args(),
+                    &crate::knowledge::CanonMaps::empty(),
+                )
+            },
+            |c| crate::knowledge::extract_sub(&c.canon_bin(cmd.bin().unwrap_or("")), cmd.args(), c),
+        );
+        let ctx = ScriptCtx::new(cmd, sub, verdict, project, pipe_to_shell);
         if self.rules.is_empty() {
             // 兼容形态：单 `check(ctx)` 入口（机制不变，M8.6 双形态并存）。
             let mut scope = rhai::Scope::new();
@@ -632,17 +650,19 @@ pub struct ScriptCtx {
 
 impl ScriptCtx {
     /// 构造脚本可见的命令上下文（只读特征；原始词元，归一不在此层）。
-    /// `sub` 可选字段缺省 = 空字符串（词汇约定）：不向脚本暴露解释器内部
-    /// 的 unit/nil 语义；谓词写 `ctx.sub != ""`。
+    /// `sub` 由调用方按 M9.1 口径传入（与查表共用 `knowledge::extract_sub`
+    /// 探测——前导全局选项不顶掉子命令槽），缺省 = 空字符串（词汇约定）：
+    /// 不向脚本暴露解释器内部的 unit/nil 语义；谓词写 `ctx.sub != ""`。
     pub fn new(
         cmd: &SimpleCommand,
+        sub: Option<String>,
         verdict: Decision,
         project: &Path,
         pipe_to_shell: bool,
     ) -> Self {
         Self {
             bin: cmd.bin().unwrap_or("").to_string(),
-            sub: cmd.args().first().cloned().unwrap_or_default(),
+            sub: sub.unwrap_or_default(),
             words: cmd.words.clone(),
             args: cmd.args().to_vec(),
             verdict: match verdict {
@@ -676,7 +696,12 @@ fn register_ctx_type(engine: &mut Engine) {
 }
 
 /// 注册 Rust 侧安全原语：纯函数、无 IO；知识库数据源经 `Arc` 共享只读事实。
-fn register_primitives(engine: &mut Engine, project: PathBuf, kb: Option<Arc<KnowledgeBase>>) {
+fn register_primitives(
+    engine: &mut Engine,
+    project: PathBuf,
+    kb: Option<Arc<KnowledgeBase>>,
+    canon: Option<Arc<CanonMaps>>,
+) {
     // 路径原语：与判定层同一实现（词法归一 + 仓库边界）。
     let project_a = project.clone();
     engine.register_fn("path_escapes", move |word: &str| -> bool {
@@ -736,6 +761,18 @@ fn register_primitives(engine: &mut Engine, project: PathBuf, kb: Option<Arc<Kno
     // 知识库整体在位性：默认脚本的两态谓词兜底条件（删光 → confirm）。
     let kb_present = kb;
     engine.register_fn("kb_present", move || -> bool { kb_present.is_some() });
+
+    // M9.1：带值 flag 查询（canon 规范形；默认模板 positional_count 跳值
+    // 用）——kb 缺席或未登记返回 false（值词元按位置参数计，保守不变）。
+    let canon_tv = canon;
+    engine.register_fn("kb_takes_value", move |bin: &str, flag: &str| -> bool {
+        let Some(c) = canon_tv.as_ref() else {
+            return false;
+        };
+        let b = c.canon_bin(bin);
+        let f = c.canon_flag(&b, flag);
+        c.flag_takes_value(&b, &f)
+    });
 }
 
 /// 脚本层链（design.md「配置拆分」：脚本层同文件按优先级，项目脚本最后
