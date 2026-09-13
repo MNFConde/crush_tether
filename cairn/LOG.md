@@ -2,6 +2,12 @@
 
 This file records substantive progress in reverse-chronological order — newest entry at the top, right below this line. Keep each entry short — summary and pointer only; conclusions settle into `cairn/<topic>.md`.
 
+## 2026-09-13 Ⅻ · CI linux 红灯归因修复 + 动作钉版升级（沉淀审计执行）
+
+- **事件**：P10 八笔推送到位后 CI 首跑——quality job（ubuntu）test 三用例红灯（写逃逸类断言误判 allow：`cp src.txt ../outside/dst.txt` / `cd .. && touch x` / `touch ../../outside.txt`），windows 全绿。归因三层：M9.2 的「先解析基准 → `inside_repo` 判归属」管线 × 夹具根硬编码 `D:/...`（Linux 上是普通相对路径 → 相对分支把项目根再前置、双前缀归一后误判「根内」）× 三个失败用例恰是仅有的依赖「根为绝对路径」语义的断言。P9 此前从未 push，本批同车首跑才踩中——单平台开发下「本地全绿」是假信心的实证。修复 e2bb03c：两夹具常量改 `CARGO_MANIFEST_DIR` + cd_segments 断言正斜杠化，两 workflow 全绿复跑；技术细节落 rust-rewrite-notes「平台敏感的词法谓词与夹具根」节。
+- **动作钉版盘点与升级（408fcf4）**：setup-uv v6→v10.1.0（消 Node 20 弃用警告；**v8 起该动作无 major 浮动 tag，必须钉不可变完整版号**——登记为维护口径入 §5）；ci.yml checkout v5→v7 与 agent-matrix 对齐；setup-rust-toolchain v1→v2（移除全局 RUSTFLAGS 默认，clippy 显式旗标不受影响）。复跑两 workflow 全绿。
+- **沉淀审计（本条目即审计记录）**：三项未沉淀当场补齐——CI 事件条目（本条）+ rust-rewrite-notes 补节 + §5 补两行挂账（残留 D:/ 夹具常量清理、CI 动作钉版维护口径）；P10 本体与 Kode 审查结论核对已在册（LOG Ⅺ / D-15），无缺。
+
 ## 2026-09-13 Ⅺ · P10 批次：建议面调试提示 + 知识库扩容（Kode-CLI 审查借鉴落地）
 
 - **起因**：用户要求审查 shareAI-lab/Kode-CLI 权限控制模式（只读，源码浅克隆通读 ~6200 行 permissions 实现）——三态判定/逐段评估/三桶规则与本项目同构，默认姿态相反（默认 YOLO、`--safe` 才武装）；独特资本 = OS 沙箱与权限联动（ask→allow）；解析侧自研 tokenizer + xi 正则黑名单补丁弱于本项目 tree-sitter AST（cd+写一律 ask = 放弃建模，本项目 M9.2 已精确建模）。借鉴清单逐条核实后收窄：fail-closed（引擎内已 fail-safe confirm，宿主层够不着 → 挂账）、可达性 lint（通配遮蔽问题本项目精确词条模型没有）、显式 confirm 桶（核实为审查表述有误，rules.toml 本就是三桶）——唯一幸存 = 建议/调试提示接线（D-15）。

@@ -130,6 +130,8 @@ mock LLM 后端驱动 agent 完成一轮固定 tool_use(命令可配,`--cmd`),�
 | 会话放行交互实弹验证（弹窗批准 → 同会话免问 → 关对话失效） | agent 行为 | 人工交互 | M8.6 会话放行 | 无头 confirm=拒绝（已定性）→ 无头流量不生长便签，CI 场景组不可测；随用户下次交互会话验证（serve 日志 reason 应现 session allow 标注） |
 | 跨命令 cwd 载荷字段探针定性（各 agent shell cwd 持久性 → 段级基准跨行语义） | agent 行为 | 探针实验 | [矩阵 §1.2](agent-compat-matrix.md) + design.md「写目标基准」 | M9.2 挂账：行内段级基准已闭合，跨行基准恒为项目根；载荷 `cwd` 字段（claude/crush 有）的持久性未定性——定性后可作跨行基准增强的输入；行内语义不依赖此项 |
 | 默认包自身 15 条 lint 告警核查 | 引擎单测 | 引擎单测 | lint 零告警或名册化 | M9.1 收尾观察：explain 头部恒现 15 warning——核查属正常设计取舍（等价冗余/delegates 类）还是死词条积压，产出名册化或清理 |
+| 残留 D:/ 形态测试夹具常量清理（script_engine/script_lua/seed/script 测试/recoverability 等） | 引擎单测 | 平台矩阵 CI | 测试夹具平台中立规范 | e2bb03c 只修红灯两常量（fixture::PROJECT/lookup PROJ → CARGO_MANIFEST_DIR）；其余 `D:/code/tmp/*` 断言不依赖根绝对性属侥幸绿——逐个中立化或名册化，防未来词法谓词改动重演 linux 红灯（机理见 rust-rewrite-notes「平台敏感的词法谓词与夹具根」） |
+| CI 动作钉版维护（setup-uv 不可变 tag 口径） | workflow 维护 | 钉版盘点 | 上游 releases 对照 | 408fcf4 已升级：setup-uv v10.1.0（消 Node 20 弃用警告）、ci.yml checkout v5→v7 与 agent-matrix 对齐、rust-toolchain v1→v2（全局 RUSTFLAGS 默认移除，clippy 显式旗标不受影响）；维护口径 = **setup-uv v8 起无 major 浮动 tag，升级必须钉完整不可变版号**；rust-cache/install-action 浮动 v2 健康 |
 
 ## 6. 探针与工具设计
 

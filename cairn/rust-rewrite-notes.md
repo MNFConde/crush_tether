@@ -1,7 +1,7 @@
 ---
 type: project_topic
 status: active
-summary: guard.py → Rust 重写的实现要点与踩坑：tree-sitter-bash AST 结构差异（重定向/fd/展开节点）、路径归一化、管道 sink 判定策略；脚本引擎接入（rhai/mlua）的沙箱与 API 坑；声明式规则函数（M8.6）的 FnPtr 原语；M9 解析层事实（$VAR 丢弃/命令替换旁路）与「数据+机制+消费者三件套成对落地」教训。
+summary: guard.py → Rust 重写的实现要点与踩坑：tree-sitter-bash AST 结构差异（重定向/fd/展开节点）、路径归一化、管道 sink 判定策略；脚本引擎接入（rhai/mlua）的沙箱与 API 坑；声明式规则函数（M8.6）的 FnPtr 原语；M9 解析层事实（$VAR 丢弃/命令替换旁路）与「数据+机制+消费者三件套成对落地」教训；平台敏感词法谓词与夹具根（inside_repo 相对分支双前置，CI linux 红灯）。
 tags: [crush_tether, rust, tree-sitter, migration, rhai, mlua]
 contains: [lesson, decision]
 created: 2026-09-04
@@ -56,6 +56,15 @@ authoring_mode: ai_generated
 - **旁路：`$( )` 内层命令原先完全不裁决**——command_substitution 是 command 节点的**子节点**，collect_commands 的容器递归列表既不含它、command 分支也不下潜，`echo $(sudo rm x)` 的内层被整体丢弃（解析层免检区）。修复：command 分支对 substitution 子节点以**独立子 shell 组**下潜收集（内层命令入列裁决 + 组语义正确）。
 - **教训：「kb 数据 + 引擎机制 + 消费者」三件套必须成对落地**（M9.1 git -C 修复的实证）——只补 kb 登记（数据）不修探测（机制）：sub 提取不消费 takes_value，`-C` 依旧顶掉子命令槽，无效；只修探测不补登记：带值 flag 的值被误当子命令，跳值失败；机制修了但 `ctx.sub` 不同步（消费者缺位）：`git -C x config a b` 查表修成 allow 后 two_state 拿 raw sub 查不到 write_arg_count——**写形态漏放**；不改全词元 flag 扫描：前导 flag 永远进不了 flag 桶（`git -c k=v log` 的 -c 漏检成放行洞）。四个半成品里两个是安全洞——跨层语义变更的关联面要一次列全再动手。
 - **坑：bash 内联 `node -e "…"` 写含反引号/`${}` 的补丁内容会被 Git Bash 展开**——模板字面量被 shell 当命令替换执行（`touch x`、`engine::segment_bases` 等杂命令现场出现），目标文件被污染且不报错；本批两次踩中、一次污染 decisions.md 靠 `git checkout` 恢复。多行补丁一律用 Write 工具落**临时脚本文件**再 node 执行后删除（同族：uv run 的 cwd 坑、commit.md 6.5 追加型编辑静默丢失——「拼接/内联不经语法边界校验」是同一类静默损坏）。
+
+## 平台敏感的词法谓词与夹具根（CI linux 红灯，2026-09-13）
+
+P10 八笔推送 CI 首跑即红灯（quality job ubuntu 三用例期望 confirm 得 allow，windows 全绿），归因三层，是「词法路径谓词 × 平台」类的原型坑：
+
+- **事实：`inside_repo` 的分叉点是 `Path::is_absolute()`**——`D:/x` 在 Windows 是绝对路径，在 Linux 是普通相对路径（`D:` 只是名字组件）。M9.2 起逃逸检查改为「`resolve_against_base` 先解析基准 → `inside_repo` 再判归属」，解析产物在 Linux 上仍相对 → 相对分支 `project_root.join(expanded)` 把项目根**再前置一次**，双前缀词法归一后仍判「根内」→ 逃逸漏判成 allow。旧版（M8 及以前）对**原始词元**做 `path_escapes`，不含盘符、两平台一致——管线升级把平台敏感性带了进来。
+- **夹具层根因**：两处测试常量硬编码 `D:/...` 形态根（`tests/fixture/mod.rs` 的 `PROJECT`、`src/lookup.rs` 测试的 `PROJ`）。三个失败用例恰是仅有的三个依赖「根为绝对路径」语义的逃逸断言；生产面不受影响（真实项目根恒绝对路径），纯测试夹具的平台可移植性缺陷。修复（e2bb03c）= 两常量改 `env!("CARGO_MANIFEST_DIR")`（两平台皆真绝对路径）。
+- **教训**：①跨平台语义的词法谓词，夹具**自写起就该平台中立**（CARGO_MANIFEST_DIR），不要依赖 CI 兜底——「本地全绿」在单平台开发下是假信心，平台矩阵 CI 的价值恰在首跑兑现（P9 从未 push，八笔同车首跑才爆）；②Windows 反斜杠路径嵌 bash 命令词元会被 tree-sitter 当转义符——测试里把路径嵌入命令串一律正斜杠化（`replace('\\', "/")`）。
+- **残留**：`script_engine.rs`/`script_lua.rs`/`config/seed.rs`/`script::mod` 测试/`recoverability.rs` 等仍用 `D:/code/tmp/*` 形态常量——今日两平台均绿属侥幸（断言不依赖根绝对性），清理挂账 test-and-ci §5。
 
 ## 决策记录
 
