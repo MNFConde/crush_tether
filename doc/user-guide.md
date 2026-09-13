@@ -52,9 +52,9 @@ crush-tether init
 
 默认包裁决画像（以生成的 `rules.toml` 为准，可自行调整）：
 
-- **放行**：读类命令（`ls`/`cat`/`grep`/`find`…）与项目内安全写（`git add`/`commit`、`touch`/`mkdir`、`cargo build`/`test`、`npm run` 等）；
+- **放行**：读类命令（`ls`/`cat`/`grep`/`find`…）、目录导航（`cd`——行内 cd 切换写目标解析基准，cd 项目外后的写效果仍会被拦）与项目内安全写（`git add`/`commit`、`touch`/`mkdir`、`cargo build`/`test`、`npm run` 等）；
 - **确认**：写重定向、写 flag、包管理器安装（`npm install`/`pip`）、`rm`/`curl`/`wget`；
-- **阻断**：`sudo`/`mkfs`/`dd`/`shutdown`、`git push`/`reset --hard` 等；
+- **阻断**：`sudo`/`mkfs`/`dd`/`shutdown`、`git push`/`reset --hard` 等；知识库标注的不可恢复命令（`parted`/`shred`/`wipefs` 族）即使未收录也升为阻断；
 - **未匹配命令一律确认兜底**——`node -e`、`go run` 等任意代码执行刻意不入 allow 表。
 
 改规则文件即热重载生效，无需重启。

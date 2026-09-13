@@ -2,6 +2,12 @@
 
 This file records substantive progress in reverse-chronological order — newest entry at the top, right below this line. Keep each entry short — summary and pointer only; conclusions settle into `cairn/<topic>.md`.
 
+## 2026-09-13 Ⅸ · P9 批次：解析修正 + 白名单扩容 + 可恢复性（用户批准每功能一 commit）
+
+- **起因**：用户要求核查 mdor tmp.md 25 条真实命令——allow 0/25，归因三类（git -C 前置全局选项顶掉子命令槽 ×7 / cd 未收录 ×15 / --format·rm 等显式词条）+ 解析失败 3；顺带发现 PATH 上的二进制是 M8.1 前旧版（仍会静默 seed 配置，实测踩中即清理恢复，重装挂收尾批）。
+- **三功能三提交（测试先行、全绿后才提交）**：M9.1 子命令探测跳值三件套 + --pretty/--format 收窄（ede7a34，D-12）→ M9.2 cd 放行 + 段级 cwd 基准 + $() 内层裁决旁路修复（9c75f63，D-13）→ M9.3 命令级 irreversible 槽位 + irreversible_gate + lint/suggest 消费 + 槽位表 12 槽位（611d7b3，D-14）。测试新档 global_option_sub / cd_segments / recoverability 三档。
+- **教训**：①「kb 数据 + 引擎机制 + 消费者」三件套必须成对落地——单补登记不修探测则无效，修探测不同步 ctx.sub 则 two_state 写形态漏放，改探测不改全词元扫描则 -c 成放行洞；②bash 内联 `node -e` 写含反引号/`${}` 的补丁内容会被 shell 展开（本批两次踩中，一次污染 decisions.md 靠 git checkout 恢复）——多行补丁一律写临时脚本文件再执行；③面向用户的示例命令先 explain 对账默认包画像再入文档（承接 Ⅷ）。
+
 ## 2026-09-12 Ⅷ · 用户文档批次：README 修正瘦身 + doc/user-guide.md 成档
 
 - **依据四工程设计文档核查 README，修 5 处硬伤**：①开头残留「三层皆缺才生成」旧语义与 D-09（init 显式生成）自相矛盾；②PATH 表述未反映 M8.2 wrapper（zcode 插件轨已改 wrapper 拉起、缺席响亮失败）；③`check` 行注释语义反（应为「无子命令参数时默认 check」）；④会话放行示例「批 `git push origin x` 后 `git push y` 免问」违反自家 deny 终审——`git push` 在默认包 deny 桶，永不弹窗放行；⑤zcode 插件节仍是 0.1.0 裸命令名流程。
