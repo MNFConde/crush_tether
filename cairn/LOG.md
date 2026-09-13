@@ -2,6 +2,13 @@
 
 This file records substantive progress in reverse-chronological order — newest entry at the top, right below this line. Keep each entry short — summary and pointer only; conclusions settle into `cairn/<topic>.md`.
 
+## 2026-09-13 Ⅺ · P10 批次：建议面调试提示 + 知识库扩容（Kode-CLI 审查借鉴落地）
+
+- **起因**：用户要求审查 shareAI-lab/Kode-CLI 权限控制模式（只读，源码浅克隆通读 ~6200 行 permissions 实现）——三态判定/逐段评估/三桶规则与本项目同构，默认姿态相反（默认 YOLO、`--safe` 才武装）；独特资本 = OS 沙箱与权限联动（ask→allow）；解析侧自研 tokenizer + xi 正则黑名单补丁弱于本项目 tree-sitter AST（cd+写一律 ask = 放弃建模，本项目 M9.2 已精确建模）。借鉴清单逐条核实后收窄：fail-closed（引擎内已 fail-safe confirm，宿主层够不着 → 挂账）、可达性 lint（通配遮蔽问题本项目精确词条模型没有）、显式 confirm 桶（核实为审查表述有误，rules.toml 本就是三桶）——唯一幸存 = 建议/调试提示接线（D-15）。
+- **M10.1（04ccf43）**：repl/explain 放行面参考行——suggest 判定类型化拆出两消费方共用；confirm 追加 `suggestion:` 行（零写入/跳过给原因/deny 不打）；写逃逸降级出口指 `[global]`；whole 收窄加子命令词形约束（实现期实测抓到 `jq .` 建议出 `allow.sub=["."]` 的质量问题后收紧，suggest 同口径）。`cause_of_explain` 与 `causes_of_components` 同构 + 单测钉漂移。
+- **M10.2（14c88d0）**：知识库登记 jq 危险 flag（等价类 + 带值）/ sed 写形态；首稿把 takes_value 误写成 bin 级数组被 `templates_parse_with_own_loader` 当场拦下——flag 级槽位形状纪律由测试承住的实证。
+- **架构印证**：xi 黑名单本质是「没有真解析器」的补丁（引号内元字符当可疑、`$( )` 整体 ask）——本项目 AST + 知识库数据路线的结构性优势在对比中显影；BashPrompt(模型自述) 规则是可混淆面，判定只吃结构化命令本身的原则再获支撑。
+
 ## 2026-09-13 Ⅹ · 沉淀审计（P9 后补账）
 
 - **审计发现四类未沉淀项并当场补齐**：①test-and-ci.md §5 补两条挂账（跨命令 cwd 载荷探针定性 / 默认包 15 条 lint 告警核查——按「挂账 → §5」落点映射，此前只在 ROADMAP）；②rust-rewrite-notes 补「解析层事实与坑」节（$VAR=simple_expansion 静默丢弃、$( ) 内层旁路、三件套成对落地教训展开、bash 内联 node -e 展开坑）并 bump updated；③agent-hook-testing 补「版本漂移噪声与真实样本评估」节（PATH 旧版二进制静默 seed 实测踩中 + tmp.md 评估工作流方法论化）并 bump updated；④毕业候选落点改判：bash node -e 展开坑落 rust-rewrite-notes CLI 坑节同族（windows-scripts.md 为 archived 迁移快照，不追加）。

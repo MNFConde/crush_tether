@@ -801,6 +801,15 @@ JSONL 一行一条裁决，字段覆盖：命令原文、结果、触发层级�
 - **降级矩阵（能力探测 + 静默关闭，绝不报错）**：claude = 全量可用（PostToolUse 含完整 tool_response）；zcode = 可用·降级（PostToolUse 仅执行结果，成败可判、输出内容不可分析）；crush = 不可用（无 PostToolUse 事件，M7.3 实测）——suggest 端 = 无 executions 文件时输出「无执行记录」说明后 exit 0。
 - **与零内置策略的关系**：学习不引入任何内置规则——建议全部派生自用户自己的裁决/执行历史，且零自动落盘；引擎查表、脚本、定稿点三性质（定稿点唯一/逃逸检查/deny 终审）对学习写入的条目一视同仁。
 
+### 调试提示（放行面参考行，M10.1 定稿）
+
+`explain` 与 `repl` 的逐命令块在 `reason:` 行后追加一行 `suggestion:`（2026-09-13 落地，Kode-CLI 权限审查借鉴收窄后的唯一落地项，D-15）：**confirm** 裁决给「怎么放行」的可粘贴规则行（零写入，尾注 `paste into rules.toml; review first`）；不建议时给原因行（`suggestion: none — <原因>`）；**allow/deny 不打行**（deny 永不建议）。建议目标默认落 `[local]`（被命中条目的作用域未入溯源键，保守默认）；**写逃逸降级**（allow 命中被 M7.0 降级 confirm）例外——出口提示 `[global]`（豁免逃逸检查；同位 allow 建议会形成「批了还是问」死循环）。
+
+- **定位 = 单信号参考，不是学习结论**：判定与跳过清单复用 suggest（类型化 `build_suggestion_typed`，口径完全同源——危险类别/脚本规则/自由参数/写逃逸四类跳过 + deny 永不建议），但**不带** suggest 的重复门槛与执行成功条件；与 D-10 的分工：suggest 守长期统计、调试提示答当下单条。
+- **whole 收窄的子命令词形约束（M10.1 收紧，suggest 命令同口径）**：sub 词元须字母数字开头且仅字母数字/`-`/`_`——`jq .` 的 `.`、`cat f.txt` 的路径不再被当子命令建议（收紧前 `jq .` 会建议 `allow.sub = ["."]`）。
+- **cause 推导同构防漂移**：`cause_of_explain`（explain 路径从 `CommandExplain` 重建）与 `causes_of_components`（裁决路径）守卫四条一致，单测钉两路同 key。
+- **不做**：decisions.jsonl 不加建议字段（日志 schema 不动）；硬清单无配置口（`--include-dangerous` 挂账 ROADMAP）。
+
 ### 规则测试工具（M7.1，定稿）
 
 面向「用户自助调试自己的规则配置与脚本」的四件套（2026-09-08 落地）：

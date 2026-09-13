@@ -24,6 +24,7 @@
 | [D-12](#d-12-子命令探测跳过前置全局选项与-flag-收窄) | 子命令探测跳过前置全局选项（三件套）+ --pretty/--format 移出 confirm.flag | 已决策 | [design.md「单命令建模」](design.md#单命令建模定稿) |
 | [D-13](#d-13-cd-放行与段级-cwd-基准) | cd 放行 + 段级 cwd 基准（毒化 + 子 shell 作用域） | 已决策 | [design.md「写目标基准与 cd 段级感知」](design.md#写目标基准与-cd-段级感知m92-定稿) |
 | [D-14](#d-14-命令级可恢复性槽位入知识库) | 命令级可恢复性槽位：confirm 自动分流 deny，allow 仍须用户声明 | 已决策 | [design.md「命令知识库」](design.md#命令知识库bucket-框架定稿) |
+| [D-15](#d-15-建议面调试提示接线replexplain-放行面参考行) | 建议面调试提示：repl/explain 复用 suggest 判定，单信号零写入 | 已决策 | [design.md「调试提示」](design.md#调试提示放行面参考行m101-定稿) |
 
 ---
 
@@ -381,6 +382,33 @@
 > 原因：声明层零条件判断原则（可恢复性判定需上下文），且与「三桶 + default」的查表模型冲突。
 
 **影响**：`src/knowledge.rs`（BinEntry 四处登记）；`src/script/{mod,lua}.rs`（新原语 `kb_bin_irreversible`）；默认包四模板（kb 数据 + irreversible_gate 规则）；`src/lint.rs`（两告警）；`src/suggest.rs`（skip 接线）；测试 knowledge/script/lint/suggest/config_design_example 扩展。
+
+---
+
+## D-15 建议面调试提示接线（repl/explain 放行面参考行）
+
+| 状态 | 日期 | 规范位置 |
+|---|---|---|
+| 已决策（含实现落地 M10.1/M10.2） | 2026-09-13 | design.md「调试提示（放行面参考行，M10.1 定稿）」 |
+
+**背景**：Kode-CLI 权限审查（2026-09-13，只读对比其 `packages/core/src/permissions/` 全套实现）产出的借鉴清单逐条核实后仅一条幸存——Kode 在 ask/deny 回执携带 `suggestions[]`（规则候选，UI 可一键落盘）。本项目 suggest 命令（D-10）已有同型判定但只在离线统计路径可用；调试工作流（repl/explain）看到 confirm 时需自行切到 suggest 才知道「怎么放行」。审查的其余借鉴项分别证伪或降级：fail-closed 开关（引擎内已是 fail-safe confirm，引擎外失败归宿主，环境变量够不着——只剩装配层 wrapper 加固，低优先挂账）；规则可达性 lint（Kode 需要它源于前缀/通配规则空间，本项目精确词条模型结构性地无此类遮蔽）；显式 confirm 桶（核实后 rules.toml 本就是三桶，审查表述有误）。
+
+**决策**：①suggest 建议判定拆为类型化形态（`build_suggestion_typed` + `SkipReason`），suggest 命令与 repl/explain 调试提示共用判定、各自渲染文案——跳过清单口径完全同源（危险类别/脚本规则/自由参数/写逃逸四类 + deny 永不建议）；②`explain`/`repl` 逐命令块 `reason:` 行后追加一行 `suggestion:`：命中给可粘贴规则行（零写入），跳过给原因行，allow/deny 不打行；③调试提示定位**单信号参考**——不带 suggest 的重复门槛与执行成功条件，答当下单条而非学习结论；④写逃逸降级（allow 命中被 M7.0 降级 confirm）的建议出口指 `[global]`（同位 allow 建议会形成「批了还是问」死循环），其余默认 `[local]`；⑤whole 收窄加子命令词形约束（字母数字开头、仅字母数字/`-`/`_`），`jq .` 的 `.` 不再被当子命令建议，suggest 命令同口径收紧。
+
+**依据**：判定唯一权威防两路漂移（`cause_of_explain` 与 `causes_of_components` 同构 + 单测钉一致）；跳过清单沿用保守默认（裁决面用户全权、建议面宁可少说不可说错的有意不对称）；零写入保持 D-10 的审计面（git diff 即回滚面）不变。同批 M10.2 把审查中可知识库化的少数事实登记进默认包（jq 危险 flag 等价类 + sed 写形态）——xi 正则黑名单的其余部分（结构类注入模式）本项目已由 tree-sitter 结构性覆盖且更精确（`$( )` 内层逐命令裁决 vs Kode 整体 ask），不搬。
+
+### 被否决的替代方案
+
+> [!CAUTION] 【已否决】 decisions.jsonl 行加 suggestion 字段
+> 原因：日志 schema 是三 agent 裁决面契约，为建议功能扩字段收益低、churn 高——交互面（repl/explain）已承载全部信息。
+>
+> 【已否决】 硬清单配置口 / suggest `--include-dangerous` 旗标
+> 原因：需求比看起来小（bin 入 allow 桶后即无 confirm 也无建议）；建议面保守默认是有意设计。挂账 ROADMAP，有真实需求再议。
+>
+> 【已否决】 Kode `BashPrompt(描述)` 规则（匹配模型自述的 description 字段）
+> 原因：模型控制该字段，是可混淆面——本项目判定只吃结构化命令本身。
+
+**影响**：`src/suggest.rs`（类型化判定 + `kb_skip_fact`/`suggestion_line` 抽出 + whole 收窄收紧）；`src/service.rs`（`cause_of_explain`）；`src/report.rs`（`render_command_with_suggestion`，explain/repl 共用咽喉）；`src/repl.rs`/`src/main.rs`（接线）；默认知识库模板 + design.md 字节镜像（jq/sed）；`tests/rule_tools.rs` 四端到端 + suggest 单测九分支。
 
 ---
 

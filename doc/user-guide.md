@@ -257,11 +257,28 @@ tail .crush-tether/decisions.jsonl   # 出现新裁决记录 = 链路通
 | `check --cases <file>` | 断言用例批量对账（TOML `[[case]] cmd/expect`），全过 exit 0、任一失败 exit 1——规则变更的回归护栏 |
 | `benchmark` | 双跑对比（in-process vs serve 路径），裁决 diff 为空即路径等价 |
 | `init [--user\|--global] [--engine lua]` | 显式生成默认配置包 |
-| `explain '<command>'` | 单发全溯源报告：命中层级/桶/token、归一链、写效果扫描集、脚本改判——调规则先看它 |
-| `repl` | 规则调试器：每条输入重载配置（改规则即测免重启）、空行重跑上一条、`!N` 回放历史、`:lint` 看告警 |
+| `explain '<command>'` | 单发全溯源报告：命中层级/桶/token、归一链、写效果扫描集、脚本改判——调规则先看它；confirm 命令附带一行放行面参考（见下） |
+| `repl` | 规则调试器：每条输入重载配置（改规则即测免重启）、空行重跑上一条、`!N` 回放历史、`:lint` 看告警；建议行与 explain 同形态 |
 | `suggest [--threshold 3] [--window 30] [--format toml\|table]` | 权限建议，见[下节](#会话临时放行与-suggest) |
 
 规则测试四件套的设计与基建复用见 [design.md「规则测试工具」](design.md#规则测试工具m71定稿)。
+
+### 放行面参考行（suggestion）
+
+`explain` / `repl` 的每条命令块末尾，confirm 裁决会追加一行 `suggestion:`——告诉你**这条若想放行该改哪**，或**为什么不建议放行**：
+
+```text
+[1] terraform plan => confirm
+    lookup: confirm <- project.default (token: terraform)
+    ...
+    suggestion: [local.terraform] allow.sub = ["plan"]   (paste into rules.toml; review first)
+```
+
+- 命中建议 → 一行可粘贴的 rules.toml 片段（**零写入**，审阅后自己粘贴）；
+- 不建议 → 原因行（`none — ...`）：危险类别（curl/wget/rm 等硬清单或知识库标注 may_write/irreversible）、脚本规则触发（改脚本，无 TOML 对应物）、自由参数无安全收窄、写目标出项目（此时出口是 `[global]` allow——豁免逃逸检查）；
+- allow/deny 裁决不打此行（deny 永不建议）。
+
+判定与跳过清单和 `suggest` 命令完全同源，但这是**单次参考**（没有 suggest 的重复次数门槛），不是学习结论——是否真改配置，永远由你审阅后手动决定。详见 [design.md「调试提示」](design.md#调试提示放行面参考行m101-定稿)。
 
 ## 环境变量参考
 
@@ -341,7 +358,7 @@ hook 大概率没被拉起（agent 侧 fail-open 放行）。按序查：① `wh
 三层皆缺，引擎按裸兜底运行（未匹配一律 confirm）。到项目根跑 `crush-tether init`；stderr 里也有同样提示。
 
 **Q：某条命令被误拦，想放行？**
-`crush-tether explain '<command>'` 看命中溯源（哪层/哪个桶/哪个 token）→ 改 `rules.toml`（挪桶，或 `{ add = [...], remove = [...] }` 增删）→ 热重载即生效 → 把该命令写进 `check --cases` 用例文件作回归护栏。
+`crush-tether explain '<command>'` 看命中溯源（哪层/哪个桶/哪个 token）——confirm 裁决末尾的 `suggestion:` 行会直接给出可粘贴的规则片段或"为什么不建议"的原因（见[放行面参考行](#放行面参考行suggestion)）→ 改 `rules.toml`（挪桶，或 `{ add = [...], remove = [...] }` 增删）→ 热重载即生效 → 把该命令写进 `check --cases` 用例文件作回归护栏。
 
 **Q：改了规则没生效？**
 serve 热重载有 600ms debounce 且信号在请求间隙消费——最坏滞后一个请求；看 decisions.jsonl 的 `type:"load"` 事件行确认重载发生。脚本编译失败会保留旧快照并 stderr 告警。
