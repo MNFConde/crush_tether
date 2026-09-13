@@ -108,6 +108,15 @@ pub fn lint_file(
                         ),
                     ));
                 }
+                if *decision == Decision::Allow && irreversible_bin(kb, t) {
+                    out.push(suggestion(
+                        "allow-irreversible",
+                        format!(
+                            "`{t}` is known to be irreversible ({scope_label}.{bucket}); \
+                             blocking it prevents unrecoverable damage"
+                        ),
+                    ));
+                }
                 if *decision == Decision::Allow {
                     // write_flags 消费（D-06 lint+脚本数据源组）：带这些 flag
                     // 才会写——allow 它 = 允许这些写形态。
@@ -288,6 +297,15 @@ fn check_decl(
             format!(
                 "`{bin}` is known to possibly write and is script-allowable \
                  ({where_}); a script may permit arbitrary writes for it"
+            ),
+        ));
+    }
+    if irreversible_bin(kb, &bin) {
+        out.push(suggestion(
+            "script-allow-irreversible",
+            format!(
+                "`{bin}` is known to be irreversible and is script-allowable \
+                 ({where_}); blocking it prevents unrecoverable damage"
             ),
         ));
     }
@@ -477,6 +495,13 @@ fn dims_tokens(spec: Option<&BucketSpec>, sub: bool) -> Vec<String> {
 fn may_write_bin(kb: Option<&KnowledgeBase>, bin: &str) -> bool {
     kb.and_then(|k| k.bins.get(bin))
         .and_then(|e| e.may_write)
+        .unwrap_or(false)
+}
+
+/// M9.3：命令级不可恢复事实（allow/script_allow 声明告警 + suggest 跳过）。
+fn irreversible_bin(kb: Option<&KnowledgeBase>, bin: &str) -> bool {
+    kb.and_then(|k| k.bins.get(bin))
+        .and_then(|e| e.irreversible)
         .unwrap_or(false)
 }
 

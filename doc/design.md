@@ -556,6 +556,23 @@ flag."-c"        = { takes_value = true }
 flag."--git-dir" = { takes_value = true }
 flag."--work-tree" = { takes_value = true }
 
+# 命令级不可恢复事实（M9.3 irreversible_gate 的数据源）：效果无法恢复的
+# 命令，未收录而落 confirm 时升 deny；只记强断言（rm 等上下文依赖的不标）。
+[parted]
+irreversible = true
+
+[fdisk]
+irreversible = true
+
+[sfdisk]
+irreversible = true
+
+[shred]
+irreversible = true
+
+[wipefs]
+irreversible = true
+
 [make]
 delegates = "Makefile"            # 联系：委托执行项目内文件中的任意命令
 
@@ -563,18 +580,20 @@ delegates = "Makefile"            # 联系：委托执行项目内文件中的�
 wraps = "*"                       # 联系：包装壳（v1 仅登记）
 ```
 
-**槽位封闭集（v1 共 10 个）**——按消费机制分组，完整建模依据见[单命令建模](#单命令建模定稿)：
+**槽位封闭集（v1 共 12 个）**——按消费机制分组，完整建模依据见[单命令建模](#单命令建模定稿)：
 
 | 组 | 槽位 | 适用层级 | 记录的事实 | 消费机制 |
 |---|---|---|---|---|
 | 运行时归一 | `alias_of` | 命令/子命令 | 本条目是别处的等价别名（npm exec ≡ npx） | 查表前归一改写 |
 | 运行时归一 | `same_flag` | flag | 与另一 flag 等价（--force ≡ -f） | flag 归一到等价类规范形 |
-| 运行时归一 | `takes_value` | flag | 该 flag 后跟一个值 | 引擎分解 `--output=x`/`-o x`/`-oX` 值边界，归一不丢值 |
+| 运行时归一 | `takes_value` | flag | 该 flag 后跟一个值 | 引擎分解 `--output=x`/`-o x`/`-oX` 值边界，归一不丢值；子命令探测跳值（M9.1） |
+| 查表逃逸检查 | `write_position` | 命令 | 最后一个位置参数是写目标（cp src dst 的 dst），读源豁免 | 写目标感知逃逸检查（M7.0，升格时漏补本行，更正登记 27） |
 | lint+脚本数据源 | `may_write` | 命令/子命令 | 有写的可能（npx 执行任意包） | lint 建议；不改裁决 |
 | lint+脚本数据源 | `write_flags` | 命令/子命令 | 带这些 flag 才会写（curl -o） | 同上 |
 | lint+脚本数据源 | `write_tokens` | 子命令 | 这些 token 出现即写形态（branch -d） | 默认 rules.rhai 两态判定数据源 |
 | lint+脚本数据源 | `write_arg_count` | 子命令 | 位置参数 ≥N 即写形态（git config ≥2） | 同上 |
 | lint+脚本数据源 | `irreversible` | flag | 破坏性/不可逆参数（--hard） | lint 建议；脚本数据源 |
+| lint+脚本数据源 | `irreversible`（命令级，M9.3） | 命令 | 命令效果无法恢复（parted/shred 族；只记强断言） | 默认脚本 `irreversible_gate`（confirm 升 deny）；lint 告警；suggest 跳过清单 |
 | lint 提示 | `delegates` | 命令 | 实际执行项目内文件定义的命令（make→Makefile） | lint 提示「allow 它 = 允许执行被委托物」 |
 | 登记后置 | `wraps` | 命令 | 包装壳（sudo/env/nice/xargs，危险性由被包裹命令决定） | v1 不消费；剥壳归一后置（sudo 已在 deny 桶兜住） |
 
@@ -601,7 +620,7 @@ wraps = "*"                       # 联系：包装壳（v1 仅登记）
 | bin 裸名 | `rm`、`git` | 知识库 `[bin]` 表头 |
 | bin 路径形态 | `/usr/bin/rm`、`./x.sh` | 引擎归一：绝对路径取 basename 再查表；项目内脚本无法预先入库 → 未识别走 confirm 兜底 |
 | 环境变量前缀 | `FOO=bar cmd` | 引擎解析剥除（bash 语法，非命令属性） |
-| 子命令 / flag / 位置参数 | `git branch -d`、`git config a b` | 知识库槽位（`sub`/`flag` 结构键 + 10 槽位） |
+| 子命令 / flag / 位置参数 | `git branch -d`、`git config a b` | 知识库槽位（`sub`/`flag` 结构键 + 12 槽位） |
 | 参数内容模式 | curl 参数含 `\|`、sed 脚本体 | 脚本层（这是谓词不是事实，按「谓词封闭」原则永不进知识库） |
 | 写重定向 / 复合拼接 | `> f`、`a && b` | 引擎原语（shell 语法：写重定向检测 / flatten 拆分） |
 | 包装/放大壳 | `sudo`/`env`/`xargs` | `wraps`（v1 登记后置） |
@@ -664,7 +683,7 @@ end)
 - **注册边界校验**（拒载整个脚本，与 script_allow 对账同类）：重复名、空名、负优先级、超上限（128）、第三实参非函数。
 - **`confirm_as("子名")`**：规则函数内数据驱动分支的子名上报（如两态判定按知识库 `write_tokens` 逐 token 命中），溯源名 `规则名:子名`——批 `-d` 不放行 `-D` 的粒度基础。旧 check 形态亦可调用（溯源 `check:子名`）；裸决策旧形态溯源名 = null。
 - **安全语义不变清单**：`allow("bin")` 声明对账五件套照常在规则函数内可用；deny 终审照旧；限流照盖（Rhai 侧声明式下预算按规则数放大——每次调用独立 global，仍上界有界；Lua 侧预算跨规则共享，更严侧）；`allow` 契约违约路径不变。
-- **默认包改写**：`rules.rhai`/`rules.lua` 四具名规则（`pipe_sink`=10 / `find_mutator`=20 / `two_state`=30 / `write_redirect`=40——deny 类先跑），two_state 内部 `confirm_as(token)` 上报子名。
+- **默认包改写**：`rules.rhai`/`rules.lua` 五具名规则（`pipe_sink`=10 / `irreversible_gate`=15 / `find_mutator`=20 / `two_state`=30 / `write_redirect`=40——deny 类先跑；irreversible_gate 为 M9.3 增设），two_state 内部 `confirm_as(token)` 上报子名。
 
 ### 会话内临时放行（session allow，定稿）
 
@@ -805,6 +824,7 @@ allow.flag = { remove = ["-h"] }                 # 继承并移除（flag 也能
 
 > 以下为对本文档已定稿措辞的更正（草案阶段调整，非推翻方向），原定稿表述处已加更正指针，不静默覆盖：
 
+27. 「知识库槽位封闭集（v1 共 10 个）」表格 → **2026-09-13 修订（M9.3）**：表格实为 10 行、标题 10 个，但更正登记 22（M7.0）已将槽位集增至 11（`write_position` 入册而表格漏补行）——本次随 M9.3 命令级 `irreversible` 槽位入册一次到位：**12 槽位**，表格补 `write_position` 行并增命令级 `irreversible` 行；`knowledge.rs` 模块文档同步 11 → 12。同批坐实 suggest 跳过清单对 `irreversible` 的消费（原设计声称「lint 建议/脚本数据源」消费，suggest 半边此前未接线）。
 26. 「子命令 = bin 后第一个词元（`normalize` 硬取 args[0]）；flag 扫描自 args[1..] 起」→ **2026-09-13 修订（M9.1/D-12）**：子命令 = args 中**首个非 flag 词元**（`-` 开头按 flag；kb `takes_value` 登记的带值 flag 跳过其值），flag 扫描改全词元——`git -C/--no-pager/-c` 等前置全局选项不再顶掉子命令槽，前导 flag 可命中 flag 桶；脚本 `ctx.sub` 同口径（ScriptCtx 与查表共用 `extract_sub` 探测，kb 缺席时纯语法探测语义不缺位）。同批：git confirm.flag 移除 `--pretty`/`--format`（输出整形不落盘，真写面由 --output/-o/-c 承载，组合形态仍被 --output 拦）。
 25. 「`script.rule` v1 恒 null——脚本无命名规则概念」（日志节注记）→ **2026-09-12 更正**：「无命名规则概念」表述过粗（用户纠正）——规则脚本结构上每个分支即一条规则（默认包四分支即四条），v1 缺的只是**命名通道**（决策返回值为光秃枚举，引擎收不到分支名）。随 M8.6 声明式规则函数（`rule()` 注册器 + `confirm_as`）激活该保留字段。
 24. 「脚本单 `check()` 入口」→ **2026-09-12 M8.6 扩展为双形态并存**（设计演进，非推翻）：`rule(名字, 优先级, 函数)` 声明式注册 + 旧 `check` 形态，见[声明式规则函数](#声明式规则函数rule-注册器定稿)；表达力等价，顺序显式化 + 规则可追溯。同期：权限学习节定位调整（suggest 降为配置打磨手段，主功能 = 会话内临时放行），见 D-10。

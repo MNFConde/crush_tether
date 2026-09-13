@@ -58,6 +58,17 @@ rule("pipe_sink", 10, |ctx| {
     decision::PASS
 });
 
+// ── irreversible_gate（优先级 15）：查表落 confirm 的不可恢复命令升 deny ──
+// 数据读知识库命令级 irreversible 槽位（M9.3）：未收录而落 default confirm
+// 的 parted/shred 族由此升 deny（对齐「无法恢复 → 阻断」）；已显式收录
+// confirm 桶的 bin 若被知识库标注，同样升 deny（策略一致）。deny 终审不变。
+rule("irreversible_gate", 15, |ctx| {
+    if ctx.verdict == decision::CONFIRM && kb_bin_irreversible(ctx.bin) {
+        return decision::DENY;
+    }
+    decision::PASS
+});
+
 // ── find_mutator（20）：find 的 -delete / -exec 族可绕过 rm 门 ──
 rule("find_mutator", 20, |ctx| {
     if ctx.bin == "find" {

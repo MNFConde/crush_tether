@@ -477,11 +477,27 @@ fn register_primitives(
             .map_err(compile_err)?,
         )
         .map_err(compile_err)?;
+    let kb_present = kb.clone();
     lua.globals()
         .set(
             "kb_present",
-            lua.create_function(move |_, ()| Ok(kb.is_some()))
+            lua.create_function(move |_, ()| Ok(kb_present.is_some()))
                 .map_err(compile_err)?,
+        )
+        .map_err(compile_err)?;
+    // M9.3：命令级不可恢复事实（默认脚本 irreversible_gate 升 deny 的数据
+    // 源）；bin 级独立命名（lua globals 单槽无法按 arity 重载 2 参形态）。
+    lua.globals()
+        .set(
+            "kb_bin_irreversible",
+            lua.create_function(move |_, bin: String| {
+                Ok(kb
+                    .as_ref()
+                    .and_then(|k| k.bins.get(&bin))
+                    .and_then(|e| e.irreversible)
+                    .unwrap_or(false))
+            })
+            .map_err(compile_err)?,
         )
         .map_err(compile_err)?;
     // M9.1：带值 flag 查询（canon 规范形；默认模板 positional_count 跳值

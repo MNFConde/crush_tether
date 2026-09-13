@@ -23,6 +23,7 @@
 | [D-11](#d-11-脚本声明式规则函数rule-注册器) | 脚本声明式规则函数：rule() 注册器 + check 双形态并存 | 已决策 | [design.md「声明式规则函数」](design.md#声明式规则函数rule-注册器定稿) |
 | [D-12](#d-12-子命令探测跳过前置全局选项与-flag-收窄) | 子命令探测跳过前置全局选项（三件套）+ --pretty/--format 移出 confirm.flag | 已决策 | [design.md「单命令建模」](design.md#单命令建模定稿) |
 | [D-13](#d-13-cd-放行与段级-cwd-基准) | cd 放行 + 段级 cwd 基准（毒化 + 子 shell 作用域） | 已决策 | [design.md「写目标基准与 cd 段级感知」](design.md#写目标基准与-cd-段级感知m92-定稿) |
+| [D-14](#d-14-命令级可恢复性槽位入知识库) | 命令级可恢复性槽位：confirm 自动分流 deny，allow 仍须用户声明 | 已决策 | [design.md「命令知识库」](design.md#命令知识库bucket-框架定稿) |
 
 ---
 
@@ -352,6 +353,34 @@
 > 原因：文本切分与 AST 拉平对不上号（引号/嵌套），组作用域无法表达；parser 层标注组 id 才能表达子 shell 语义。
 
 **影响**：`src/cmd_parse.rs`（subshell_id/has_expansion/命令替换内层入列）；`src/engine.rs`（segment_bases/decide_with 签名）；`src/lookup.rs`（base 贯通查表与逃逸检查）；`src/service.rs`、`src/script/mod.rs`（链/定稿点透传）；默认包 allow 增 cd；`tests/cd_segments.rs` 新档 + engine 单测。
+
+---
+
+*本文件为决策记录，随实现推进持续更新；既有定稿出现修订时逐步补录为 ADR。*
+
+---
+
+## D-14 命令级可恢复性槽位入知识库
+
+| 状态 | 日期 | 规范位置 |
+|---|---|---|
+| 已决策（含实现落地 M9.3） | 2026-09-13 | design.md「命令知识库（bucket 框架，定稿）」槽位表 |
+
+**背景**：用户提出查表兜底（未收录命令）按「命令是否能恢复」区分确认与放行，并把可恢复性补进命令知识库。分析确认：可恢复性是**事实**（知识库定位吻合，flag 级 `irreversible` 已有先例）；但「可恢复 → allow」不能自动化——脚本无放行权（allow 只能激活用户声明条目）与知识库不产生裁决（D-01）是本项目安全性质的物理边界。另按用户标准「危险 = 无法恢复」重审：未收录的不可恢复命令（parted/fdisk/shred 族）现状落 confirm，应升 deny。
+
+**决策**：①知识库增**命令级 `irreversible` 槽位**（第 12 槽位；只记强断言，rm 等上下文依赖的不标）；②默认脚本新规则 `irreversible_gate`（priority 15）：查表落 confirm 且 kb 标注 irreversible 的 bin 升 **deny**（含已显式收录 confirm 桶的标注 bin——策略一致）；③lint 新告警 `allow-irreversible`/`script-allow-irreversible`；④suggest 跳过清单接线命令级 irreversible（坐实设计声称的跳过半边）；⑤默认包登记 parted/fdisk/sfdisk/shred/wipefs。**allow 侧维持用户笔原则**：可恢复命令的放行 = 用户补 allow 桶或 `script_allow` 声明（kb 事实辅助人工判定），引擎不自动放行。
+
+**依据**：槽位跟着消费机制走（D-06）——三个消费者全部落实后才入册；「无法恢复 → deny」与 deny 终审同一原则（不可逆操作不给任何机制留放行通道）；单一可恢复性标准不足（curl|sh 谈不上不可恢复但必须 deny），故放大面类仍留 confirm。
+
+### 被否决的替代方案
+
+> [!CAUTION] 【已否决】 kb 标注可恢复 → 引擎自动 allow
+> 原因：脚本无放行权 + 知识库不产生裁决（D-01）——自动放行 = 知识库演化为隐性规则系统，违反零内置策略的架构边界。
+>
+> 【已否决】 把可恢复性判成 confirm/allow 两档的查表新桶
+> 原因：声明层零条件判断原则（可恢复性判定需上下文），且与「三桶 + default」的查表模型冲突。
+
+**影响**：`src/knowledge.rs`（BinEntry 四处登记）；`src/script/{mod,lua}.rs`（新原语 `kb_bin_irreversible`）；默认包四模板（kb 数据 + irreversible_gate 规则）；`src/lint.rs`（两告警）；`src/suggest.rs`（skip 接线）；测试 knowledge/script/lint/suggest/config_design_example 扩展。
 
 ---
 

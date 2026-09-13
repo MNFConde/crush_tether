@@ -93,7 +93,7 @@ fn jstr<'a>(v: &'a serde_json::Value, key: &str) -> Option<&'a str> {
 
 /// 从候选 cause（聚合计数）生成建议：Some((bin, 建议条目描述)) 或 None + 跳过原因。
 fn build_suggestion(
-    kb_may_write: &dyn Fn(&str) -> bool,
+    kb_skip_fact: &dyn Fn(&str) -> bool,
     kind: &str,
     key: &str,
     sample: &str,
@@ -111,17 +111,17 @@ fn build_suggestion(
             let _ = layer;
             if entry == "confirm" {
                 // 裸列表整命令命中 → 建议 bin 级 allow。
-                if skip_bin(kb_may_write, token) {
+                if skip_bin(kb_skip_fact, token) {
                     return Err(format!("`{token}` 属危险类别（may_write/网络/不可逆）"));
                 }
                 Ok((String::new(), format!("allow = [\"{token}\"]")))
             } else if let Some(bin) = entry.strip_suffix(".confirm.sub") {
-                if skip_bin(kb_may_write, bin) {
+                if skip_bin(kb_skip_fact, bin) {
                     return Err(format!("`{bin}` 属危险类别（may_write/网络/不可逆）"));
                 }
                 Ok((bin.to_string(), format!("allow.sub = [\"{token}\"]")))
             } else if let Some(bin) = entry.strip_suffix(".confirm.flag") {
-                if skip_bin(kb_may_write, bin) {
+                if skip_bin(kb_skip_fact, bin) {
                     return Err(format!("`{bin}` 属危险类别（may_write/网络/不可逆）"));
                 }
                 Ok((bin.to_string(), format!("allow.flag = [\"{token}\"]")))
@@ -135,7 +135,7 @@ fn build_suggestion(
             let Some(bin) = words.first() else {
                 return Err("空命令".into());
             };
-            if skip_bin(kb_may_write, bin) {
+            if skip_bin(kb_skip_fact, bin) {
                 return Err(format!("`{bin}` 属危险类别（may_write/网络/不可逆）"));
             }
             match words.get(1) {
@@ -151,8 +151,8 @@ fn build_suggestion(
     }
 }
 
-fn skip_bin(kb_may_write: &dyn Fn(&str) -> bool, bin: &str) -> bool {
-    SKIP_BINS.contains(&bin) || kb_may_write(bin)
+fn skip_bin(kb_skip_fact: &dyn Fn(&str) -> bool, bin: &str) -> bool {
+    SKIP_BINS.contains(&bin) || kb_skip_fact(bin)
 }
 
 /// suggest 主入口。返回进程 exit code（恒 0，除非 IO 异常——学习面绝不
@@ -171,11 +171,11 @@ pub fn run(project: &Path, opts: &SuggestOptions) -> i32 {
     let kb = std::fs::read_to_string(project.join(".crush-tether").join("knowledge.toml"))
         .ok()
         .and_then(|t| crate::knowledge::KnowledgeBase::parse_toml(&t).ok());
-    let kb_may_write = |bin: &str| -> bool {
+    // 永久跳过的事实判据（M9.3 起 = may_write + 命令级 irreversible）。
+    let kb_skip_fact = |bin: &str| -> bool {
         kb.as_ref()
             .and_then(|k| k.bins.get(bin))
-            .and_then(|e| e.may_write)
-            .unwrap_or(false)
+            .is_some_and(|e| e.may_write.unwrap_or(false) || e.irreversible.unwrap_or(false))
     };
 
     // 窗口下限。
@@ -269,7 +269,7 @@ pub fn run(project: &Path, opts: &SuggestOptions) -> i32 {
     let mut suggestions: Vec<(String, String, usize)> = Vec::new(); // (bin, 条目, 次数)
     let mut skipped: Vec<(String, usize, String)> = Vec::new(); // (概要, 次数, 原因)
     for ((kind, key), n, sample) in &candidates {
-        match build_suggestion(&kb_may_write, kind, key, sample) {
+        match build_suggestion(&kb_skip_fact, kind, key, sample) {
             Ok((bin, entry)) => suggestions.push((bin, entry, *n)),
             Err(reason) => skipped.push((sample.clone(), *n, reason.to_string())),
         }
@@ -282,7 +282,7 @@ pub fn run(project: &Path, opts: &SuggestOptions) -> i32 {
             "count", "kind", "bin", "cause / suggestion"
         ));
         for ((kind, key), n, sample) in &candidates {
-            let suggestion = match build_suggestion(&kb_may_write, kind, key, sample) {
+            let suggestion = match build_suggestion(&kb_skip_fact, kind, key, sample) {
                 Ok((bin, e)) => format!("{bin} {e}"),
                 Err(reason) => format!("SKIP: {reason}"),
             };

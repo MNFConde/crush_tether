@@ -42,6 +42,23 @@ flag."-c"        = { takes_value = true }
 flag."--git-dir" = { takes_value = true }
 flag."--work-tree" = { takes_value = true }
 
+# 命令级不可恢复事实（M9.3 irreversible_gate 的数据源）：效果无法恢复的
+# 命令，未收录而落 confirm 时升 deny；只记强断言（rm 等上下文依赖的不标）。
+[parted]
+irreversible = true
+
+[fdisk]
+irreversible = true
+
+[sfdisk]
+irreversible = true
+
+[shred]
+irreversible = true
+
+[wipefs]
+irreversible = true
+
 [make]
 delegates = "Makefile"            # 联系：委托执行项目内文件中的任意命令
 

@@ -760,8 +760,19 @@ fn register_primitives(
             .unwrap_or(false)
     });
     // 知识库整体在位性：默认脚本的两态谓词兜底条件（删光 → confirm）。
-    let kb_present = kb;
+    let kb_present = kb.clone();
     engine.register_fn("kb_present", move || -> bool { kb_present.is_some() });
+
+    // M9.3：命令级不可恢复事实（默认脚本 irreversible_gate 升 deny 的数据
+    // 源）；bin 级独立命名（lua globals 单槽无法按 arity 重载 2 参形态）。
+    let kb_bin_irr = kb;
+    engine.register_fn("kb_bin_irreversible", move |bin: &str| -> bool {
+        kb_bin_irr
+            .as_ref()
+            .and_then(|k| k.bins.get(bin))
+            .and_then(|e| e.irreversible)
+            .unwrap_or(false)
+    });
 
     // M9.1：带值 flag 查询（canon 规范形；默认模板 positional_count 跳值
     // 用）——kb 缺席或未登记返回 false（值词元按位置参数计，保守不变）。

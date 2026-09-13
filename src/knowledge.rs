@@ -5,12 +5,12 @@
 //!
 //! - 条目文法：一命令一表头 `[bin]`；`sub` / `flag` 是仅有的两个保留结构键
 //!   （点号键打开子条目空间，值用单行 inline table）；其余键为槽位。
-//! - 槽位封闭集（v1 共 11 个，槽位跟着消费机制走，D-06）：
+//! - 槽位封闭集（v1 共 12 个，槽位跟着消费机制走，D-06）：
 //!   - 运行时归一组（引擎判定路径消费）：`alias_of`（命令/子命令）、
 //!     `same_flag`（flag）、`takes_value`（flag）。
 //!   - lint+脚本数据源组：`may_write`（命令/子命令）、`write_flags`
 //!     （命令/子命令）、`write_tokens`（子命令）、`write_arg_count`（子命令）、
-//!     `irreversible`（flag）。
+//!     `irreversible`（flag / 命令，M9.3 增命令级）。
 //!   - 查表逃逸检查组（M7.0 写目标感知）：`write_position`（命令）。
 //!   - lint 提示组：`delegates`（命令）。登记后置组：`wraps`（命令）。
 //! - 归一语义：命令别名改名（`pip3` → `pip`，参数原样）；子命令别名 =
@@ -55,6 +55,11 @@ pub struct BinEntry {
     /// 位置参数是写目标（`cp src dst` 的 `dst`），其余位置参数按读源豁免。
     /// v1 仅支持 `"last"`，其余值加载期报错。
     pub write_position: Option<String>,
+    /// 命令级不可恢复事实（M9.3）：`true` = 该命令的效果无法恢复（mkfs 族
+    /// /`shred`/`wipefs` 等）。消费者 = 默认脚本 `irreversible_gate`（未收录
+    /// 即落 confirm 的命令升 deny）、lint（allow/script_allow 声明告警）、
+    /// suggest 跳过清单。只记**强断言**（上下文依赖的 rm 等不标）。
+    pub irreversible: Option<bool>,
     /// 子命令条目（`sub.exec = { alias_of = "npx" }`）。
     pub subs: BTreeMap<String, SubEntry>,
     /// flag 条目（`flag."--force" = { same_flag = "-f" }`）。
@@ -365,7 +370,7 @@ impl<'de> Deserialize<'de> for BinEntry {
             fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
                 f.write_str(
                     "a knowledge entry: alias_of/may_write/write_flags/delegates/wraps \
-                     slots plus reserved sub/flag maps",
+                     /irreversible slots plus reserved sub/flag maps",
                 )
             }
 
@@ -380,6 +385,7 @@ impl<'de> Deserialize<'de> for BinEntry {
                     "delegates",
                     "wraps",
                     "write_position",
+                    "irreversible",
                     "sub",
                     "flag",
                 ];
@@ -392,6 +398,7 @@ impl<'de> Deserialize<'de> for BinEntry {
                         "delegates" => out.delegates = Some(map.next_value()?),
                         "wraps" => out.wraps = Some(map.next_value()?),
                         "write_position" => out.write_position = Some(map.next_value()?),
+                        "irreversible" => out.irreversible = Some(map.next_value()?),
                         "sub" => out.subs = map.next_value()?,
                         "flag" => out.flags = map.next_value()?,
                         _ => return Err(de::Error::unknown_field(&key, SLOTS)),

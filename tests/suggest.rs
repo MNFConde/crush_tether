@@ -244,3 +244,28 @@ fn suggest_writes_nothing_zero_write_guarantee() {
     after.sort();
     assert_eq!(before.len(), after.len(), "零写入：文件集不变");
 }
+
+#[test]
+fn irreversible_bin_is_skipped_from_suggestions() {
+    // M9.3：命令级 irreversible 槽位接线 suggest 跳过清单——反复批准且成功
+    // 也不产生建议块，落入跳过清单并标注原因。
+    let dec: Vec<String> = (1..=3)
+        .map(|i| dec_line(i, "confirm", "mytool do-x", "default", "default", "mytool"))
+        .collect();
+    let execs: Vec<String> = (1..=3).map(|i| exec_line(i, "mytool do-x", true)).collect();
+    let proj = setup("skip-irreversible", &dec, &execs);
+    let cfg = proj.path().join(".crush-tether");
+    std::fs::write(
+        cfg.join("knowledge.toml"),
+        "version = 1\n[mytool]\nirreversible = true\n",
+    )
+    .expect("write kb");
+    let (out, code) = run_suggest(&proj, &[]);
+    assert_eq!(code, 0);
+    assert!(out.contains("mytool"), "跳过清单列出该命令: {out}");
+    assert!(out.contains("不可逆"), "跳过原因标注危险类别: {out}");
+    assert!(
+        !out.contains("allow.sub"),
+        "不可恢复 bin 不产生建议块: {out}"
+    );
+}
