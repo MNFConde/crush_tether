@@ -1,11 +1,11 @@
 ---
 type: project_topic
 status: active
-summary: M7.3 agent hook 兼容性测试的方法论与过程沉淀：判定准则（hook 执行以探针 dump 物理副作用为准，日志计数与 tool result 回执不可尽信）、mock 四坑（schema 必填字段/工具名环境差异/OpenAI SSE/SSE input 对象校验）、灰度可官方 env 钉死（DISABLE_GROWTHBOOK）、crush run 悬案插桩排查全记录（三假设判据/五处插桩/证据代码位置）、四次更正史链条（含 zcode headless 形态与插件轨/config 轨信任门分化定性）、无头场景组定性（fail-open 按 agent 形态分化 + zcode spawn 精简 env）；M8.6 补：本机用户全局配置是 headless 探针的干扰源（探针核对移 CI 自动化）、PostToolUse 载荷自动抓包模式；M8.x 批量推送后 CI 首跑红灯归因（行为变更拆测试拐杖/env_remove 抵消 env 的假绿测试/heredoc 生成物校验/fail-fast 掩盖）。确定性结论的现役事实在 doc/agent-compat-matrix.md，测试方法与挂账在 doc/test-and-ci.md。
+summary: M7.3 agent hook 兼容性测试的方法论与过程沉淀：判定准则（hook 执行以探针 dump 物理副作用为准，日志计数与 tool result 回执不可尽信）、mock 四坑（schema 必填字段/工具名环境差异/OpenAI SSE/SSE input 对象校验）、灰度可官方 env 钉死（DISABLE_GROWTHBOOK）、crush run 悬案插桩排查全记录（三假设判据/五处插桩/证据代码位置）、四次更正史链条（含 zcode headless 形态与插件轨/config 轨信任门分化定性）、无头场景组定性（fail-open 按 agent 形态分化 + zcode spawn 精简 env）；M8.6 补：本机用户全局配置是 headless 探针的干扰源（探针核对移 CI 自动化）、PostToolUse 载荷自动抓包模式；M8.x 批量推送后 CI 首跑红灯归因（行为变更拆测试拐杖/env_remove 抵消 env 的假绿测试/heredoc 生成物校验/fail-fast 掩盖）；M9 补：PATH 安装二进制与工作区构建的版本漂移是评估噪声源、真实命令样本评估工作流（临时评估项目 + 默认包 fixture）。确定性结论的现役事实在 doc/agent-compat-matrix.md，测试方法与挂账在 doc/test-and-ci.md。
 tags: [crush_tether, hook, testing, mock, claude-code, crush, zcode, headless, methodology]
 contains: [lesson, decision, pattern]
 created: 2026-09-09
-updated: 2026-09-12
+updated: 2026-09-13
 related: [doc/agent-compat-matrix.md, doc/test-and-ci.md, doc/design.md, script/mock_llm.py, script/hook_probe.py]
 authoring_mode: ai_generated
 ---
@@ -62,6 +62,11 @@ authoring_mode: ai_generated
 - **假绿测试样本（alias 链测试带病绿灯三周）**：`Command::env(k,v)` 之后链式 `env_remove(k)`——std 同键后调用生效，环境变量当场被抹，测试从未测过它名字声称的事，靠上述双拐杖长期绿灯。机理：env 构造顺序错误不报错、只静默降级到 fallback 路径，恰好 fallback 在两个环境都有副作用。
 - **CI 资产编辑坑×2**：①给既有 heredoc 加块时**重复插入**（同一 PostToolUse 块 M8.2/M8.4 已加过）+ 丢逗号 → JSON 非法，症状隔层：claude 无视整份 settings（连 env 认证一起丢 → `Not logged in`）、crush 直接拒载配置——**生成物必须 json.tool 校验一步**（已固化进 workflow）；②新步骤插在依赖就绪之前（wrapper 守卫检查先于引擎安装，而 wrapper 设计即缺席响亮失败）——新增 step 先画依赖线再定位。
 - **fail-fast 掩盖**：`cargo test` 默认首个失败二进制即停，本次 contract_adapters 之后的测试全部没跑，无法排除更多同类失败——CI test 步骤已改 `--no-fail-fast`；本地用干净 worktree 全量复跑补齐证据（21 二进制全绿）。
+
+## 版本漂移噪声与真实样本评估（2026-09-13 M9/P9）
+
+- **教训：PATH 安装的二进制与工作区构建存在版本漂移，是「本机环境噪声」的同族新条目**——「本机探针的配置噪声」（M8.6 条）说本机不只少东西还多用户配置；本次升级：还可能多一个**行为过时的已安装版本**。实测踩中：评估 mdor 命令样本时 PATH 上的 crush-tether 是 M8.1 前旧版，一次 `check --batch` 触发已废弃的「静默 seed 默认包」行为，向被测项目写入了 `.crush-tether/`（即时清理恢复）。应对：评估/探针前核对二进制版本（新版对三层皆缺只提示不写盘、旧版写盘——行为差异可直接探）；或直接用 `target/debug` 构建件跑评估，PATH 版本只当用户态事实核对。教训的本质与「开发环境≠干净环境」同源：**被测对象要先确认是哪一版**。
+- **pattern：真实命令样本评估工作流**——拿一份真实会话命令清单（mdor tmp.md 25 条），建临时评估项目（git init + `init` 生成默认包，建在 tmp/ 避免污染真实项目），`check --batch` 逐条跑 + `explain` 组件级归因。产出两个方向：①策略画像核对（本批 allow 0/25 → 归因三类触发 P9 三修）；②文档对账（「面向用户的示例命令先 explain 对账默认包画像再入文档」，Ⅷ 教训的方法论化——默认包行为变更后，README/指南里的画像段是陈旧陈述的高发区）。
 
 ## mock 四坑（固化于 script/mock_llm.py，改前必读）
 

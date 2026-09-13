@@ -128,6 +128,8 @@ mock LLM 后端驱动 agent 完成一轮固定 tool_use(命令可配,`--cmd`),�
 | zcode cron latest 哨兵的首个自动触发尚待观察 | 协议 | 串联冒烟 | [矩阵 §1.1/§2](agent-compat-matrix.md) | 每周一 UTC |
 | zcode PostToolUse 载荷探针核对（tool_use_id/session_id/tool_input.command 字段全集） | 采集面 | 探针实验 | [test-and-ci.md §1](#1-测试方法) + executions 采集 | M8.6 采集为容差提取（缺失=null 不报错）；claude/crush 已在 agent-matrix 四 job 场景+冒烟 settings 挂 PostToolUse 探针（dump.jsonl 自动抓包，next push 首跑核对）；zcode 挂账（需插件 hooks.json 增 PostToolUse，涉及插件版本，随下次插件更新）；crush 无 PostToolUse（M7.3 定性，其探针恒空 = 反向验证降级矩阵） |
 | 会话放行交互实弹验证（弹窗批准 → 同会话免问 → 关对话失效） | agent 行为 | 人工交互 | M8.6 会话放行 | 无头 confirm=拒绝（已定性）→ 无头流量不生长便签，CI 场景组不可测；随用户下次交互会话验证（serve 日志 reason 应现 session allow 标注） |
+| 跨命令 cwd 载荷字段探针定性（各 agent shell cwd 持久性 → 段级基准跨行语义） | agent 行为 | 探针实验 | [矩阵 §1.2](agent-compat-matrix.md) + design.md「写目标基准」 | M9.2 挂账：行内段级基准已闭合，跨行基准恒为项目根；载荷 `cwd` 字段（claude/crush 有）的持久性未定性——定性后可作跨行基准增强的输入；行内语义不依赖此项 |
+| 默认包自身 15 条 lint 告警核查 | 引擎单测 | 引擎单测 | lint 零告警或名册化 | M9.1 收尾观察：explain 头部恒现 15 warning——核查属正常设计取舍（等价冗余/delegates 类）还是死词条积压，产出名册化或清理 |
 
 ## 6. 探针与工具设计
 

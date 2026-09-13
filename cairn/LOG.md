@@ -2,6 +2,11 @@
 
 This file records substantive progress in reverse-chronological order — newest entry at the top, right below this line. Keep each entry short — summary and pointer only; conclusions settle into `cairn/<topic>.md`.
 
+## 2026-09-13 Ⅹ · 沉淀审计（P9 后补账）
+
+- **审计发现四类未沉淀项并当场补齐**：①test-and-ci.md §5 补两条挂账（跨命令 cwd 载荷探针定性 / 默认包 15 条 lint 告警核查——按「挂账 → §5」落点映射，此前只在 ROADMAP）；②rust-rewrite-notes 补「解析层事实与坑」节（$VAR=simple_expansion 静默丢弃、$( ) 内层旁路、三件套成对落地教训展开、bash 内联 node -e 展开坑）并 bump updated；③agent-hook-testing 补「版本漂移噪声与真实样本评估」节（PATH 旧版二进制静默 seed 实测踩中 + tmp.md 评估工作流方法论化）并 bump updated；④毕业候选落点改判：bash node -e 展开坑落 rust-rewrite-notes CLI 坑节同族（windows-scripts.md 为 archived 迁移快照，不追加）。
+- **边界确认**：mdor 侧命令核查结论归 mdor 仓库沉淀；旧挂账（会话放行实弹/zcode PostToolUse 等）§5 在册不缺。
+
 ## 2026-09-13 Ⅸ · P9 批次：解析修正 + 白名单扩容 + 可恢复性（用户批准每功能一 commit）
 
 - **起因**：用户要求核查 mdor tmp.md 25 条真实命令——allow 0/25，归因三类（git -C 前置全局选项顶掉子命令槽 ×7 / cd 未收录 ×15 / --format·rm 等显式词条）+ 解析失败 3；顺带发现 PATH 上的二进制是 M8.1 前旧版（仍会静默 seed 配置，实测踩中即清理恢复，重装挂收尾批）。

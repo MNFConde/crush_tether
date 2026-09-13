@@ -1,11 +1,11 @@
 ---
 type: project_topic
 status: active
-summary: guard.py → Rust 重写的实现要点与踩坑：tree-sitter-bash AST 结构差异、路径归一化、管道 sink 判定策略；脚本引擎接入（rhai/mlua）的沙箱与 API 坑；声明式规则函数（M8.6）的 FnPtr 原语与序列化坑。
+summary: guard.py → Rust 重写的实现要点与踩坑：tree-sitter-bash AST 结构差异（重定向/fd/展开节点）、路径归一化、管道 sink 判定策略；脚本引擎接入（rhai/mlua）的沙箱与 API 坑；声明式规则函数（M8.6）的 FnPtr 原语；M9 解析层事实（$VAR 丢弃/命令替换旁路）与「数据+机制+消费者三件套成对落地」教训。
 tags: [crush_tether, rust, tree-sitter, migration, rhai, mlua]
 contains: [lesson, decision]
 created: 2026-09-04
-updated: 2026-09-12
+updated: 2026-09-13
 related: [doc/design.md, tests/guard_regression.rs]
 authoring_mode: ai_generated
 ---
@@ -49,6 +49,13 @@ authoring_mode: ai_generated
 - **教训：mlua chunk 顶层执行错误属加载期拒载（`Rejected`）非编译错误**——语法错误在 `into_function` 阶段已暴露，`chunk.call(())` 的失败全是执行期语义（如 rule() 注册边界报错），映射错类别会让「拒载」断言族静默失真。
 - **教训：serde 反序列化 `Option<&'static str>` 字段不可能**——`&str` 反序列化借用输入，凑不出 'static；JSON 行结构体字段用 `String`，还原引擎侧 `&'static str` 枚举值时按已知值映射（kind 仅三个常量，`String→&'static str` 映射安全）。同批：`skip_serializing_if` 写 `Vec::is_empty` 不是 `Vec::new`（前者是判谓词后者是构造器，写错报 "expected bool"）。
 - **教训：设计拍板的安全收敛必须配反向用例**——「default 兜底退整命令粒度」拍板后，第一版实现只拦了 `layer=="script"`，`layer=="default"`/`entry=*.default` 溯源路径仍按条目记便签；测试全绿是因为用例只覆盖「同命令重放」，覆盖不到「同 bin 异参数被误放行」。碰巧通过的测试 ≠ 语义实现：凡是「退回/收敛/降级」类拍板，用例必须包含**本不该被收敛覆盖的变体**（此处 = `frobnicate --deep x` 批后 `frobnicate evil` 必须仍弹窗）。
+
+## 解析层事实与坑（M9.1/M9.2，2026-09-13）
+
+- **事实：tree-sitter-bash 的 `$VAR` 是 `simple_expansion` 节点（不是 `variable_name`）**——extract_command 的 push_word match 不含它，词元被**静默丢弃**（`cd $DIR` 的 words 只剩 `cd`，与 `cd` 无参同形）。字符串内的展开（`"$D/x"`）经 unquote 保留 `$` 字面，反而可检测。修复（M9.2）：`has_expansion` 标记覆盖 variable_name/simple_expansion/special_variable_name/expansion 族 + command/process substitution；`cd` 目标含展开即基准毒化。
+- **旁路：`$( )` 内层命令原先完全不裁决**——command_substitution 是 command 节点的**子节点**，collect_commands 的容器递归列表既不含它、command 分支也不下潜，`echo $(sudo rm x)` 的内层被整体丢弃（解析层免检区）。修复：command 分支对 substitution 子节点以**独立子 shell 组**下潜收集（内层命令入列裁决 + 组语义正确）。
+- **教训：「kb 数据 + 引擎机制 + 消费者」三件套必须成对落地**（M9.1 git -C 修复的实证）——只补 kb 登记（数据）不修探测（机制）：sub 提取不消费 takes_value，`-C` 依旧顶掉子命令槽，无效；只修探测不补登记：带值 flag 的值被误当子命令，跳值失败；机制修了但 `ctx.sub` 不同步（消费者缺位）：`git -C x config a b` 查表修成 allow 后 two_state 拿 raw sub 查不到 write_arg_count——**写形态漏放**；不改全词元 flag 扫描：前导 flag 永远进不了 flag 桶（`git -c k=v log` 的 -c 漏检成放行洞）。四个半成品里两个是安全洞——跨层语义变更的关联面要一次列全再动手。
+- **坑：bash 内联 `node -e "…"` 写含反引号/`${}` 的补丁内容会被 Git Bash 展开**——模板字面量被 shell 当命令替换执行（`touch x`、`engine::segment_bases` 等杂命令现场出现），目标文件被污染且不报错；本批两次踩中、一次污染 decisions.md 靠 `git checkout` 恢复。多行补丁一律用 Write 工具落**临时脚本文件**再 node 执行后删除（同族：uv run 的 cwd 坑、commit.md 6.5 追加型编辑静默丢失——「拼接/内联不经语法边界校验」是同一类静默损坏）。
 
 ## 决策记录
 
