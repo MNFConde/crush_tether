@@ -14,7 +14,7 @@ use std::io::{BufRead, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-use crate::report::render_command;
+use crate::report::render_command_with_suggestion;
 use crate::service::RuleSet;
 
 const HELP: &str = "commands: <bash command> | Enter (repeat last) | !N (rerun #N) | \
@@ -84,12 +84,14 @@ pub fn run(project: &Path, config_arg: Option<&str>, engine: &str) -> ExitCode {
 }
 
 /// 单条命令评估：全量加载 + explain 溯源（stdout 为结果面，stderr 为提示面）。
+/// 每条输入重读知识库跳过判据——与「改规则即测」的逐条重载语义一致（M10.1）。
 fn eval_line(project: &Path, config_arg: Option<&str>, engine: &str, command: &str) {
     match RuleSet::load(project, config_arg, engine) {
         Ok(rs) => {
             let report = rs.explain(command, project);
+            let skip_fact = crate::suggest::kb_skip_fact(project);
             for (i, c) in report.commands.iter().enumerate() {
-                print!("{}", render_command(i + 1, c));
+                print!("{}", render_command_with_suggestion(i + 1, c, &skip_fact));
             }
             println!("combined: {}", report.combined.decision);
         }

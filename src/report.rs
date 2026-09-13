@@ -48,8 +48,23 @@ pub fn render_command(idx: usize, c: &CommandExplain) -> String {
     out
 }
 
+/// 单命令溯源块 + 放行面参考行（M10.1 调试提示，explain 与 REPL 共用）：
+/// confirm 裁决在 reason 行后追加 `suggestion:` 行——命中给可粘贴规则行，
+/// 不给则说明原因；allow/deny 不追加。
+pub fn render_command_with_suggestion(
+    idx: usize,
+    c: &CommandExplain,
+    skip_fact: &dyn Fn(&str) -> bool,
+) -> String {
+    let mut out = render_command(idx, c);
+    if let Some(line) = crate::suggest::suggestion_line(c, skip_fact) {
+        out.push_str(&format!("    {line}\n"));
+    }
+    out
+}
+
 /// `explain` 全报告。
-pub fn render_report(r: &ExplainReport) -> String {
+pub fn render_report(r: &ExplainReport, skip_fact: &dyn Fn(&str) -> bool) -> String {
     let mut out = String::new();
     out.push_str(&format!(
         "engine: {}  kb: {}  lint: {} warning(s)\n",
@@ -69,7 +84,7 @@ pub fn render_report(r: &ExplainReport) -> String {
         return out;
     }
     for (i, c) in r.commands.iter().enumerate() {
-        out.push_str(&render_command(i + 1, c));
+        out.push_str(&render_command_with_suggestion(i + 1, c, skip_fact));
     }
     out.push_str(&format!("combined: {}\n", r.combined.decision));
     if let Some(reason) = &r.combined.reason {

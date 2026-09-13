@@ -220,3 +220,123 @@ fn repl_repeats_last_on_empty_line() {
     );
     assert_eq!(out.status.code(), Some(0));
 }
+
+/// 建议提示用例的临时项目：cp 在 allow 桶（写逃逸语义同上）、rm 在
+/// confirm 桶（危险清单跳过样本）、其余落 default（收窄样本）。
+fn project_suggest(tag: &str) -> TempDir {
+    let proj = TempDir::new(tag);
+    let cfg = proj.path().join(".crush-tether");
+    std::fs::create_dir_all(&cfg).expect("create .crush-tether");
+    std::fs::write(
+        cfg.join("rules.toml"),
+        concat!(
+            "version = 1\n",
+            "default = \"confirm\"\n",
+            "[local]\n",
+            "allow = [\"cp\"]\n",
+            "confirm = [\"rm\"]\n",
+            "[local.git]\n",
+            "deny.sub = [\"push\"]\n",
+        ),
+    )
+    .expect("write rules.toml");
+    std::fs::write(
+        cfg.join("knowledge.toml"),
+        "version = 1\n[cp]\nwrite_position = \"last\"\n",
+    )
+    .expect("write knowledge.toml");
+    proj
+}
+
+/// M10.1：default confirm + 安全收窄 → `suggestion:` 给可粘贴规则行；
+/// deny 不打建议行。
+#[test]
+fn explain_suggests_rule_for_default_confirm_and_skips_deny() {
+    let proj = project_suggest("m101-sug-narrow");
+    let r = run_explain(&proj, "terraform plan");
+    assert!(
+        r.stdout
+            .contains("suggestion: [local.terraform] allow.sub = [\"plan\"]"),
+        "应给收窄建议行: {}",
+        r.stdout
+    );
+    assert!(
+        r.stdout.contains("(paste into rules.toml; review first)"),
+        "{}",
+        r.stdout
+    );
+    // deny 永不建议。
+    let r = run_explain(&proj, "git push");
+    assert!(
+        !r.stdout.contains("suggestion:"),
+        "deny 无建议行: {}",
+        r.stdout
+    );
+}
+
+/// M10.1：confirm 桶危险 bin 与自由参数形态 → `suggestion: none —` 说明原因。
+#[test]
+fn explain_suggestion_skips_dangerous_and_free_args_with_reason() {
+    let proj = project_suggest("m101-sug-skip");
+    // rm 在硬清单：即便命中 confirm 桶也不建议。
+    let r = run_explain(&proj, "rm tmp.txt");
+    assert!(
+        r.stdout.contains(
+            "suggestion: none — `rm` is in the dangerous skip list \
+             (may_write/network/irreversible)"
+        ),
+        "{}",
+        r.stdout
+    );
+    // jq 落 default 兜底：自由参数无安全收窄。
+    let r = run_explain(&proj, "jq .");
+    assert!(
+        r.stdout
+            .contains("suggestion: none — no safe bin+sub narrowing (free-form args)"),
+        "{}",
+        r.stdout
+    );
+}
+
+/// M10.1：写逃逸降级（allow 命中被降级 confirm）→ 建议行指向 [global] 出口。
+#[test]
+fn explain_escape_downgrade_suggestion_points_to_global() {
+    let proj = project_suggest("m101-sug-escape");
+    let r = run_explain(&proj, "cp f.txt ../outside/dst.txt");
+    assert!(r.stdout.contains("ESCAPES"), "{}", r.stdout);
+    assert!(
+        r.stdout.contains(
+            "suggestion: none — write target is outside the project; if intended, \
+             move `cp` to [global] allow (escape-exempt)"
+        ),
+        "{}",
+        r.stdout
+    );
+}
+
+/// M10.1：repl 同样追加建议行（与 explain 共用渲染）。
+#[test]
+fn repl_prints_suggestion_line() {
+    let proj = project_suggest("m101-repl-sug");
+    let mut child = std::process::Command::new(common::BIN)
+        .args(["repl", "--project", &proj.path().to_string_lossy()])
+        .env_remove("CRUSH_TETHER_CONFIG")
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .expect("spawn repl");
+    use std::io::Write;
+    child
+        .stdin
+        .as_mut()
+        .expect("stdin")
+        .write_all(b"terraform plan\n:q\n")
+        .expect("write repl input");
+    let out = child.wait_with_output().expect("wait");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("suggestion: [local.terraform] allow.sub = [\"plan\"]"),
+        "repl 应有建议行: {stdout}"
+    );
+}

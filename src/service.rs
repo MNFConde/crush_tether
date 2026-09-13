@@ -745,6 +745,30 @@ pub fn causes_of_components(components: &[(Decision, DecisionTrace)], command: &
     out
 }
 
+/// explain 路径的 cause 推导（M10.1 调试提示用）：与 [`causes_of_components`]
+/// 同构——从 [`CommandExplain`] 字段重建同一 (kind, key)，守卫四条一致
+/// （script_rule → script；layer 为 script/default 或 entry 为 default 系 →
+/// whole；否则 entry 键；无 source → whole）。单测钉两路一致性防漂移。
+pub fn cause_of_explain(c: &CommandExplain) -> (&'static str, String) {
+    if let Some(r) = &c.script_rule {
+        return ("script", r.clone());
+    }
+    if let Some(src) = &c.table_source {
+        if src.layer == "script"
+            || src.layer == "default"
+            || src.entry == "default"
+            || src.entry.ends_with(".default")
+        {
+            return ("whole", c.raw.clone());
+        }
+        return (
+            "entry",
+            format!("{}\u{1f}{}\u{1f}{}", src.layer, src.entry, src.token),
+        );
+    }
+    ("whole", c.raw.clone())
+}
+
 /// 便签过期时长（会话级临时数据的兜底清理线；会话通常远短于此）。
 const STICKER_TTL_SECS: u64 = 24 * 3_600;
 /// 便签条目全局上限（防异常 agent 会话刷爆内存；超限拒新——安全侧）。
@@ -1773,5 +1797,97 @@ mod tests {
         server.write_all(b"{\"ok\":true}\n").expect("write line");
         let line = read_line_deadline(client, Duration::from_secs(5)).expect("应收到一行");
         assert_eq!(line.trim(), "{\"ok\":true}");
+    }
+
+    /// 构造最小 CommandExplain（cause 一致性用例只关心 source/script_rule/raw）。
+    fn cx_for_cause(
+        raw: &str,
+        source: Option<crate::lookup::EntrySource>,
+        script_rule: Option<String>,
+    ) -> CommandExplain {
+        CommandExplain {
+            raw: raw.to_string(),
+            bin: String::new(),
+            table_decision: Decision::Confirm,
+            table_source: source,
+            normalized: None,
+            writes_redirect: false,
+            redirect_targets: Vec::new(),
+            write_scan: Vec::new(),
+            write_escape: false,
+            script_changed: false,
+            script_layer: None,
+            script_rule,
+            final_decision: Decision::Confirm,
+            reason: None,
+        }
+    }
+
+    /// cause_of_explain 与 causes_of_components 同构（M10.1）：同一
+    /// source/script_rule 两条推导路径必须产出同一 (kind, key)——守卫
+    /// 漂移即测试红。
+    #[test]
+    fn cause_of_explain_matches_causes_of_components() {
+        let cases: Vec<(
+            Option<crate::lookup::EntrySource>,
+            Option<String>,
+            &'static str,
+        )> = vec![
+            // entry 键形态（命令节 confirm.sub 命中）。
+            (
+                Some(crate::lookup::EntrySource {
+                    layer: "project",
+                    entry: "git.confirm.sub".into(),
+                    token: "push".into(),
+                }),
+                None,
+                "cmd",
+            ),
+            // default 兜底 → whole。
+            (
+                Some(crate::lookup::EntrySource {
+                    layer: "project",
+                    entry: "default".into(),
+                    token: "x".into(),
+                }),
+                None,
+                "cmd",
+            ),
+            // 节内 default → whole。
+            (
+                Some(crate::lookup::EntrySource {
+                    layer: "project",
+                    entry: "npm.default".into(),
+                    token: "run".into(),
+                }),
+                None,
+                "cmd",
+            ),
+            // 具名脚本规则 → script（source 已被换成 script 层标签）。
+            (
+                Some(crate::lookup::EntrySource {
+                    layer: "script",
+                    entry: "script".into(),
+                    token: "git".into(),
+                }),
+                Some("two_state:-d".to_string()),
+                "cmd",
+            ),
+            // 无 source → whole。
+            (None, None, "cmd"),
+        ];
+        for (source, script_rule, raw) in cases {
+            let trace = DecisionTrace {
+                source: source.clone(),
+                script_rule: script_rule.clone(),
+                ..DecisionTrace::default()
+            };
+            let cx = cx_for_cause(raw, source, script_rule);
+            let via_components = causes_of_components(&[(Decision::Confirm, trace)], raw);
+            let (kind, key) = cause_of_explain(&cx);
+            assert_eq!(via_components.len(), 1, "{cx:?}");
+            assert_eq!(via_components[0].kind, kind, "{cx:?}");
+            assert_eq!(via_components[0].key, key, "{cx:?}");
+        }
     }
 }

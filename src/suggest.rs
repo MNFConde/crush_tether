@@ -20,8 +20,13 @@
 //!   否则跳过（自由参数）。
 //! - 跳过类 bin（即便反复批准也不建议）：知识库 `may_write` + 网络/不可
 //!   逆硬清单（curl/wget/rm/pip 等）。
+//!
+//! 建议判定以类型化形态（[`Suggestion`]/[`SkipReason`]）供两个消费方共
+//! 用（M10.1）：本命令（中文文案）与 repl/explain 调试提示
+//! （[`suggestion_line`]，英文文案、单信号——无重复门槛/执行成功条件，
+//! 定位是「放行面参考」而非学习结论）。
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
 
 /// 硬编码跳过清单：网络下载类与不可逆类 bin（知识库 `may_write` 之外的
@@ -91,68 +96,207 @@ fn jstr<'a>(v: &'a serde_json::Value, key: &str) -> Option<&'a str> {
     v.get(key).and_then(serde_json::Value::as_str)
 }
 
-/// 从候选 cause（聚合计数）生成建议：Some((bin, 建议条目描述)) 或 None + 跳过原因。
-fn build_suggestion(
-    kb_skip_fact: &dyn Fn(&str) -> bool,
+/// 建议产出（类型化）：判定与文案分离——suggest 命令渲染中文跳过原因，
+/// repl/explain 调试提示渲染英文行（M10.1）。
+pub(crate) enum Suggestion {
+    /// 可粘贴条目：`section` = rules.toml 表头路径（`local.terraform` /
+    /// `local`；裸桶统一落 `[local]`，逃逸出口落 `[global]`——被命中条目
+    /// 的作用域未入溯源键，默认保守落 local，逃逸语义另见 [`SkipReason`]）。
+    Allow {
+        /// rules.toml 表头路径。
+        section: String,
+        /// 表内条目行（如 `allow.sub = ["plan"]`）。
+        entry: String,
+    },
+    /// 不建议 + 结构化原因。
+    Skip(SkipReason),
+}
+
+/// 不建议的结构化原因（两个消费方各自渲染文案）。
+pub(crate) enum SkipReason {
+    /// 危险类别（硬清单 / 知识库 may_write / irreversible）。
+    Dangerous(String),
+    /// 脚本规则触发（无 TOML 对应物）。
+    ScriptRule,
+    /// 含自由参数且无安全 bin+sub 可收窄。
+    FreeArgs,
+    /// 溯源条目非 confirm 桶。
+    NotConfirmEntry,
+    /// allow 桶命中被写逃逸降级 confirm（M7.0）——放行出口是 [global]
+    /// （豁免逃逸检查），不是镜像 allow 条目。
+    EscapedWrite,
+    /// 溯源键不完整或类别未知 / 空命令。
+    Malformed,
+}
+
+/// 从候选 cause 生成类型化建议：判定逻辑唯一权威，suggest 命令与调试
+/// 提示各取所需。
+fn build_suggestion_typed(
+    skip_fact: &dyn Fn(&str) -> bool,
     kind: &str,
     key: &str,
     sample: &str,
-) -> Result<(String, String), String> {
+) -> Suggestion {
     match kind {
-        "script" => Err("脚本规则触发（无 TOML 对应物；如需放行请改脚本/规则）".into()),
+        "script" => Suggestion::Skip(SkipReason::ScriptRule),
         "entry" => {
             let parts: Vec<&str> = key.split('\u{1f}').collect();
-            let Some((layer, entry, token)) = (match parts.as_slice() {
-                [l, e, t] => Some((*l, *e, *t)),
-                _ => None,
-            }) else {
-                return Err("溯源键不完整".into());
+            let [_layer, entry, token] = parts.as_slice() else {
+                return Suggestion::Skip(SkipReason::Malformed);
             };
-            let _ = layer;
-            if entry == "confirm" {
-                // 裸列表整命令命中 → 建议 bin 级 allow。
-                if skip_bin(kb_skip_fact, token) {
-                    return Err(format!("`{token}` 属危险类别（may_write/网络/不可逆）"));
-                }
-                Ok((String::new(), format!("allow = [\"{token}\"]")))
-            } else if let Some(bin) = entry.strip_suffix(".confirm.sub") {
-                if skip_bin(kb_skip_fact, bin) {
-                    return Err(format!("`{bin}` 属危险类别（may_write/网络/不可逆）"));
-                }
-                Ok((bin.to_string(), format!("allow.sub = [\"{token}\"]")))
-            } else if let Some(bin) = entry.strip_suffix(".confirm.flag") {
-                if skip_bin(kb_skip_fact, bin) {
-                    return Err(format!("`{bin}` 属危险类别（may_write/网络/不可逆）"));
-                }
-                Ok((bin.to_string(), format!("allow.flag = [\"{token}\"]")))
-            } else {
-                Err("溯源条目非 confirm 桶（不值得放行）".into())
+            // 写逃逸降级（M7.0）：confirm 裁决 + allow 桶溯源 = allow 命中
+            // 被写逃逸降级——建议出口是 [global]，不是同位 allow（那会继续
+            // 被逃逸检查降级，形成"批了还是问"的死循环）。
+            if *entry == "allow" || entry.ends_with(".allow.sub") || entry.ends_with(".allow.flag")
+            {
+                return Suggestion::Skip(SkipReason::EscapedWrite);
             }
+            if *entry == "confirm" {
+                // 裸列表整命令命中 → 建议 bin 级 allow。
+                if skip_fact(token) {
+                    return Suggestion::Skip(SkipReason::Dangerous((*token).to_string()));
+                }
+                return Suggestion::Allow {
+                    section: "local".to_string(),
+                    entry: format!("allow = [\"{token}\"]"),
+                };
+            }
+            if let Some(bin) = entry.strip_suffix(".confirm.sub") {
+                if skip_fact(bin) {
+                    return Suggestion::Skip(SkipReason::Dangerous(bin.to_string()));
+                }
+                return Suggestion::Allow {
+                    section: format!("local.{bin}"),
+                    entry: format!("allow.sub = [\"{token}\"]"),
+                };
+            }
+            if let Some(bin) = entry.strip_suffix(".confirm.flag") {
+                if skip_fact(bin) {
+                    return Suggestion::Skip(SkipReason::Dangerous(bin.to_string()));
+                }
+                return Suggestion::Allow {
+                    section: format!("local.{bin}"),
+                    entry: format!("allow.flag = [\"{token}\"]"),
+                };
+            }
+            Suggestion::Skip(SkipReason::NotConfirmEntry)
         }
         "whole" => {
             // 兜底 cause：仅当示例可收窄为 bin+sub 且余参全 flag 时建议。
+            // sub 须词形似子命令（字母数字开头，仅字母数字/-/_）——`jq .`
+            // 的 `.`、`cat f.txt` 的路径等不是子命令，收窄即跳过（M10.1
+            // 收紧：调试提示与 suggest 命令同口径）。
             let words: Vec<&str> = sample.split_whitespace().collect();
             let Some(bin) = words.first() else {
-                return Err("空命令".into());
+                return Suggestion::Skip(SkipReason::Malformed);
             };
-            if skip_bin(kb_skip_fact, bin) {
-                return Err(format!("`{bin}` 属危险类别（may_write/网络/不可逆）"));
+            if skip_fact(bin) {
+                return Suggestion::Skip(SkipReason::Dangerous((*bin).to_string()));
             }
             match words.get(1) {
                 Some(sub)
-                    if !sub.starts_with('-') && words[2..].iter().all(|w| w.starts_with('-')) =>
+                    if plausible_sub(sub) && words[2..].iter().all(|w| w.starts_with('-')) =>
                 {
-                    Ok((bin.to_string(), format!("allow.sub = [\"{sub}\"]")))
+                    Suggestion::Allow {
+                        section: format!("local.{bin}"),
+                        entry: format!("allow.sub = [\"{sub}\"]"),
+                    }
                 }
-                _ => Err("含自由参数且无安全子命令可收窄".into()),
+                _ => Suggestion::Skip(SkipReason::FreeArgs),
             }
         }
-        _ => Err("未知原因类别".into()),
+        _ => Suggestion::Skip(SkipReason::Malformed),
     }
 }
 
-fn skip_bin(kb_skip_fact: &dyn Fn(&str) -> bool, bin: &str) -> bool {
-    SKIP_BINS.contains(&bin) || kb_skip_fact(bin)
+/// 子命令词形：非空、字母数字开头、仅字母数字/-/_（排除 `.`、路径、
+/// `--flag` 等不可作子命令的词元）。
+fn plausible_sub(t: &str) -> bool {
+    let mut chars = t.chars();
+    matches!(chars.next(), Some(c) if c.is_ascii_alphanumeric())
+        && chars.all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+}
+
+/// suggest 命令的中文文案渲染（保留既有输出措辞）。
+fn skip_reason_zh(r: SkipReason) -> String {
+    match r {
+        SkipReason::Dangerous(b) => format!("`{b}` 属危险类别（may_write/网络/不可逆）"),
+        SkipReason::ScriptRule => "脚本规则触发（无 TOML 对应物；如需放行请改脚本/规则）".into(),
+        SkipReason::FreeArgs => "含自由参数且无安全子命令可收窄".into(),
+        SkipReason::NotConfirmEntry => "溯源条目非 confirm 桶（不值得放行）".into(),
+        SkipReason::EscapedWrite => {
+            "allow 命中被写逃逸降级（如确属有意，移入 [global] 豁免逃逸检查）".into()
+        }
+        SkipReason::Malformed => "溯源键不完整或未知类别".into(),
+    }
+}
+
+/// 项目侧跳过判据（suggest 命令与 repl/explain 调试提示共用，M10.1）：
+/// 硬清单 ∨ 知识库 may_write/irreversible。知识库缺席 = 只用硬清单。
+pub fn kb_skip_fact(project: &Path) -> impl Fn(&str) -> bool {
+    let kb = std::fs::read_to_string(project.join(".crush-tether").join("knowledge.toml"))
+        .ok()
+        .and_then(|t| crate::knowledge::KnowledgeBase::parse_toml(&t).ok());
+    move |bin| {
+        SKIP_BINS.contains(&bin)
+            || kb
+                .as_ref()
+                .and_then(|k| k.bins.get(bin))
+                .is_some_and(|e| e.may_write.unwrap_or(false) || e.irreversible.unwrap_or(false))
+    }
+}
+
+/// allow 桶形态的查表溯源（裸 `allow` / 命令节 `*.allow.sub|flag`）。
+fn table_source_is_allow(src: &Option<crate::lookup::EntrySource>) -> bool {
+    src.as_ref().is_some_and(|s| {
+        s.entry == "allow" || s.entry.ends_with(".allow.sub") || s.entry.ends_with(".allow.flag")
+    })
+}
+
+/// repl/explain 调试提示行（M10.1 放行面参考）：confirm 裁决追加一行
+/// 「怎么放行」或「为何不建议」；allow/deny 不打行。定位是**单信号参考**
+/// （无 suggest 的重复门槛与执行成功条件），输出纯信息、零写入；跳过
+/// 判据与 suggest 命令同源（[`kb_skip_fact`]）——不建议的口径完全一致。
+pub(crate) fn suggestion_line(
+    c: &crate::service::CommandExplain,
+    skip_fact: &dyn Fn(&str) -> bool,
+) -> Option<String> {
+    if c.final_decision != crate::model::Decision::Confirm {
+        return None;
+    }
+    // 逃逸降级优先直判（活路径有 write_escape 真值，不必借 cause 反推）。
+    if c.write_escape && table_source_is_allow(&c.table_source) {
+        return Some(format!(
+            "suggestion: none — write target is outside the project; if intended, \
+             move `{}` to [global] allow (escape-exempt)",
+            c.bin
+        ));
+    }
+    let (kind, key) = crate::service::cause_of_explain(c);
+    match build_suggestion_typed(skip_fact, kind, &key, &c.raw) {
+        Suggestion::Allow { section, entry } => Some(format!(
+            "suggestion: [{section}] {entry}   (paste into rules.toml; review first)"
+        )),
+        Suggestion::Skip(reason) => {
+            let en = match &reason {
+                SkipReason::Dangerous(b) => {
+                    format!("`{b}` is in the dangerous skip list (may_write/network/irreversible)")
+                }
+                SkipReason::ScriptRule => {
+                    "script rule triggered (edit the script; no TOML counterpart)".to_string()
+                }
+                SkipReason::FreeArgs => "no safe bin+sub narrowing (free-form args)".to_string(),
+                SkipReason::NotConfirmEntry => {
+                    "source entry is not a confirm-bucket hit".to_string()
+                }
+                SkipReason::EscapedWrite => "write target is outside the project; if intended, \
+                     move to [global] allow (escape-exempt)"
+                    .to_string(),
+                SkipReason::Malformed => "incomplete trace key".to_string(),
+            };
+            Some(format!("suggestion: none — {en}"))
+        }
+    }
 }
 
 /// suggest 主入口。返回进程 exit code（恒 0，除非 IO 异常——学习面绝不
@@ -167,16 +311,9 @@ pub fn run(project: &Path, opts: &SuggestOptions) -> i32 {
         return 0;
     }
 
-    // 知识库 may_write 查询（知识库缺席 = 只用硬清单）。
-    let kb = std::fs::read_to_string(project.join(".crush-tether").join("knowledge.toml"))
-        .ok()
-        .and_then(|t| crate::knowledge::KnowledgeBase::parse_toml(&t).ok());
-    // 永久跳过的事实判据（M9.3 起 = may_write + 命令级 irreversible）。
-    let kb_skip_fact = |bin: &str| -> bool {
-        kb.as_ref()
-            .and_then(|k| k.bins.get(bin))
-            .is_some_and(|e| e.may_write.unwrap_or(false) || e.irreversible.unwrap_or(false))
-    };
+    // 永久跳过判据（M10.1 起共用 [`kb_skip_fact`]：硬清单 + may_write +
+    // 命令级 irreversible）。
+    let skip_fact = kb_skip_fact(project);
 
     // 窗口下限。
     let now = now_epoch();
@@ -266,12 +403,12 @@ pub fn run(project: &Path, opts: &SuggestOptions) -> i32 {
     candidates.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
 
     // 生成建议 / 跳过清单。
-    let mut suggestions: Vec<(String, String, usize)> = Vec::new(); // (bin, 条目, 次数)
+    let mut suggestions: Vec<(String, String, usize)> = Vec::new(); // (表头路径, 条目, 次数)
     let mut skipped: Vec<(String, usize, String)> = Vec::new(); // (概要, 次数, 原因)
     for ((kind, key), n, sample) in &candidates {
-        match build_suggestion(&kb_skip_fact, kind, key, sample) {
-            Ok((bin, entry)) => suggestions.push((bin, entry, *n)),
-            Err(reason) => skipped.push((sample.clone(), *n, reason.to_string())),
+        match build_suggestion_typed(&skip_fact, kind, key, sample) {
+            Suggestion::Allow { section, entry } => suggestions.push((section, entry, *n)),
+            Suggestion::Skip(reason) => skipped.push((sample.clone(), *n, skip_reason_zh(reason))),
         }
     }
 
@@ -282,9 +419,9 @@ pub fn run(project: &Path, opts: &SuggestOptions) -> i32 {
             "count", "kind", "bin", "cause / suggestion"
         ));
         for ((kind, key), n, sample) in &candidates {
-            let suggestion = match build_suggestion(&kb_skip_fact, kind, key, sample) {
-                Ok((bin, e)) => format!("{bin} {e}"),
-                Err(reason) => format!("SKIP: {reason}"),
+            let suggestion = match build_suggestion_typed(&skip_fact, kind, key, sample) {
+                Suggestion::Allow { section, entry } => format!("[{section}] {entry}"),
+                Suggestion::Skip(reason) => format!("SKIP: {}", skip_reason_zh(reason)),
             };
             out.push_str(&format!(
                 "{:<6}  {:<7}  {:<6}  {}\n",
@@ -313,23 +450,19 @@ pub fn run(project: &Path, opts: &SuggestOptions) -> i32 {
         out.push_str(
             "# review each entry: repeated approval does not always mean safe to allow.\n",
         );
-        // 按 bin 分组输出。
-        let mut by_bin: HashMap<String, Vec<String>> = HashMap::new();
-        for (bin, entry, _) in &suggestions {
-            by_bin.entry(bin.clone()).or_default().push(entry.clone());
+        // 按表头路径分组输出（M10.1：section 统一为 local / local.git /
+        // global…，裸桶也带 [local] 表头——粘贴即用）。
+        let mut by_section: BTreeMap<String, Vec<String>> = BTreeMap::new();
+        for (section, entry, _) in &suggestions {
+            by_section
+                .entry(section.clone())
+                .or_default()
+                .push(entry.clone());
         }
-        let mut bins: Vec<&String> = by_bin.keys().collect();
-        bins.sort();
-        for bin in bins {
-            if bin.is_empty() {
-                for e in &by_bin[bin] {
-                    out.push_str(&format!("{e}\n"));
-                }
-            } else {
-                out.push_str(&format!("\n[local.{bin}]\n"));
-                for e in &by_bin[bin] {
-                    out.push_str(&format!("{e}\n"));
-                }
+        for (section, entries) in &by_section {
+            out.push_str(&format!("\n[{section}]\n"));
+            for e in entries {
+                out.push_str(&format!("{e}\n"));
             }
         }
         out.push('\n');
@@ -373,4 +506,230 @@ fn cause_of(
         return ("entry".into(), format!("{layer}\u{1f}{entry}\u{1f}{token}"));
     }
     ("whole".into(), command.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::lookup::EntrySource;
+    use crate::model::Decision;
+    use crate::service::CommandExplain;
+
+    /// 最小 CommandExplain（调试提示用例只关心 source/script_rule/raw/
+    /// final_decision/write_escape/bin）。
+    fn cx(
+        raw: &str,
+        bin: &str,
+        source: Option<EntrySource>,
+        script_rule: Option<&str>,
+        final_decision: Decision,
+        write_escape: bool,
+    ) -> CommandExplain {
+        CommandExplain {
+            raw: raw.to_string(),
+            bin: bin.to_string(),
+            table_decision: Decision::Confirm,
+            table_source: source,
+            normalized: None,
+            writes_redirect: false,
+            redirect_targets: Vec::new(),
+            write_scan: Vec::new(),
+            write_escape,
+            script_changed: false,
+            script_layer: None,
+            script_rule: script_rule.map(String::from),
+            final_decision,
+            reason: None,
+        }
+    }
+
+    /// 单测判据：仅硬清单（不读文件系统）。
+    fn hard_list_skip(bin: &str) -> bool {
+        SKIP_BINS.contains(&bin)
+    }
+
+    fn src(layer: &'static str, entry: &str, token: &str) -> Option<EntrySource> {
+        Some(EntrySource {
+            layer,
+            entry: entry.to_string(),
+            token: token.to_string(),
+        })
+    }
+
+    #[test]
+    fn default_confirm_with_safe_narrowing_suggests_allow_sub() {
+        let c = cx(
+            "terraform plan",
+            "terraform",
+            None,
+            None,
+            Decision::Confirm,
+            false,
+        );
+        let line = suggestion_line(&c, &hard_list_skip).expect("confirm 必有行");
+        assert!(
+            line.contains("suggestion: [local.terraform] allow.sub = [\"plan\"]"),
+            "{line}"
+        );
+        assert!(
+            line.contains("(paste into rules.toml; review first)"),
+            "{line}"
+        );
+    }
+
+    #[test]
+    fn dangerous_bin_suggests_nothing_with_reason() {
+        let c = cx(
+            "rm tmp.txt",
+            "rm",
+            src("project", "confirm", "rm"),
+            None,
+            Decision::Confirm,
+            false,
+        );
+        let line = suggestion_line(&c, &hard_list_skip).expect("confirm 必有行");
+        assert!(
+            line.contains(
+                "suggestion: none — `rm` is in the dangerous skip list \
+                 (may_write/network/irreversible)"
+            ),
+            "{line}"
+        );
+    }
+
+    #[test]
+    fn free_args_skip_when_no_safe_narrowing() {
+        // default 兜底（entry=default → whole）+ 首参非 flag → 收窄失败。
+        let c = cx(
+            "jq .",
+            "jq",
+            src("project", "default", "jq"),
+            None,
+            Decision::Confirm,
+            false,
+        );
+        let line = suggestion_line(&c, &hard_list_skip).expect("confirm 必有行");
+        assert!(
+            line.contains("suggestion: none — no safe bin+sub narrowing (free-form args)"),
+            "{line}"
+        );
+    }
+
+    #[test]
+    fn script_rule_trigger_prints_script_reason() {
+        let c = cx(
+            "git branch -d x",
+            "git",
+            src("script", "script", "git"),
+            Some("two_state:-d"),
+            Decision::Confirm,
+            false,
+        );
+        let line = suggestion_line(&c, &hard_list_skip).expect("confirm 必有行");
+        assert!(
+            line.contains(
+                "suggestion: none — script rule triggered (edit the script; \
+                 no TOML counterpart)"
+            ),
+            "{line}"
+        );
+    }
+
+    #[test]
+    fn escape_downgrade_points_to_global_allow() {
+        // allow 命中（source 仍指 allow 桶）+ 写逃逸 → [global] 出口提示。
+        let c = cx(
+            "touch ../outside.txt",
+            "touch",
+            src("project", "allow", "touch"),
+            None,
+            Decision::Confirm,
+            true,
+        );
+        let line = suggestion_line(&c, &hard_list_skip).expect("confirm 必有行");
+        assert!(
+            line.contains(
+                "suggestion: none — write target is outside the project; if intended, \
+                 move `touch` to [global] allow (escape-exempt)"
+            ),
+            "{line}"
+        );
+    }
+
+    #[test]
+    fn allow_and_denial_have_no_suggestion_line() {
+        let ok = cx(
+            "cp a b",
+            "cp",
+            src("project", "allow", "cp"),
+            None,
+            Decision::Allow,
+            false,
+        );
+        assert!(suggestion_line(&ok, &hard_list_skip).is_none());
+        let no = cx(
+            "git push",
+            "git",
+            src("project", "git.deny.sub", "push"),
+            None,
+            Decision::Deny,
+            false,
+        );
+        assert!(suggestion_line(&no, &hard_list_skip).is_none());
+    }
+
+    #[test]
+    fn confirm_flag_entry_suggests_allow_flag() {
+        let c = cx(
+            "git log --output=x",
+            "git",
+            src("project", "git.confirm.flag", "--output"),
+            None,
+            Decision::Confirm,
+            false,
+        );
+        let line = suggestion_line(&c, &hard_list_skip).expect("confirm 必有行");
+        assert!(
+            line.contains("suggestion: [local.git] allow.flag = [\"--output\"]"),
+            "{line}"
+        );
+    }
+
+    #[test]
+    fn head_list_confirm_suggests_local_section_entry() {
+        let c = cx(
+            "jq --args x",
+            "jq",
+            src("project", "confirm", "jq"),
+            None,
+            Decision::Confirm,
+            false,
+        );
+        let line = suggestion_line(&c, &hard_list_skip).expect("confirm 必有行");
+        assert!(
+            line.contains("suggestion: [local] allow = [\"jq\"]"),
+            "{line}"
+        );
+    }
+
+    #[test]
+    fn kb_irreversible_fact_participates_in_skip() {
+        // 硬清单之外的 bin 由知识库事实（may_write/irreversible）触发跳过。
+        let c = cx(
+            "mytool do-x",
+            "mytool",
+            None,
+            None,
+            Decision::Confirm,
+            false,
+        );
+        let line = suggestion_line(&c, &|b: &str| b == "mytool").expect("confirm 必有行");
+        assert!(
+            line.contains(
+                "suggestion: none — `mytool` is in the dangerous skip list \
+                 (may_write/network/irreversible)"
+            ),
+            "{line}"
+        );
+    }
 }

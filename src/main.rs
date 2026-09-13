@@ -464,9 +464,10 @@ fn run_explain(
     let project = crush_tether::repl::resolve_project(project_arg);
     match RuleSet::load(&project, config_arg, engine) {
         Ok(rs) => {
+            let skip_fact = crush_tether::suggest::kb_skip_fact(&project);
             print!(
                 "{}",
-                crush_tether::report::render_report(&rs.explain(&command, &project))
+                crush_tether::report::render_report(&rs.explain(&command, &project), &skip_fact)
             );
             ExitCode::from(0)
         }
