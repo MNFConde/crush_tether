@@ -10,7 +10,10 @@ allow   = ["ls", "cat", "grep", "rg", "find", "head", "tail", "wc", "pwd", "echo
   "sha1sum", "sha256sum", "sha512sum", "date", "env", "du", "nl", "less", "more",
   "tree", "ls-files", "rev-parse",
   "gofmt", "black", "ruff", "dprint", "make", "just", "pytest",
-  "touch", "mkdir"]
+  "touch", "mkdir",
+  "cd"]
+  # cd：无害且高频（M9.2 段级 cwd 基准落地后放行——行内 cd 切换写目标
+  # 解析基准，cd 项目外后的写效果仍被逃逸检查拦截）
 confirm = ["rm", "pip", "pip3", "npx", "curl", "wget"]
 deny    = ["sudo", "dd", "shutdown", "mkfs", "mkfs.ext2", "mkfs.ext3",
   "mkfs.ext4", "mkfs.vfat", "mkfs.fat", "mkfs.xfs", "mkfs.btrfs", "mkfs.ntfs"]

@@ -23,7 +23,7 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
-use crate::cmd_parse::{SimpleCommand, path_escapes};
+use crate::cmd_parse::SimpleCommand;
 use crate::config::{Dims, MergedCommand, MergedRules, MergedScope, Provenance, ScopeProvenance};
 use crate::knowledge::{CanonMaps, KnowledgeBase};
 use crate::model::{Decision, Verdict};
@@ -141,9 +141,9 @@ impl RuleLookup {
         }
     }
 
-    /// 查表裁决单条简单命令。
-    pub fn classify(&self, cmd: &SimpleCommand, project: &Path) -> Verdict {
-        self.classify_traced(cmd, project).verdict
+    /// 查表裁决单条简单命令（base = M9.2 段级 cwd 基准，None = 不可解析）。
+    pub fn classify(&self, cmd: &SimpleCommand, base: Option<&Path>, project: &Path) -> Verdict {
+        self.classify_traced(cmd, base, project).verdict
     }
 
     /// script_allow 声明集（脚本引擎对账与定稿点作用域判据的数据源）。
@@ -151,11 +151,23 @@ impl RuleLookup {
         &self.rules.script_allow
     }
 
-    /// M7.0 写目标感知逃逸检查：命令的写效果路径（重定向目标 / 知识库
-    /// `write_position` 标注的写参数位）是否逃逸仓库。查表 allow 命中与
-    /// script_allow 定稿点共用同一判定（语义一致：读源路径豁免）。写型
-    /// 重定向但目标不可识别的异常形态保守视为逃逸。
+    /// M7.0 写目标感知逃逸检查（项目根基准的兼容形态：base = project）。
     pub fn write_target_escapes(&self, cmd: &SimpleCommand, project: &Path) -> bool {
+        self.write_target_escapes_with_base(cmd, Some(project), project)
+    }
+
+    /// M7.0 写目标感知逃逸检查 + M9.2 段级基准：命令的写效果路径（重定向
+    /// 目标 / 知识库 `write_position` 标注的写参数位）是否逃逸仓库。相对
+    /// 词元按 `base`（段级 cwd 基准）解析；`base = None`（不可解析基准）
+    /// 时有任何写效果即保守判逃逸（宁多拦不漏放）。查表 allow 命中与
+    /// script_allow 定稿点共用同一判定（读源路径豁免）。写型重定向但目标
+    /// 不可识别的异常形态保守视为逃逸。
+    pub fn write_target_escapes_with_base(
+        &self,
+        cmd: &SimpleCommand,
+        base: Option<&Path>,
+        project: &Path,
+    ) -> bool {
         if cmd.writes_redirect && cmd.redirect_targets.is_empty() {
             return true;
         }
@@ -163,9 +175,17 @@ impl RuleLookup {
             return !cmd.redirect_targets.is_empty();
         };
         let bin = self.canon.canon_bin(bin0);
-        write_effect_words(cmd, &self.canon, &bin)
-            .iter()
-            .any(|w| path_escapes(w, project))
+        let words = write_effect_words(cmd, &self.canon, &bin);
+        if words.is_empty() {
+            return false;
+        }
+        let Some(base) = base else {
+            return true;
+        };
+        words.iter().any(|w| {
+            let resolved = crate::cmd_parse::resolve_against_base(w, base);
+            !crate::cmd_parse::inside_repo(&resolved.to_string_lossy(), project)
+        })
     }
 
     /// 逃逸检查扫描集（M7.1 explain 溯源展示用：哪些词元参与了写效果判定）。
@@ -183,7 +203,12 @@ impl RuleLookup {
     }
 
     /// 裁决 + 归一链（P4 裁决日志 `kb` 字段的数据源）。
-    pub fn classify_traced(&self, cmd: &SimpleCommand, project: &Path) -> Classification {
+    pub fn classify_traced(
+        &self,
+        cmd: &SimpleCommand,
+        base: Option<&Path>,
+        project: &Path,
+    ) -> Classification {
         let Some(bin0) = cmd.bin() else {
             return Classification {
                 verdict: Verdict::confirm("empty command"),
@@ -192,7 +217,7 @@ impl RuleLookup {
             };
         };
         let norm = self.normalize(bin0, cmd);
-        let (verdict, source) = self.lookup(&norm, cmd, project);
+        let (verdict, source) = self.lookup(&norm, cmd, base, project);
         Classification {
             verdict,
             kb_chain: norm.chain,
@@ -275,6 +300,7 @@ impl RuleLookup {
         &self,
         norm: &Normalized,
         cmd: &SimpleCommand,
+        base: Option<&Path>,
         project: &Path,
     ) -> (Verdict, Option<EntrySource>) {
         // [global].allow 整命令豁免（含逃逸豁免；两表皆现时 global 优先）。
@@ -306,7 +332,7 @@ impl RuleLookup {
             .map(|s| (s, true))
             .or_else(|| self.rules.local.commands.get(&norm.bin).map(|s| (s, false)))
         {
-            return self.classify_section(norm, section, is_global, cmd, project);
+            return self.classify_section(norm, section, is_global, cmd, base, project);
         }
 
         // 头部裸列表（整命令入桶语法糖）：global 表先于 local 表；同表内按
@@ -339,7 +365,7 @@ impl RuleLookup {
                         // [local] 的承诺是「写入不出项目」（M7.0 精化）：逃逸
                         // 检查只作用于写效果路径，读源路径豁免（归一不改参数
                         // 语义，仍用原始词元判）。
-                        if self.write_target_escapes(cmd, project) {
+                        if self.write_target_escapes_with_base(cmd, base, project) {
                             Verdict::confirm("write target escapes repository")
                         } else {
                             Verdict::allow()
@@ -358,6 +384,7 @@ impl RuleLookup {
         section: &MergedCommand,
         is_global: bool,
         cmd: &SimpleCommand,
+        base: Option<&Path>,
         project: &Path,
     ) -> (Verdict, Option<EntrySource>) {
         for decision in self.precedence {
@@ -401,7 +428,7 @@ impl RuleLookup {
                 Decision::Allow => {
                     // [local] 的承诺是「写入不出项目」（M7.0 精化）：allow 命中的
                     // 逃逸检查只作用于写效果路径；[global] allow 整体豁免。
-                    if !is_global && self.write_target_escapes(cmd, project) {
+                    if !is_global && self.write_target_escapes_with_base(cmd, base, project) {
                         Verdict::confirm("write target escapes repository")
                     } else {
                         Verdict::allow()
@@ -636,7 +663,7 @@ mod tests {
     }
 
     fn classify(l: &RuleLookup, s: &str) -> Verdict {
-        l.classify(&cmd(s), Path::new(PROJ))
+        l.classify(&cmd(s), Some(Path::new(PROJ)), Path::new(PROJ))
     }
 
     /// 基线配置：头部三桶 + git 节 + npm 节 default。
@@ -886,11 +913,12 @@ mod tests {
             }),
             None,
         );
-        let v =
-            crate::engine::decide_with("ls && sudo rm x", &project, &|c, p, _| l.classify(c, p));
+        let v = crate::engine::decide_with("ls && sudo rm x", &project, &|c, b, p, _| {
+            l.classify(c, b, p)
+        });
         assert_eq!(v.decision, Decision::Deny, "任一 deny → 组合 deny");
-        let v = crate::engine::decide_with("ls && curl example.com", &project, &|c, p, _| {
-            l.classify(c, p)
+        let v = crate::engine::decide_with("ls && curl example.com", &project, &|c, b, p, _| {
+            l.classify(c, b, p)
         });
         assert!(
             v.decision == Decision::Confirm,
@@ -937,7 +965,11 @@ mod tests {
         // 知识库缺席时同一命令落 default。
         let rules = "version = 1\ndefault = \"confirm\"\n[local]\nallow = [\"pip\"]";
         let l = lookup_kb(rules, KB_MAIN);
-        let c = l.classify_traced(&cmd("pip3 --version"), Path::new(PROJ));
+        let c = l.classify_traced(
+            &cmd("pip3 --version"),
+            Some(Path::new(PROJ)),
+            Path::new(PROJ),
+        );
         assert_eq!(c.verdict.decision, Decision::Allow);
         assert_eq!(c.kb_chain, ["pip3", "pip"], "归一链记录改写路径");
 
@@ -1028,7 +1060,7 @@ mod tests {
     #[test]
     fn no_kb_means_empty_trace_and_literal_lookup() {
         let l = lookup(BASE);
-        let c = l.classify_traced(&cmd("ls"), Path::new(PROJ));
+        let c = l.classify_traced(&cmd("ls"), Some(Path::new(PROJ)), Path::new(PROJ));
         assert_eq!(c.kb_chain, Vec::<String>::new(), "kb:[] = 归一未生效");
         assert_eq!(c.verdict.decision, Decision::Allow);
     }

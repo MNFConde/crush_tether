@@ -22,6 +22,7 @@
 | [D-10](#d-10-会话内临时放行为主suggest-降级为配置打磨手段) | 会话内临时放行为主；suggest 降级为配置打磨手段 | 已决策 | [design.md「会话内临时放行」](design.md#会话内临时放行session-allow定稿) |
 | [D-11](#d-11-脚本声明式规则函数rule-注册器) | 脚本声明式规则函数：rule() 注册器 + check 双形态并存 | 已决策 | [design.md「声明式规则函数」](design.md#声明式规则函数rule-注册器定稿) |
 | [D-12](#d-12-子命令探测跳过前置全局选项与-flag-收窄) | 子命令探测跳过前置全局选项（三件套）+ --pretty/--format 移出 confirm.flag | 已决策 | [design.md「单命令建模」](design.md#单命令建模定稿) |
+| [D-13](#d-13-cd-放行与段级-cwd-基准) | cd 放行 + 段级 cwd 基准（毒化 + 子 shell 作用域） | 已决策 | [design.md「写目标基准与 cd 段级感知」](design.md#写目标基准与-cd-段级感知m92-定稿) |
 
 ---
 
@@ -327,6 +328,30 @@
 > 原因：引擎不知 `-C` 带值，`D:/x` 被误当 flag 候选/子命令，跳值失败。
 
 **影响**：`src/knowledge.rs`（`extract_sub` 共享探测）；`src/lookup.rs`（normalize/flag_bases 全词元）；`src/script/{mod,lua}.rs`（引擎存 canon、`ctx.sub` 同口径、新原语 `kb_takes_value`）；默认包四模板（kb git 全局选项、confirm.flag 收窄、脚本 `positional_count` 重写）；测试 `tests/global_option_sub.rs` 新档 + lookup 单测矩阵；更正登记 26。
+
+---
+
+## D-13 cd 放行与段级 cwd 基准
+
+| 状态 | 日期 | 规范位置 |
+|---|---|---|
+| 已决策（含实现落地 M9.2） | 2026-09-13 | design.md「写目标基准与 cd 段级感知（M9.2 定稿）」 |
+
+**背景**：用户按「项目内读写都放行」标准指出 cd 属白名单缺口（tmp.md 实测 25 条命令中 15 条因 cd 落确认），并提出多 cd 段级路径感知——「一个 cd 到下一个 cd 之间的命令，依据该 cd 的路径判断项目内外，以此类推」。实测同时确认 naive 放行会开洞：`cd /tmp && touch x` 的相对写目标按项目根解析误判项目内 → 放行项目外写入。实现期另发现 `$( )` 内层命令被解析器整体丢弃的旁路（`echo $(sudo rm x)` 的内层不裁决）。
+
+**决策**：cd 入默认包 allow 桶（与段级基准**同批落地**，互为前提）+ 引擎段级状态机——解析层为每条命令标注子 shell 组 id 与展开标记；`engine::segment_bases` 行内行走（cd 切换基准、进组压栈、出组弹栈、不可解析毒化）；写目标逃逸检查的相对路径解析基准升级为段级动态值，边界仍为项目根。连带堵命令替换旁路：`$( )`/`<(...)` 内层命令以独立子 shell 组入列裁决。
+
+**依据**：行内静态可判定（flatten 保序 + tree-sitter 组结构）；毒化与保守多拦符合 fail-safe 原则；子 shell 作用域是 cd 语义的 bash 事实；旁路修复与「宁可误拦、绝不误放」一致。
+
+### 被否决的替代方案
+
+> [!CAUTION] 【已否决】 naive allow cd（无段级基准）
+> 原因：开 `cd /tmp && touch x` 写外洞——段级基准是放行的安全前提，不可拆分落地。
+>
+> 【已否决】 文本级切分（复刻 pipe_to_shell 思路）做段切
+> 原因：文本切分与 AST 拉平对不上号（引号/嵌套），组作用域无法表达；parser 层标注组 id 才能表达子 shell 语义。
+
+**影响**：`src/cmd_parse.rs`（subshell_id/has_expansion/命令替换内层入列）；`src/engine.rs`（segment_bases/decide_with 签名）；`src/lookup.rs`（base 贯通查表与逃逸检查）；`src/service.rs`、`src/script/mod.rs`（链/定稿点透传）；默认包 allow 增 cd；`tests/cd_segments.rs` 新档 + engine 单测。
 
 ---
 

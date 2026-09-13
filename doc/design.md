@@ -440,7 +440,10 @@ allow   = ["ls", "cat", "grep", "rg", "find", "head", "tail", "wc", "pwd", "echo
   "sha1sum", "sha256sum", "sha512sum", "date", "env", "du", "nl", "less", "more",
   "tree", "ls-files", "rev-parse",
   "gofmt", "black", "ruff", "dprint", "make", "just", "pytest",
-  "touch", "mkdir"]
+  "touch", "mkdir",
+  "cd"]
+  # cd：无害且高频（M9.2 段级 cwd 基准落地后放行——行内 cd 切换写目标
+  # 解析基准，cd 项目外后的写效果仍被逃逸检查拦截）
 confirm = ["rm", "pip", "pip3", "npx", "curl", "wget"]
 deny    = ["sudo", "dd", "shutdown", "mkfs", "mkfs.ext2", "mkfs.ext3",
   "mkfs.ext4", "mkfs.vfat", "mkfs.fat", "mkfs.xfs", "mkfs.btrfs", "mkfs.ntfs"]
@@ -607,6 +610,15 @@ wraps = "*"                       # 联系：包装壳（v1 仅登记）
 | 完全未知的命令 | agent 自造的 `ll`（非交互 shell 不展开用户 alias） | fail-safe → confirm |
 
 **子命令探测（M9.1 修订）**：子命令 = args 中**首个非 flag 词元**——`-` 开头按 flag 处理，知识库 `takes_value` 登记的带值 flag 跳过其值（sticky 短 flag 与 `--flag=value` 不跳值）；flag 候选扫描同为全词元。原「bin 后第一个词元即子命令」的硬规则使 `git -C <路径> <子命令>` 等前置全局选项形态落 default confirm（[更正登记](#更正登记对既有定稿) 26）；脚本侧 `ctx.sub` 与查表共用同一探测（`knowledge::extract_sub`），防两处词汇漂移。
+
+### 写目标基准与 cd 段级感知（M9.2 定稿）
+
+> 状态：**设计 + 实现落地（2026-09-13，M9.2）**。动机：`cd` 入默认 allow 桶的前提——naive 放行会开 `cd /tmp && touch x` 的洞（相对写目标按项目根解析误判项目内）；解法 = 写目标逃逸检查的相对路径解析基准从静态项目根升级为**段级动态 cwd**。
+
+- **段级状态机（`engine::segment_bases`）**：flatten 保序展开后逐命令行走——`bases[i]` = 第 i 条命令执行时的相对路径解析基准；初值 = 项目根；`cd` 切换（相对目标 join 当前基准、绝对目标原样、`~` 展开）；**子 shell 作用域**：解析层为每条命令标注最内层包裹组 id（`SimpleCommand.subshell_id`），进组压栈（记录进组时基准）、出组弹栈——组内 `cd` 不外泄。
+- **毒化（None 基准）**：`$VAR`/命令替换/`cd -`/无参回 HOME 失败等静态不可解析目标 → 基准置 `None`，其后各段**有任何写效果目标即判逃逸**（宁多拦不漏放）；绝对路径 `cd` 可从毒化中恢复（绝对目标不依赖基准）。
+- **解析层配套（M9.2 旁路修复）**：`$(...)`/`<(...)` 内层命令原先被整体丢弃（`echo $(sudo rm x)` 的内层不裁决的旁路）——现在以独立子 shell 组入列裁决；词元含运行期展开（`$VAR`/`$(...)`）打 `has_expansion` 标记，`cd` 目标含展开即毒化。
+- **边界与保守声明**：`&&`/`;` 同待遇（不区分，`cd A; cmd` 在 cd 失败时多拦）；`pushd`/`popd` 不识别（按普通命令，基准毒化仅当其含展开）；跨命令 cwd（agent 载荷 `cwd` 字段的持久性）未定性，挂账探针——行内语义已闭合，跨行基准恒为项目根。
 
 ### 脚本层职责边界（定稿）
 

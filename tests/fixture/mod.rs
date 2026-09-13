@@ -69,16 +69,22 @@ fn decide_with_engine(cmd: &str, script: &dyn RuleEngine) -> Decision {
         Some(&kb),
     );
 
-    let verdict = crush_tether::engine::decide_with(cmd, Path::new(PROJECT), &|c, p, pipe| {
-        let v0 = lookup.classify(c, p);
-        let escape = |cc: &crush_tether::cmd_parse::SimpleCommand, pp: &Path| {
-            lookup.write_target_escapes(cc, pp)
+    let verdict = crush_tether::engine::decide_with(cmd, Path::new(PROJECT), &|c, b, p, pipe| {
+        let v0 = lookup.classify(c, b, p);
+        let escape = |cc: &crush_tether::cmd_parse::SimpleCommand, bb: Option<&Path>, pp: &Path| {
+            lookup.write_target_escapes_with_base(cc, bb, pp)
         };
         let (decision, reason) = match script.evaluate(c, v0.decision, p, pipe) {
             // 与 main.rs 相同：定稿点唯一放行出口。
-            Ok(outcome) => {
-                crush_tether::script::finalize(v0.decision, outcome, script.decls(), c, p, &escape)
-            }
+            Ok(outcome) => crush_tether::script::finalize(
+                v0.decision,
+                outcome,
+                script.decls(),
+                c,
+                b,
+                p,
+                &escape,
+            ),
             Err(_) => (
                 Decision::Confirm,
                 Some("script evaluation failed; fail-safe".into()),

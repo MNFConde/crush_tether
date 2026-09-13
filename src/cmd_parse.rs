@@ -17,6 +17,13 @@ pub struct SimpleCommand {
     /// 写型重定向的目标词元（M7.0 写目标感知；`writes_redirect` 为 true 但
     /// 目标不可识别的异常形态下为空——查表侧对「有写无可查目标」保守处理）。
     pub redirect_targets: Vec<String>,
+    /// 最内层包裹子 shell 的组 id（M9.2 段级 cwd 基准；顶层命令为 None）。
+    /// `cd` 只影响同组及其后同层命令——出组弹栈、进组压栈，段级基准的
+    /// 作用域判据（`engine::segment_bases`）。
+    pub subshell_id: Option<usize>,
+    /// 词元含运行期展开（`$VAR` / `$(...)` / `<(...)`，M9.2）：展开值静态
+    /// 不可知，消费该词元的判定（如 `cd` 目标）按毒化处理（保守侧）。
+    pub has_expansion: bool,
 }
 
 impl SimpleCommand {
@@ -63,8 +70,17 @@ pub fn flatten_commands(source: &str) -> Result<Vec<SimpleCommand>, ParseError> 
     }
 
     let mut out = Vec::new();
-    collect_commands(tree.root_node(), source, &mut out);
+    let mut group = GroupCtx::default();
+    collect_commands(tree.root_node(), source, &mut out, &mut group);
     Ok(out)
+}
+
+/// 子 shell 组状态（M9.2）：进组分配递增 id，出组恢复外层——`cd` 的作用域
+/// 判据（命令的 `subshell_id` = 其最内层包裹组的 id，顶层为 None）。
+#[derive(Default)]
+struct GroupCtx {
+    next_id: usize,
+    current: Option<usize>,
 }
 
 fn has_error(tree: &Tree) -> bool {
@@ -86,15 +102,38 @@ fn has_error(tree: &Tree) -> bool {
 }
 
 /// 深度优先收集 command 节点，展开容器节点（program/list/pipeline/重定向包裹等）。
-fn collect_commands(node: tree_sitter::Node<'_>, source: &str, out: &mut Vec<SimpleCommand>) {
+fn collect_commands(
+    node: tree_sitter::Node<'_>,
+    source: &str,
+    out: &mut Vec<SimpleCommand>,
+    group: &mut GroupCtx,
+) {
     match node.kind() {
-        "command" => out.push(extract_command(node, source)),
+        "command" => {
+            out.push(extract_command(node, source, group.current));
+            // 命令替换/进程替换的内层命令同样裁决（M9.2 旁路修复：
+            //  的内层原先被整体丢弃）；其运行于子 shell
+            // 上下文，以独立组收集。
+            let mut cursor = node.walk();
+            for child in node.children(&mut cursor) {
+                if matches!(child.kind(), "command_substitution" | "process_substitution") {
+                    let id = group.next_id;
+                    group.next_id += 1;
+                    let outer = group.current;
+                    group.current = Some(id);
+                    let mut c2 = child.walk();
+                    for cc in child.children(&mut c2) {
+                        collect_commands(cc, source, out, group);
+                    }
+                    group.current = outer;
+                }
+            }
+        }
         // binary_expression 覆盖 && 与 ||；redirected_statement 是 `cmd > file` 的
         // 顶层包裹（command + file_redirect 兄弟节点）；subshell/compound 递归展开。
         "program"
         | "list"
         | "pipeline"
-        | "subshell"
         | "compound_statement"
         | "redirected_statement"
         | "binary_expression"
@@ -102,11 +141,28 @@ fn collect_commands(node: tree_sitter::Node<'_>, source: &str, out: &mut Vec<Sim
         | "if_statement"
         | "for_statement"
         | "while_statement"
-        | "case_statement" => {
+        | "case_statement"
+        // 命令替换/进程替换内层命令同样入列裁决（M9.2：原先被整体丢弃
+        // = `echo $(sudo rm x)` 的内层不裁决的旁路）；其运行于子 shell
+        // 上下文，与 subshell 同组语义。
+        | "command_substitution"
+        | "process_substitution" => {
             let mut cursor = node.walk();
             for child in node.children(&mut cursor) {
-                collect_commands(child, source, out);
+                collect_commands(child, source, out, group);
             }
+        }
+        // 子 shell 上下文：进组分配 id，递归完恢复外层（组内 cd 不外泄）。
+        "subshell" => {
+            let id = group.next_id;
+            group.next_id += 1;
+            let outer = group.current;
+            group.current = Some(id);
+            let mut cursor = node.walk();
+            for child in node.children(&mut cursor) {
+                collect_commands(child, source, out, group);
+            }
+            group.current = outer;
         }
         _ => {}
     }
@@ -117,10 +173,15 @@ fn collect_commands(node: tree_sitter::Node<'_>, source: &str, out: &mut Vec<Sim
 /// `cmd > file` 形态下 file_redirect 是 redirected_statement 里 command 的
 /// **兄弟节点**而非子节点，因此遍历 command 的子节点抓不到重定向；这里
 /// 向上查父节点（若为 redirected_statement）补扫其 file_redirect 子节点。
-fn extract_command(node: tree_sitter::Node<'_>, source: &str) -> SimpleCommand {
+fn extract_command(
+    node: tree_sitter::Node<'_>,
+    source: &str,
+    subshell_id: Option<usize>,
+) -> SimpleCommand {
     let mut words = Vec::new();
     let mut writes_redirect = false;
     let mut redirect_targets = Vec::new();
+    let mut has_expansion = false;
     let mut cursor = node.walk();
 
     for child in node.children(&mut cursor) {
@@ -132,6 +193,16 @@ fn extract_command(node: tree_sitter::Node<'_>, source: &str) -> SimpleCommand {
             }
             "word" | "string" | "raw_string" | "concatenation" | "number" => {
                 push_word(child, source, &mut words);
+            }
+            // 运行期展开：值静态不可知（M9.2 毒化判据）。
+            "variable_name"
+            | "simple_expansion"
+            | "special_variable_name"
+            | "expansion"
+            | "string_expansion"
+            | "command_substitution"
+            | "process_substitution" => {
+                has_expansion = true;
             }
             "file_redirect" => {
                 let (writes, target) = redirect_writes_file(child, source);
@@ -172,6 +243,8 @@ fn extract_command(node: tree_sitter::Node<'_>, source: &str) -> SimpleCommand {
         words,
         writes_redirect,
         redirect_targets,
+        subshell_id,
+        has_expansion,
     }
 }
 
@@ -336,6 +409,19 @@ fn norm(path: &Path) -> PathBuf {
     #[cfg(not(windows))]
     {
         out
+    }
+}
+
+/// 把路径词元按段级基准目录解析为绝对路径（M9.2 段级 cwd 基准的解析
+/// 原语）：`~` 展开，相对词 join 基准，绝对词原样。与 [`inside_repo`]/
+/// [`norm`] 配套使用（解析结果再交给仓库边界判定）。
+pub fn resolve_against_base(word: &str, base: &Path) -> PathBuf {
+    let expanded = expanduser(word);
+    let p = Path::new(&expanded);
+    if p.is_absolute() {
+        p.to_path_buf()
+    } else {
+        base.join(p)
     }
 }
 

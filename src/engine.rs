@@ -6,7 +6,7 @@
 //! （doc/design.md「判定表」定位澄清，D-05），断言变更记录见
 //! `tests/guard_regression.rs` 头部。
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::cmd_parse::SimpleCommand;
 use crate::model::Verdict;
@@ -41,14 +41,14 @@ const PIPE_SINKS: &[&str] = &[
     "bash", "sh", "zsh", "python", "python3", "perl", "php", "ruby",
 ];
 
-/// 规则注入式顶层判定：解析 → 管道拓扑特征 → 逐条分类 → 组合裁决。
-/// 分类器由调用方注入；管道拓扑特征（整条命令行级）作为第三参传入，
-/// 供脚本谓词消费。「管道 → deny」的策略在默认 rules.rhai（脚本层）。
-pub fn decide_with(
-    command: &str,
-    project: &Path,
-    classify: &dyn Fn(&SimpleCommand, &Path, bool) -> Verdict,
-) -> Verdict {
+/// 注入式单命令分类器签名：(命令, 段级 cwd 基准, 项目根, 管道 sink) → 裁决。
+pub type ClassifyFn<'a> = &'a dyn Fn(&SimpleCommand, Option<&Path>, &Path, bool) -> Verdict;
+
+/// 规则注入式顶层判定：解析 → 段级 cwd 基准 → 管道拓扑特征 → 逐条分类
+/// → 组合裁决。分类器由调用方注入；第二参 = 该命令的段级基准目录
+/// （M9.2：行内 `cd` 状态机，None = 不可解析基准），第三参 = 项目根，
+/// 第四参 = 管道拓扑特征。「管道 → deny」的策略在默认 rules.rhai（脚本层）。
+pub fn decide_with(command: &str, project: &Path, classify: ClassifyFn<'_>) -> Verdict {
     let commands = match crate::cmd_parse::flatten_commands(command) {
         Ok(c) => c,
         Err(e) => return crate::model::unparseable(e.to_string()),
@@ -56,6 +56,125 @@ pub fn decide_with(
     if commands.is_empty() {
         return Verdict::confirm("empty command");
     }
+    let bases = segment_bases(&commands, project);
     let pipe = pipe_to_shell(command);
-    Verdict::combine(commands.iter().map(|c| classify(c, project, pipe)))
+    Verdict::combine(
+        commands
+            .iter()
+            .enumerate()
+            .map(|(i, c)| classify(c, bases[i].as_deref(), project, pipe)),
+    )
+}
+
+/// 段级 cwd 基准（M9.2）：行内 `cd` 状态机——`bases[i]` = 第 i 条简单命令
+/// 执行时的相对路径解析基准。初值 = 项目根；`cd` 切换；子 shell 进组压栈/
+/// 出组弹栈（组内 `cd` 不外泄）。不可解析目标（`$VAR`/`cd -`/pushd 等）
+/// → `None` **毒化**：其后各段若有写效果目标，保守判逃逸（宁多拦不漏放）。
+pub fn segment_bases(commands: &[SimpleCommand], project: &Path) -> Vec<Option<PathBuf>> {
+    let mut bases = Vec::with_capacity(commands.len());
+    let mut cur: Option<PathBuf> = Some(project.to_path_buf());
+    // 栈存 (组 id, 进组时基准)；顶层（None 组）不入栈——出组即回到进组前基准。
+    let mut stack: Vec<(usize, Option<PathBuf>)> = Vec::new();
+    for cmd in commands {
+        match cmd.subshell_id {
+            Some(id) => {
+                if stack.last().map(|(g, _)| *g) != Some(id) {
+                    match stack.iter().position(|(g, _)| *g == id) {
+                        // 回到外层已有组：弹栈并恢复进组时基准。
+                        Some(pos) => {
+                            stack.truncate(pos + 1);
+                            cur = stack.last().expect("non-empty after truncate").1.clone();
+                        }
+                        // 全新组：以当前基准进入。
+                        None => stack.push((id, cur.clone())),
+                    }
+                }
+            }
+            None if !stack.is_empty() => {
+                stack.clear();
+                cur = Some(project.to_path_buf());
+            }
+            None => {}
+        }
+        bases.push(cur.clone());
+        if cmd.bin() == Some("cd") {
+            cur = resolve_cd_target(cmd, cur.as_deref(), project);
+        }
+    }
+    bases
+}
+
+/// 解析 `cd` 的目标基准：无参/`~` 形态 → HOME；`$VAR`/`cd -`/`pushd` 类
+/// 静态不可解析 → None（毒化）；绝对路径原样；相对路径 join 当前基准。
+fn resolve_cd_target(cmd: &SimpleCommand, base: Option<&Path>, _project: &Path) -> Option<PathBuf> {
+    if cmd.has_expansion {
+        // 目标含 /命令替换：展开值静态不可知 → 毒化。
+        return None;
+    }
+    let Some(arg) = cmd.args().first() else {
+        // `cd` 无参 = 回 HOME（HOME 可取则可解析，否则毒化）。
+        return std::env::var("USERPROFILE")
+            .or_else(|_| std::env::var("HOME"))
+            .ok()
+            .map(PathBuf::from);
+    };
+    if arg == "-" || arg.contains('$') {
+        return None;
+    }
+    match base {
+        // 基准已毒化：绝对目标仍可解析，相对目标不可知。
+        Some(b) => Some(crate::cmd_parse::resolve_against_base(arg, b)),
+        None => {
+            let p = Path::new(arg);
+            if p.is_absolute() {
+                Some(p.to_path_buf())
+            } else {
+                None
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn bases(cmd: &str, project: &str) -> Vec<Option<PathBuf>> {
+        let commands = crate::cmd_parse::flatten_commands(cmd).expect("parses");
+        segment_bases(&commands, Path::new(project))
+    }
+
+    #[test]
+    fn cd_switches_base_until_next_cd() {
+        let b = bases("cd A && x && cd B && y", "D:/proj");
+        assert_eq!(b[0], Some(PathBuf::from("D:/proj")));
+        assert_eq!(b[1], Some(PathBuf::from("D:/proj/A")));
+        assert_eq!(b[2], Some(PathBuf::from("D:/proj/A")));
+        assert_eq!(
+            b[3],
+            Some(PathBuf::from("D:/proj/A/B")),
+            "cd B 相对 A 解析（bash 语义；Path 分量等值）"
+        );
+    }
+
+    #[test]
+    fn subshell_cd_does_not_leak_and_restores_entry_base() {
+        let b = bases("(cd A); x", "D:/proj");
+        assert_eq!(b[0], Some(PathBuf::from("D:/proj")));
+        assert_eq!(b[1], Some(PathBuf::from("D:/proj")));
+    }
+
+    #[test]
+    fn unresolvable_cd_poisons_until_absolute_cd() {
+        // 绝对路径形态按平台取（Windows 有盘符才视为绝对）。
+        let (proj, tmp) = if cfg!(windows) {
+            ("D:/proj", "D:/tmp")
+        } else {
+            ("/proj", "/tmp")
+        };
+        let b = bases(&format!("cd $D && x && cd {tmp} && y"), proj);
+        assert_eq!(b[1], None, "毒化");
+        assert_eq!(b[2], None, "毒化持续");
+        assert_eq!(b[3].as_deref(), Some(Path::new(tmp)), "绝对 cd 恢复可解析");
+    }
 }

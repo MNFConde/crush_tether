@@ -528,8 +528,9 @@ pub fn finalize(
     outcome: ScriptOutcome,
     decls: &ScriptAllowDecls,
     cmd: &SimpleCommand,
+    base: Option<&Path>,
     project: &Path,
-    escape_check: &dyn Fn(&SimpleCommand, &Path) -> bool,
+    escape_check: &dyn Fn(&SimpleCommand, Option<&Path>, &Path) -> bool,
 ) -> (Decision, Option<String>) {
     match outcome {
         ScriptOutcome::Pass => (initial, None),
@@ -559,7 +560,7 @@ pub fn finalize(
                     Some(format!("allow(\"{name}\") activated (global declaration)")),
                 ),
                 Some(DeclScope::Local) => {
-                    if escape_check(cmd, project) {
+                    if escape_check(cmd, base, project) {
                         (
                             Decision::Confirm,
                             Some(format!(
@@ -797,15 +798,16 @@ pub struct ChainOutcome {
 
 impl ScriptChain {
     /// 依层序评估整条链；任一层出错整体 `Err`（调用方 fail-safe confirm）。
-    /// `escape_check` 为写目标感知逃逸检查回调
-    /// （M7.0：调用方注入，与查表层同一实现——定稿点单点语义）。
+    /// `escape_check` 为写目标感知逃逸检查回调（M7.0：调用方注入，与查表
+    /// 层同一实现——定稿点单点语义）；`base` = M9.2 段级 cwd 基准。
     pub fn evaluate(
         &self,
         cmd: &SimpleCommand,
+        base: Option<&Path>,
         initial: Decision,
         project: &Path,
         pipe_to_shell: bool,
-        escape_check: &dyn Fn(&SimpleCommand, &Path) -> bool,
+        escape_check: &dyn Fn(&SimpleCommand, Option<&Path>, &Path) -> bool,
     ) -> Result<ChainOutcome, ScriptError> {
         let mut current = initial;
         let mut layer: Option<&'static str> = None;
@@ -819,7 +821,15 @@ impl ScriptChain {
                 ScriptOutcome::Adjust(_, r) => r.clone(),
                 _ => None,
             };
-            let (d, r) = finalize(current, outcome, engine.decls(), cmd, project, escape_check);
+            let (d, r) = finalize(
+                current,
+                outcome,
+                engine.decls(),
+                cmd,
+                base,
+                project,
+                escape_check,
+            );
             if activate || d != current {
                 layer = Some(tag);
                 rule = effective_rule;
@@ -1382,13 +1392,14 @@ mod tests {
         let cmd_deny = cmd("sudo x");
         let proj = Path::new(PROJ);
         let d = ScriptAllowDecls::default();
-        let no_escape = |_: &SimpleCommand, _: &Path| false;
+        let no_escape = |_: &SimpleCommand, _: Option<&Path>, _: &Path| false;
         // Adjust 在 deny 之上无效（终审）。
         let (v, reason) = finalize(
             Decision::Deny,
             ScriptOutcome::Adjust(Decision::Confirm, None),
             &d,
             &cmd_deny,
+            None,
             proj,
             &no_escape,
         );
@@ -1400,6 +1411,7 @@ mod tests {
             ScriptOutcome::Activate("ls".into()),
             &decls(&["ls"], &[]),
             &cmd_deny,
+            None,
             proj,
             &no_escape,
         );
@@ -1411,7 +1423,7 @@ mod tests {
     fn activation_scope_decides_escape_check() {
         let proj = Path::new(PROJ);
         // 写目标感知逃逸检查（M7.0）：与查表层同一原语——重定向目标查逃逸。
-        let write_escape = |c: &SimpleCommand, p: &Path| {
+        let write_escape = |c: &SimpleCommand, _: Option<&Path>, p: &Path| {
             c.redirect_targets
                 .iter()
                 .any(|w| crate::cmd_parse::path_escapes(w, p))
@@ -1423,6 +1435,7 @@ mod tests {
             ScriptOutcome::Activate("ls".into()),
             &decls(&["ls"], &[]),
             &cmd("ls > out.txt"),
+            None,
             proj,
             &write_escape,
         );
@@ -1432,6 +1445,7 @@ mod tests {
             ScriptOutcome::Activate("ls".into()),
             &decls(&["ls"], &[]),
             &cmd("ls > ../../outside.txt"),
+            None,
             proj,
             &write_escape,
         );
@@ -1442,6 +1456,7 @@ mod tests {
             ScriptOutcome::Activate("ls".into()),
             &decls(&["ls"], &[]),
             &cmd("ls ../../outside.txt"),
+            None,
             proj,
             &write_escape,
         );
@@ -1452,6 +1467,7 @@ mod tests {
             ScriptOutcome::Activate("docker".into()),
             &decls(&[], &["docker"]),
             &cmd("docker > /outside.txt"),
+            None,
             proj,
             &write_escape,
         );
@@ -1466,6 +1482,7 @@ mod tests {
             ScriptOutcome::Activate("ls".into()),
             &decls(&["ls"], &[]),
             &cmd("ls > out.txt"),
+            None,
             proj,
             &write_escape,
         );

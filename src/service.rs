@@ -342,11 +342,12 @@ impl RuleSet {
             return (Verdict::confirm("empty command"), Vec::new());
         }
         let pipe = crate::engine::pipe_to_shell(command);
+        let bases = crate::engine::segment_bases(&commands, project);
         let mut components = Vec::new();
         let mut saw_confirm = false;
         let mut short_circuit: Option<Verdict> = None;
-        for c in &commands {
-            let (v, t) = self.classify_single(c, project, pipe);
+        for (i, c) in commands.iter().enumerate() {
+            let (v, t) = self.classify_single(c, bases[i].as_deref(), project, pipe);
             let d = v.decision;
             components.push((d, t));
             match d {
@@ -377,14 +378,15 @@ impl RuleSet {
     }
 
     /// 单命令全链（查表 → 脚本 → 定稿点）：`decide_trace` 与 `explain`
-    /// 的共享原语（M7.1）。
+    /// 的共享原语（M7.1）。`base` = M9.2 段级 cwd 基准。
     pub fn classify_single(
         &self,
         cmd: &crate::cmd_parse::SimpleCommand,
+        base: Option<&Path>,
         project: &Path,
         pipe_to_shell: bool,
     ) -> (Verdict, DecisionTrace) {
-        let c0 = self.lookup.classify_traced(cmd, project);
+        let c0 = self.lookup.classify_traced(cmd, base, project);
         let v0 = c0.verdict;
         let mut trace = DecisionTrace {
             source: c0.source.clone(),
@@ -401,11 +403,13 @@ impl RuleSet {
             Some(chain) => {
                 match chain.evaluate(
                     cmd,
+                    base,
                     v0.decision,
                     project,
                     pipe_to_shell,
-                    // 定稿点写目标感知逃逸检查（M7.0）：与查表层同一实现。
-                    &|c, p| lookup.write_target_escapes(c, p),
+                    // 定稿点写目标感知逃逸检查（M7.0 + M9.2 段级基准）：与
+                    // 查表层同一实现。
+                    &|c, b, p| lookup.write_target_escapes_with_base(c, b, p),
                 ) {
                     // 链式定稿点：deny 终审 + allow 激活作用域化逃逸检查的
                     // 唯一出口（用户层先、项目层最后）。
@@ -476,16 +480,19 @@ impl RuleSet {
             return report;
         }
         let pipe = crate::engine::pipe_to_shell(command);
+        let bases = crate::engine::segment_bases(&commands, project);
         let mut verdicts = Vec::new();
-        for c in &commands {
+        for (i, c) in commands.iter().enumerate() {
+            let base = bases[i].clone();
             let escape_check = {
                 let lookup = &self.lookup;
                 let c = c.clone();
+                let b = base.clone();
                 let p = project.to_path_buf();
-                move || lookup.write_target_escapes(&c, &p)
+                move || lookup.write_target_escapes_with_base(&c, b.as_deref(), &p)
             };
             let write_scan = self.lookup.write_scan_words(c);
-            let (v, t) = self.classify_single(c, project, pipe);
+            let (v, t) = self.classify_single(c, base.as_deref(), project, pipe);
             report.commands.push(CommandExplain {
                 raw: c.words.join(" "),
                 bin: c.bin().unwrap_or("").to_string(),
